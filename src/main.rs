@@ -36,6 +36,10 @@ struct Args {
     /// Save the audio recording to a file (WAV format).
     #[arg(long)]
     save_audio: Option<String>,
+
+    /// Select audio input device by index. Use --list-devices to see available devices.
+    #[arg(long)]
+    device: Option<usize>,
 }
 
 fn main() -> Result<()> {
@@ -59,8 +63,9 @@ fn main() -> Result<()> {
         let (audio_tx, audio_rx) = unbounded();
 
         // Start audio capture in a separate thread
+        let device_index = args.device;
         let audio_handle = thread::spawn(move || {
-            if let Err(e) = audio::start_audio_capture(audio_tx) {
+            if let Err(e) = audio::start_audio_capture(audio_tx, device_index) {
                 eprintln!("Audio capture error: {}", e);
             }
         });

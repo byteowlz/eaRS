@@ -417,14 +417,25 @@ pub mod audio {
         Ok(())
     }
 
-    pub fn start_audio_capture(audio_tx: Sender<Vec<f32>>) -> Result<()> {
+    pub fn start_audio_capture(audio_tx: Sender<Vec<f32>>, device_index: Option<usize>) -> Result<()> {
         let host = cpal::default_host();
-        let device = host
-            .default_input_device()
-            .ok_or_else(|| anyhow::anyhow!("No input device available"))?;
+        let device = if let Some(index) = device_index {
+            host.input_devices()?
+                .nth(index)
+                .ok_or_else(|| anyhow::anyhow!("Device index {} not found", index))?
+        } else {
+            host.default_input_device()
+                .ok_or_else(|| anyhow::anyhow!("No input device available"))?
+        };
 
         let config = device.default_input_config()?;
         let sample_rate = config.sample_rate().0;
+
+        eprintln!(
+            "Using input device: {}",
+            device.name().unwrap_or("Unknown".to_string())
+        );
+        eprintln!("Sample rate: {}", sample_rate);
 
         let stream = match config.sample_format() {
             cpal::SampleFormat::F32 => {
