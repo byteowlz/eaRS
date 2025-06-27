@@ -1,0 +1,7 @@
+target/
+/.opencode
+.DS_Store
+/build
+.env
+.env.*
+!.env.example
