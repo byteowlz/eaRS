@@ -2,6 +2,18 @@
 name = "eaRS"
 version = "0.1.0"
 edition = "2024"
+description = "Easy automatic speech recognition library using Kyutai's STT models"
+license = "MIT"
+repository = "https://github.com/tommyfalkowski/eaRS"
+authors = ["Tommy Falkowski"]
+
+[lib]
+name = "ears"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ears"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0"
