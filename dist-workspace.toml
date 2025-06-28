@@ -19,3 +19,8 @@ install-path = "CARGO_HOME"
 publish-jobs = ["homebrew"]
 # Whether to install an updater program
 install-updater = false
+
+[workspace.metadata.dist.dependencies.apt]
+libasound2-dev = "*"
+pkg-config = "*"
+libssl-dev = "*"
