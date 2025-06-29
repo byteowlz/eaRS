@@ -34,6 +34,9 @@ cargo build --release
 
 # Save audio while transcribing
 ./target/release/ears --live --save-audio recording.wav
+
+# Prime the model with reference audio in another language
+./target/release/ears --live -l ger
 ```
 
 ### File Transcription
@@ -63,6 +66,7 @@ cargo build --release
 - `--cpu` - Force CPU inference (disable GPU)
 - `--hf-repo <REPO>` - Specify Hugging Face model repository
 - `--list-devices` - List available audio devices
+- `-l, --lang <LANG>` - Prime language using audio snippet (esp, ger, jap)
 
 ## Model
 
