@@ -34,7 +34,16 @@ cargo build --release
 
 # Save audio while transcribing
 ./target/release/ears --live --save-audio recording.wav
+
+# Prime the model with reference audio in another language
+./target/release/ears --live -l ger
 ```
+
+Reference audio snippets are loaded from `~/.eaRS/ref_audio` by default. You can
+change this directory by creating `~/.config/eaRS/ears.toml` with
+`ref_audio_dir = "/path/to/snippets"`. Provide short MP3 files named
+`esp.mp3`, `ger.mp3`, or `jap.mp3`; only the first second of each snippet is
+used for priming to keep startup latency low.
 
 ### File Transcription
 
@@ -63,6 +72,7 @@ cargo build --release
 - `--cpu` - Force CPU inference (disable GPU)
 - `--hf-repo <REPO>` - Specify Hugging Face model repository
 - `--list-devices` - List available audio devices
+- `-l, --lang <LANG>` - Prime language using audio snippet (esp, ger, jap)
 
 ## Model
 

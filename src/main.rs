@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use crossbeam_channel::unbounded;
-use ears::{Model, TranscriptionOptions, audio};
+use ears::{Model, TranscriptionOptions, audio, settings};
 use std::thread;
 
 #[derive(Debug, Parser)]
@@ -40,6 +40,10 @@ struct Args {
     /// Select audio input device by index. Use --list-devices to see available devices.
     #[arg(long)]
     device: Option<usize>,
+
+    /// Inject reference audio for language priming (esp, ger, jap)
+    #[arg(long, value_parser = ["esp", "ger", "jap"])]
+    lang: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -59,6 +63,18 @@ fn main() -> Result<()> {
         // Live microphone mode
         eprintln!("Loading model from repository: {}", args.hf_repo);
         let mut model = Model::load_from_hf(&args.hf_repo, args.cpu, options)?;
+
+        if let Some(ref lang) = args.lang {
+            let dir = settings::ref_audio_dir();
+            let path = dir.join(format!("{lang}.mp3"));
+            if let Err(e) = model.prime_with_audio(&path) {
+                eprintln!(
+                    "Warning: failed to process reference audio {}: {}",
+                    path.display(),
+                    e
+                );
+            }
+        }
 
         let (audio_tx, audio_rx) = unbounded();
 
@@ -95,6 +111,19 @@ fn main() -> Result<()> {
         eprintln!("Loading audio file from: {}", in_file);
         eprintln!("Loading model from repository: {}", args.hf_repo);
         let mut model = Model::load_from_hf(&args.hf_repo, args.cpu, options)?;
+
+        if let Some(ref lang) = args.lang {
+            let dir = settings::ref_audio_dir();
+            let path = dir.join(format!("{lang}.mp3"));
+            if let Err(e) = model.prime_with_audio(&path) {
+                eprintln!(
+                    "Warning: failed to process reference audio {}: {}",
+                    path.display(),
+                    e
+                );
+            }
+        }
+
         eprintln!("Running inference");
 
         let result = model.transcribe_file(in_file, args.save_audio.as_deref())?;
@@ -117,4 +146,3 @@ fn main() -> Result<()> {
 
     Ok(())
 }
-
