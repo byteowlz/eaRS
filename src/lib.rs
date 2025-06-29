@@ -145,6 +145,21 @@ impl Model {
         })
     }
 
+    pub fn prime_with_audio<P: AsRef<Path>>(&mut self, file_path: P) -> Result<()> {
+        let (pcm, sample_rate) = kaudio::pcm_decode(file_path.as_ref())?;
+        let pcm = if sample_rate != 24_000 {
+            kaudio::resample(&pcm, sample_rate as usize, 24_000)?
+        } else {
+            pcm
+        };
+
+        for chunk in pcm.chunks(1920) {
+            let tensor = Tensor::new(chunk, &self.dev)?.reshape((1, 1, chunk.len()))?;
+            let _ = self.state.step_pcm(tensor, None, &().into(), |_, _, _| ())?;
+        }
+        Ok(())
+    }
+
     pub fn transcribe_file<P: AsRef<Path>>(
         &mut self,
         file_path: P,
