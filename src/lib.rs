@@ -87,7 +87,7 @@ pub struct TranscriptionResult {
     pub words: Vec<WordTimestamp>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct WordTimestamp {
     pub word: String,
     pub start_time: f64,
@@ -257,7 +257,6 @@ impl Model {
                                 last_word = Some((word, *start_time));
                             }
                         }
-                        _ => {}
                     }
                 }
             }
@@ -310,6 +309,9 @@ impl Model {
 
             for asr_msg in asr_msgs.iter() {
                 match asr_msg {
+                    moshi::asr::AsrMsg::Step { .. } => {
+                        // Handle step messages if needed for VAD or other processing
+                    }
                     moshi::asr::AsrMsg::EndWord { stop_time, .. } => {
                         if self.timestamps {
                             if let Some((word, start_time)) = last_word.take() {
@@ -343,7 +345,6 @@ impl Model {
                             last_word = Some((word, *start_time));
                         }
                     }
-                    _ => {}
                 }
             }
         }
