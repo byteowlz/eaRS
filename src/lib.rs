@@ -145,6 +145,31 @@ impl Model {
         })
     }
 
+    pub fn prime_with_audio<P: AsRef<Path>>(&mut self, file_path: P) -> Result<()> {
+        let (pcm, sample_rate) = kaudio::pcm_decode(file_path.as_ref())?;
+        let pcm = if sample_rate != 24_000 {
+            kaudio::resample(&pcm, sample_rate as usize, 24_000)?
+        } else {
+            pcm
+        };
+
+        // Only use up to ~1 second of audio to minimize priming delay.
+        let max_frames = 24_000; // 1 second at 24kHz
+        let mut processed = 0;
+
+        for chunk in pcm.chunks(1920) {
+            if processed >= max_frames {
+                break;
+            }
+            processed += chunk.len();
+            let tensor = Tensor::new(chunk, &self.dev)?.reshape((1, 1, chunk.len()))?;
+            let _ = self
+                .state
+                .step_pcm(tensor, None, &().into(), |_, _, _| ())?;
+        }
+        Ok(())
+    }
+
     pub fn transcribe_file<P: AsRef<Path>>(
         &mut self,
         file_path: P,
@@ -417,7 +442,10 @@ pub mod audio {
         Ok(())
     }
 
-    pub fn start_audio_capture(audio_tx: Sender<Vec<f32>>, device_index: Option<usize>) -> Result<()> {
+    pub fn start_audio_capture(
+        audio_tx: Sender<Vec<f32>>,
+        device_index: Option<usize>,
+    ) -> Result<()> {
         let host = cpal::default_host();
         let device = if let Some(index) = device_index {
             host.input_devices()?
@@ -488,3 +516,41 @@ pub mod audio {
     }
 }
 
+pub mod settings {
+    use serde::Deserialize;
+    use std::fs;
+    use std::path::PathBuf;
+
+    #[derive(Deserialize)]
+    struct SettingsFile {
+        ref_audio_dir: Option<String>,
+    }
+
+    fn expand_path(path: &str) -> PathBuf {
+        if let Some(stripped) = path.strip_prefix("~") {
+            if let Some(home) = dirs::home_dir() {
+                return home.join(stripped);
+            }
+        }
+        PathBuf::from(path)
+    }
+
+    pub fn ref_audio_dir() -> PathBuf {
+        let default_dir = dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".eaRS/ref_audio");
+
+        if let Some(mut cfg_path) = dirs::config_dir() {
+            cfg_path.push("eaRS/ears.toml");
+            if let Ok(contents) = fs::read_to_string(&cfg_path) {
+                if let Ok(cfg) = toml::from_str::<SettingsFile>(&contents) {
+                    if let Some(dir) = cfg.ref_audio_dir {
+                        return expand_path(&dir);
+                    }
+                }
+            }
+        }
+
+        default_dir
+    }
+}
