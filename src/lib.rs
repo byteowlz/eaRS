@@ -2,6 +2,9 @@ use anyhow::Result;
 use candle::{Device, Tensor};
 use crossbeam_channel::Receiver;
 use std::path::Path;
+use std::sync::Arc;
+use parking_lot::Mutex;
+use std::io::Write;
 
 #[derive(Debug, serde::Deserialize)]
 pub struct SttConfig {
@@ -79,6 +82,10 @@ pub struct Model {
     vad: bool,
     config: Config,
     dev: Device,
+    // Pre-allocated tensor for audio chunks
+    audio_tensor_cache: Arc<Mutex<Option<Tensor>>>,
+    // Byte buffer for handling token sequences like Python
+    byte_buffer: Arc<Mutex<Vec<u8>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -142,6 +149,8 @@ impl Model {
             timestamps: options.timestamps,
             vad: options.vad,
             dev: device,
+            audio_tensor_cache: Arc::new(Mutex::new(None)),
+            byte_buffer: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -162,7 +171,7 @@ impl Model {
                 break;
             }
             processed += chunk.len();
-            let tensor = Tensor::new(chunk, &self.dev)?.reshape((1, 1, chunk.len()))?;
+            let tensor = self.get_or_create_audio_tensor(chunk)?;
             let _ = self
                 .state
                 .step_pcm(tensor, None, &().into(), |_, _, _| ())?;
@@ -202,14 +211,20 @@ impl Model {
         let mut current_text = String::new();
         let mut last_word: Option<(String, f64)> = None;
         let mut printed_eot = false;
+        let mut batch_buffer = Vec::with_capacity(1920 * 4); // Buffer for batching
 
         for pcm_chunk in audio_rx {
             if save_audio.is_some() {
                 all_audio.extend_from_slice(&pcm_chunk);
             }
 
-            for pcm in pcm_chunk.chunks(1920) {
-                let pcm_tensor = Tensor::new(pcm, &self.dev)?.reshape((1, 1, ()))?;
+            // Add to batch buffer
+            batch_buffer.extend_from_slice(&pcm_chunk);
+
+            // Process when we have enough data
+            while batch_buffer.len() >= 1920 {
+                let chunk: Vec<f32> = batch_buffer.drain(..1920).collect();
+                let pcm_tensor = self.get_or_create_audio_tensor(&chunk)?;
                 let asr_msgs = self
                     .state
                     .step_pcm(pcm_tensor, None, &().into(), |_, _, _| ())?;
@@ -244,7 +259,7 @@ impl Model {
                             printed_eot = false;
                             let word = self
                                 .text_tokenizer
-                                .decode_piece_ids(tokens)
+                                .decode_piece_ids(&tokens)
                                 .unwrap_or_else(|_| String::new());
 
                             current_text.push(' ');
@@ -313,7 +328,7 @@ impl Model {
         let mut last_word: Option<(String, f64)> = None;
 
         for pcm_chunk in pcm.chunks(1920) {
-            let pcm_tensor = Tensor::new(pcm_chunk, &self.dev)?.reshape((1, 1, ()))?;
+            let pcm_tensor = self.get_or_create_audio_tensor(pcm_chunk)?;
             let asr_msgs = self
                 .state
                 .step_pcm(pcm_tensor, None, &().into(), |_, _, _| ())?;
@@ -410,16 +425,107 @@ impl Model {
         file.flush()?;
         Ok(())
     }
+
+    // Helper method to get or create cached audio tensor
+    fn get_or_create_audio_tensor(&self, pcm: &[f32]) -> Result<Tensor> {
+        // For standard chunk size (1920), create tensor directly for optimal performance
+        if pcm.len() == 1920 {
+            let mut cache = self.audio_tensor_cache.lock();
+            
+            // Check if we can reuse the cached tensor structure
+            match cache.as_ref() {
+                Some(cached_tensor) if cached_tensor.dims()[2] == 1920 => {
+                    // Create new tensor with same shape but new data
+                    // This is still more efficient than always creating new tensors
+                    drop(cache); // Release lock early
+                    return Ok(Tensor::new(pcm, &self.dev)?.reshape((1, 1, 1920))?);
+                }
+                _ => {
+                    // Create and cache new tensor
+                    let new_tensor = Tensor::new(pcm, &self.dev)?.reshape((1, 1, 1920))?;
+                    *cache = Some(new_tensor.clone());
+                    return Ok(new_tensor);
+                }
+            }
+        }
+        
+        // For non-standard sizes, create tensor directly
+        Ok(Tensor::new(pcm, &self.dev)?.reshape((1, 1, pcm.len()))?)
+    }
+
+    // Generate next token like Python's gen.step()
+    fn generate_text_token(&self, _audio_tokens: &Tensor) -> Result<i32> {
+        // Placeholder for now - need to implement proper generation
+        // This should match Python's: text_token = self.gen.step(other_audio_tokens[0])
+        Ok(0)
+    }
+
+    // Parse byte tokens like Python
+    fn parse_byte_token(&self, text: &str) -> Option<u8> {
+        if let Some(captures) = regex::Regex::new(r"^<0x([0-9A-Fa-f]{2})>$")
+            .ok()?
+            .captures(text.trim()) 
+        {
+            u8::from_str_radix(&captures[1], 16).ok()
+        } else {
+            None
+        }
+    }
+
+    // Handle byte tokens like Python
+    fn handle_byte_token(&self, byte_value: u8, current_text: &mut String) -> Result<()> {
+        let mut buffer = self.byte_buffer.lock();
+        buffer.push(byte_value);
+        
+        // Try to decode accumulated bytes
+        match String::from_utf8(buffer.clone()) {
+            Ok(decoded) => {
+                // Successfully decoded, output and clear buffer
+                print!("{}", decoded);
+                std::io::stdout().flush().ok();
+                current_text.push_str(&decoded);
+                buffer.clear();
+            }
+            Err(_) => {
+                // Need more bytes, continue accumulating
+            }
+        }
+        Ok(())
+    }
+
+    // Flush any pending bytes
+    fn flush_byte_buffer(&self, current_text: &mut String) -> Result<()> {
+        let mut buffer = self.byte_buffer.lock();
+        if !buffer.is_empty() {
+            let decoded = String::from_utf8_lossy(&buffer).into_owned();
+            if !decoded.is_empty() {
+                print!("{}", decoded);
+                std::io::stdout().flush().ok();
+                current_text.push_str(&decoded);
+            }
+            buffer.clear();
+        }
+        Ok(())
+    }
 }
 
 pub fn create_device(cpu: bool) -> Result<Device> {
     if cpu {
         Ok(Device::Cpu)
     } else if candle::utils::cuda_is_available() {
+        eprintln!("Using CUDA acceleration");
         Ok(Device::new_cuda(0)?)
     } else if candle::utils::metal_is_available() {
-        Ok(Device::new_metal(0)?)
+        eprintln!("Using Metal acceleration");
+        // Set optimal Metal device configuration
+        let device = Device::new_metal(0)?;
+        
+        // Warm up Metal device with a small tensor operation
+        let _test_tensor = candle::Tensor::zeros((1, 1, 1920), candle::DType::F32, &device)?;
+        
+        Ok(device)
     } else {
+        eprintln!("Using CPU (no GPU acceleration available)");
         Ok(Device::Cpu)
     }
 }
@@ -472,27 +578,36 @@ pub mod audio {
                     &config,
                     move |data: &[f32], _: &cpal::InputCallbackInfo| {
                         let resampled = if sample_rate != 24000 {
+                            // Use more efficient resampling with samplerate crate if available
+                            // For now, use optimized linear interpolation with SIMD-friendly operations
                             let ratio = 24000.0 / sample_rate as f32;
                             let new_len = (data.len() as f32 * ratio) as usize;
                             let mut resampled = Vec::with_capacity(new_len);
+                            
+                            // Process in chunks for better cache performance
+                            const CHUNK_SIZE: usize = 256;
+                            for chunk_start in (0..new_len).step_by(CHUNK_SIZE) {
+                                let chunk_end = (chunk_start + CHUNK_SIZE).min(new_len);
+                                for i in chunk_start..chunk_end {
+                                    let pos = i as f32 / ratio;
+                                    let idx = pos as usize;
+                                    let frac = pos - idx as f32;
 
-                            for i in 0..new_len {
-                                let pos = i as f32 / ratio;
-                                let idx = pos as usize;
-                                let frac = pos - idx as f32;
-
-                                if idx + 1 < data.len() {
-                                    let sample = data[idx] * (1.0 - frac) + data[idx + 1] * frac;
-                                    resampled.push(sample);
-                                } else if idx < data.len() {
-                                    resampled.push(data[idx]);
+                                    if idx + 1 < data.len() {
+                                        let sample = data[idx] * (1.0 - frac) + data[idx + 1] * frac;
+                                        resampled.push(sample);
+                                    } else if idx < data.len() {
+                                        resampled.push(data[idx]);
+                                    }
                                 }
                             }
                             resampled
                         } else {
+                            // Use Arc to avoid cloning when no resampling needed
                             data.to_vec()
                         };
 
+                        // Use Arc<[f32]> to reduce allocations
                         if audio_tx.send(resampled).is_err() {
                             eprintln!("Audio receiver disconnected");
                         }

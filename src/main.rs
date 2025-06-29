@@ -42,7 +42,7 @@ struct Args {
     device: Option<usize>,
 
     /// Inject reference audio for language priming (esp, ger, jap)
-    #[arg(long, short = 'l', value_parser = ["esp", "ger", "jap"])]
+    #[arg(long, value_parser = ["esp", "ger", "jap"])]
     lang: Option<String>,
 }
 
@@ -111,6 +111,19 @@ fn main() -> Result<()> {
         eprintln!("Loading audio file from: {}", in_file);
         eprintln!("Loading model from repository: {}", args.hf_repo);
         let mut model = Model::load_from_hf(&args.hf_repo, args.cpu, options)?;
+
+        if let Some(ref lang) = args.lang {
+            let dir = settings::ref_audio_dir();
+            let path = dir.join(format!("{lang}.mp3"));
+            if let Err(e) = model.prime_with_audio(&path) {
+                eprintln!(
+                    "Warning: failed to process reference audio {}: {}",
+                    path.display(),
+                    e
+                );
+            }
+        }
+
         eprintln!("Running inference");
 
         let result = model.transcribe_file(in_file, args.save_audio.as_deref())?;
