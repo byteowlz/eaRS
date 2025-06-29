@@ -40,6 +40,10 @@ struct Args {
     /// Select audio input device by index. Use --list-devices to see available devices.
     #[arg(long)]
     device: Option<usize>,
+
+    /// Inject reference audio for language priming (esp, ger, jap)
+    #[arg(long, short = 'l', value_parser = ["esp", "ger", "jap"])]
+    lang: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -59,6 +63,13 @@ fn main() -> Result<()> {
         // Live microphone mode
         eprintln!("Loading model from repository: {}", args.hf_repo);
         let mut model = Model::load_from_hf(&args.hf_repo, args.cpu, options)?;
+
+        if let Some(ref lang) = args.lang {
+            let path = format!("ref_audio/{}.mp3", lang);
+            if let Err(e) = model.prime_with_audio(&path) {
+                eprintln!("Warning: failed to process reference audio {}: {}", path, e);
+            }
+        }
 
         let (audio_tx, audio_rx) = unbounded();
 
