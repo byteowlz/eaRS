@@ -10,7 +10,7 @@ struct Args {
     in_file: Option<String>,
 
     /// Use live microphone input instead of file.
-    #[arg(long, short)]
+    #[arg(long)]
     live: bool,
 
     /// List available audio devices.
@@ -44,9 +44,14 @@ struct Args {
     /// Inject reference audio for language priming (esp, ger, jap)
     #[arg(long, short = 'l', value_parser = ["esp", "ger", "jap"])]
     lang: Option<String>,
+
+    /// Start WebSocket server on specified port to stream transcription results
+    #[arg(long)]
+    ws: Option<u16>,
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let args = Args::parse();
 
     if args.list_devices {
@@ -81,12 +86,21 @@ fn main() -> Result<()> {
             }
         });
 
-        eprintln!("Starting live transcription. Press Ctrl+C to stop.");
-        eprintln!("Transcription output:");
-        eprintln!("{}", "-".repeat(50));
+        let result = if let Some(ws_port) = args.ws {
+            eprintln!("Starting WebSocket server on port {}", ws_port);
+            eprintln!("Starting live transcription with WebSocket streaming. Press Ctrl+C to stop.");
+            eprintln!("WebSocket endpoint: ws://localhost:{}/", ws_port);
+            
+            // Run live transcription with WebSocket streaming
+            model.transcribe_live_ws(audio_rx, args.save_audio.as_deref(), ws_port).await?
+        } else {
+            eprintln!("Starting live transcription. Press Ctrl+C to stop.");
+            eprintln!("Transcription output:");
+            eprintln!("{}", "-".repeat(50));
 
-        // Run live transcription
-        let result = model.transcribe_live(audio_rx, args.save_audio.as_deref())?;
+            // Run live transcription
+            model.transcribe_live(audio_rx, args.save_audio.as_deref())?
+        };
 
         if args.timestamps {
             for word in result.words {
