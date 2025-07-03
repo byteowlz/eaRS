@@ -48,6 +48,10 @@ struct Args {
     /// Start WebSocket server on specified port to stream transcription results
     #[arg(long)]
     ws: Option<u16>,
+
+    /// Automatically terminate after no voice activity for specified seconds
+    #[arg(long)]
+    vad_timeout: Option<f64>,
 }
 
 #[tokio::main]
@@ -62,6 +66,7 @@ async fn main() -> Result<()> {
         timestamps: args.timestamps,
         vad: args.vad,
         save_audio: args.save_audio.clone(),
+        vad_timeout: args.vad_timeout,
     };
 
     if args.live || args.in_file.is_none() {

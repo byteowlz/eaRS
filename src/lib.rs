@@ -79,6 +79,7 @@ pub struct Model {
     vad: bool,
     config: Config,
     dev: Device,
+    vad_timeout: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -135,6 +136,14 @@ pub struct WordTimestamp {
 /// }
 /// ```
 /// 
+/// ### Restart Command
+/// Send from client to restart transcription after timeout or final message:
+/// ```json
+/// {
+///   "type": "restart"
+/// }
+/// ```
+/// 
 /// ## Usage Example
 /// ```bash
 /// # Start transcription with WebSocket on port 8080
@@ -163,10 +172,18 @@ pub enum WebSocketMessage {
     },
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(tag = "type")]
+pub enum WebSocketCommand {
+    #[serde(rename = "restart")]
+    Restart,
+}
+
 pub struct TranscriptionOptions {
     pub timestamps: bool,
     pub vad: bool,
     pub save_audio: Option<String>,
+    pub vad_timeout: Option<f64>,
 }
 
 impl Default for TranscriptionOptions {
@@ -175,6 +192,7 @@ impl Default for TranscriptionOptions {
             timestamps: false,
             vad: false,
             save_audio: None,
+            vad_timeout: None,
         }
     }
 }
@@ -211,6 +229,7 @@ impl Model {
             timestamps: options.timestamps,
             vad: options.vad,
             dev: device,
+            vad_timeout: options.vad_timeout,
         })
     }
 
@@ -255,17 +274,21 @@ impl Model {
         save_audio: Option<&str>,
     ) -> Result<TranscriptionResult> {
         use std::io::Write;
+        use std::time::{Duration, Instant};
 
         let mut all_audio = Vec::new();
         let mut words = Vec::new();
         let mut current_text = String::new();
         let mut last_word: Option<(String, f64)> = None;
         let mut printed_eot = false;
+        let mut last_voice_activity = Instant::now();
 
         for pcm_chunk in audio_rx {
             if save_audio.is_some() {
                 all_audio.extend_from_slice(&pcm_chunk);
             }
+
+            let mut has_voice_activity = false;
 
             for pcm in pcm_chunk.chunks(1920) {
                 let pcm_tensor = Tensor::new(pcm, &self.dev)?.reshape((1, 1, ()))?;
@@ -286,6 +309,7 @@ impl Model {
                         }
                         moshi::asr::AsrMsg::EndWord { stop_time, .. } => {
                             printed_eot = false;
+                            has_voice_activity = true;
                             if self.timestamps {
                                 if let Some((word, start_time)) = last_word.take() {
                                     println!("[{start_time:5.2}-{stop_time:5.2}] {word}");
@@ -301,6 +325,7 @@ impl Model {
                             tokens, start_time, ..
                         } => {
                             printed_eot = false;
+                            has_voice_activity = true;
                             let word = self
                                 .text_tokenizer
                                 .decode_piece_ids(tokens)
@@ -327,6 +352,18 @@ impl Model {
                             }
                         }
                     }
+                }
+            }
+
+            // Update voice activity timestamp if we detected voice
+            if has_voice_activity {
+                last_voice_activity = Instant::now();
+            }
+
+            // Check for timeout
+            if let Some(timeout_secs) = self.vad_timeout {
+                if last_voice_activity.elapsed() > Duration::from_secs_f64(timeout_secs) {
+                    break;
                 }
             }
         }
@@ -364,7 +401,7 @@ impl Model {
     ) -> Result<TranscriptionResult> {
         use futures::{SinkExt, StreamExt};
         use std::sync::Arc;
-        use tokio::sync::broadcast;
+        use tokio::sync::{broadcast, mpsc};
         use tokio_tungstenite::{accept_async, tungstenite::Message};
         use std::io::Write;
 
@@ -372,13 +409,19 @@ impl Model {
         let (ws_tx, _ws_rx) = broadcast::channel(100);
         let ws_tx = Arc::new(ws_tx);
 
+        // Create channel for restart commands
+        let (restart_tx, mut restart_rx) = mpsc::unbounded_channel();
+        let restart_tx = Arc::new(restart_tx);
+
         // Start WebSocket server
         let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", ws_port)).await?;
         let ws_tx_clone = ws_tx.clone();
+        let restart_tx_clone = restart_tx.clone();
 
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
                 let ws_tx = ws_tx_clone.clone();
+                let restart_tx = restart_tx_clone.clone();
                 tokio::spawn(async move {
                     let ws_stream = match accept_async(stream).await {
                         Ok(ws) => ws,
@@ -391,16 +434,25 @@ impl Model {
                     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
                     let mut ws_rx = ws_tx.subscribe();
 
-                    // Handle incoming WebSocket messages (if any)
+                    // Handle incoming WebSocket messages
                     let receive_task = tokio::spawn(async move {
                         while let Some(msg) = ws_receiver.next().await {
                             match msg {
                                 Ok(Message::Close(_)) => break,
+                                Ok(Message::Text(text)) => {
+                                    if let Ok(command) = serde_json::from_str::<WebSocketCommand>(&text) {
+                                        match command {
+                                            WebSocketCommand::Restart => {
+                                                let _ = restart_tx.send(());
+                                            }
+                                        }
+                                    }
+                                }
                                 Err(e) => {
                                     eprintln!("WebSocket receive error: {}", e);
                                     break;
                                 }
-                                _ => {} // Ignore other message types for now
+                                _ => {} // Ignore other message types
                             }
                         }
                     });
@@ -425,156 +477,218 @@ impl Model {
 
         // Process audio synchronously with WebSocket streaming
         let mut all_audio = Vec::new();
-        let mut words = Vec::new();
-        let mut current_text = String::new();
-        let mut last_word: Option<(String, f64)> = None;
-        let mut printed_eot = false;
+        let mut overall_words = Vec::new();
+        let mut overall_text = String::new();
+        
+        loop {
+            let mut words = Vec::new();
+            let mut current_text = String::new();
+            let mut last_word: Option<(String, f64)> = None;
+            let mut printed_eot = false;
+            let mut last_voice_activity = std::time::Instant::now();
+            let mut transcription_active = true;
 
-        for pcm_chunk in audio_rx {
-            if save_audio.is_some() {
-                all_audio.extend_from_slice(&pcm_chunk);
-            }
+            eprintln!("Starting transcription session...");
 
-            for pcm in pcm_chunk.chunks(1920) {
-                let pcm_tensor = Tensor::new(pcm, &self.dev)?.reshape((1, 1, ()))?;
-                let asr_msgs = self
-                    .state
-                    .step_pcm(pcm_tensor, None, &().into(), |_, _, _| ())?;
+            while transcription_active {
+                tokio::select! {
+                    // Handle restart commands
+                    _ = restart_rx.recv() => {
+                        eprintln!("Received restart command");
+                        break;
+                    }
+                    
+                    // Handle audio chunks with timeout
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {
+                        match audio_rx.try_recv() {
+                            Ok(pcm_chunk) => {
+                                if save_audio.is_some() {
+                                    all_audio.extend_from_slice(&pcm_chunk);
+                                }
 
-                for asr_msg in asr_msgs.iter() {
-                    match asr_msg {
-                        moshi::asr::AsrMsg::Step { prs, .. } => {
-                            if self.vad && prs[2][0] > 0.5 && !printed_eot {
-                                printed_eot = true;
-                                let pause_msg = WebSocketMessage::Pause {
-                                    timestamp: std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_secs_f64(),
-                                };
-                                let _ = ws_tx.send(pause_msg);
-                                
-                                if !self.timestamps {
-                                    print!(" <pause>");
-                                    std::io::stdout().flush().ok();
+                                let mut has_voice_activity = false;
+
+                                for pcm in pcm_chunk.chunks(1920) {
+                                    let pcm_tensor = Tensor::new(pcm, &self.dev)?.reshape((1, 1, ()))?;
+                                    let asr_msgs = self
+                                        .state
+                                        .step_pcm(pcm_tensor, None, &().into(), |_, _, _| ())?;
+
+                                    for asr_msg in asr_msgs.iter() {
+                                        match asr_msg {
+                                            moshi::asr::AsrMsg::Step { prs, .. } => {
+                                                if self.vad && prs[2][0] > 0.5 && !printed_eot {
+                                                    printed_eot = true;
+                                                    let pause_msg = WebSocketMessage::Pause {
+                                                        timestamp: std::time::SystemTime::now()
+                                                            .duration_since(std::time::UNIX_EPOCH)
+                                                            .unwrap_or_default()
+                                                            .as_secs_f64(),
+                                                    };
+                                                    let _ = ws_tx.send(pause_msg);
+                                                    
+                                                    if !self.timestamps {
+                                                        print!(" <pause>");
+                                                        std::io::stdout().flush().ok();
+                                                    }
+                                                }
+                                            }
+                                            moshi::asr::AsrMsg::EndWord { stop_time, .. } => {
+                                                printed_eot = false;
+                                                has_voice_activity = true;
+                                                if self.timestamps {
+                                                    if let Some((word, start_time)) = last_word.take() {
+                                                        println!("[{start_time:5.2}-{stop_time:5.2}] {word}");
+                                                        
+                                                        let word_timestamp = WordTimestamp {
+                                                            word: word.clone(),
+                                                            start_time,
+                                                            end_time: Some(*stop_time),
+                                                        };
+                                                        words.push(word_timestamp.clone());
+
+                                                        let ws_msg = WebSocketMessage::Word {
+                                                            word: word_timestamp.word,
+                                                            start_time: word_timestamp.start_time,
+                                                            end_time: word_timestamp.end_time,
+                                                        };
+                                                        let _ = ws_tx.send(ws_msg);
+                                                    }
+                                                }
+                                            }
+                                            moshi::asr::AsrMsg::Word {
+                                                tokens, start_time, ..
+                                            } => {
+                                                printed_eot = false;
+                                                has_voice_activity = true;
+                                                let word = self
+                                                    .text_tokenizer
+                                                    .decode_piece_ids(tokens)
+                                                    .unwrap_or_else(|_| String::new());
+
+                                                current_text.push(' ');
+                                                current_text.push_str(&word);
+
+                                                if !self.timestamps {
+                                                    print!(" {}", word);
+                                                    std::io::stdout().flush().ok();
+
+                                                    // Send word without end time for real-time streaming
+                                                    let ws_msg = WebSocketMessage::Word {
+                                                        word: word.clone(),
+                                                        start_time: *start_time,
+                                                        end_time: None,
+                                                    };
+                                                    let _ = ws_tx.send(ws_msg);
+                                                } else {
+                                                    if let Some((prev_word, prev_start_time)) = last_word.take() {
+                                                        println!(
+                                                            "[{prev_start_time:5.2}-{start_time:5.2}] {prev_word}"
+                                                        );
+                                                        
+                                                        let word_timestamp = WordTimestamp {
+                                                            word: prev_word.clone(),
+                                                            start_time: prev_start_time,
+                                                            end_time: Some(*start_time),
+                                                        };
+                                                        words.push(word_timestamp.clone());
+
+                                                        let ws_msg = WebSocketMessage::Word {
+                                                            word: word_timestamp.word,
+                                                            start_time: word_timestamp.start_time,
+                                                            end_time: word_timestamp.end_time,
+                                                        };
+                                                        let _ = ws_tx.send(ws_msg);
+                                                    }
+                                                    last_word = Some((word, *start_time));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Update voice activity timestamp if we detected voice
+                                if has_voice_activity {
+                                    last_voice_activity = std::time::Instant::now();
+                                }
+
+                                // Check for timeout
+                                if let Some(timeout_secs) = self.vad_timeout {
+                                    if last_voice_activity.elapsed() > std::time::Duration::from_secs_f64(timeout_secs) {
+                                        eprintln!("Voice activity timeout reached");
+                                        transcription_active = false;
+                                    }
                                 }
                             }
-                        }
-                        moshi::asr::AsrMsg::EndWord { stop_time, .. } => {
-                            printed_eot = false;
-                            if self.timestamps {
-                                if let Some((word, start_time)) = last_word.take() {
-                                    println!("[{start_time:5.2}-{stop_time:5.2}] {word}");
-                                    
-                                    let word_timestamp = WordTimestamp {
-                                        word: word.clone(),
-                                        start_time,
-                                        end_time: Some(*stop_time),
-                                    };
-                                    words.push(word_timestamp.clone());
-
-                                    let ws_msg = WebSocketMessage::Word {
-                                        word: word_timestamp.word,
-                                        start_time: word_timestamp.start_time,
-                                        end_time: word_timestamp.end_time,
-                                    };
-                                    let _ = ws_tx.send(ws_msg);
-                                }
-                            }
-                        }
-                        moshi::asr::AsrMsg::Word {
-                            tokens, start_time, ..
-                        } => {
-                            printed_eot = false;
-                            let word = self
-                                .text_tokenizer
-                                .decode_piece_ids(tokens)
-                                .unwrap_or_else(|_| String::new());
-
-                            current_text.push(' ');
-                            current_text.push_str(&word);
-
-                            if !self.timestamps {
-                                print!(" {}", word);
-                                std::io::stdout().flush().ok();
-
-                                // Send word without end time for real-time streaming
-                                let ws_msg = WebSocketMessage::Word {
-                                    word: word.clone(),
-                                    start_time: *start_time,
-                                    end_time: None,
-                                };
-                                let _ = ws_tx.send(ws_msg);
-                            } else {
-                                if let Some((prev_word, prev_start_time)) = last_word.take() {
-                                    println!(
-                                        "[{prev_start_time:5.2}-{start_time:5.2}] {prev_word}"
-                                    );
-                                    
-                                    let word_timestamp = WordTimestamp {
-                                        word: prev_word.clone(),
-                                        start_time: prev_start_time,
-                                        end_time: Some(*start_time),
-                                    };
-                                    words.push(word_timestamp.clone());
-
-                                    let ws_msg = WebSocketMessage::Word {
-                                        word: word_timestamp.word,
-                                        start_time: word_timestamp.start_time,
-                                        end_time: word_timestamp.end_time,
-                                    };
-                                    let _ = ws_tx.send(ws_msg);
-                                }
-                                last_word = Some((word, *start_time));
+                            Err(_) => {
+                                // No audio data available, continue waiting
                             }
                         }
                     }
                 }
             }
-        }
 
-        // Handle final word
-        if let Some((word, start_time)) = last_word.take() {
-            if self.timestamps {
-                println!("[{start_time:5.2}-     ] {word}");
+            // Handle final word for this session
+            if let Some((word, start_time)) = last_word.take() {
+                if self.timestamps {
+                    println!("[{start_time:5.2}-     ] {word}");
+                }
+                
+                let word_timestamp = WordTimestamp {
+                    word: word.clone(),
+                    start_time,
+                    end_time: None,
+                };
+                words.push(word_timestamp.clone());
+
+                let ws_msg = WebSocketMessage::Word {
+                    word: word_timestamp.word,
+                    start_time: word_timestamp.start_time,
+                    end_time: word_timestamp.end_time,
+                };
+                let _ = ws_tx.send(ws_msg);
             }
-            
-            let word_timestamp = WordTimestamp {
-                word: word.clone(),
-                start_time,
-                end_time: None,
+
+            if !self.timestamps {
+                println!();
+            }
+
+            // Add session words to overall collection
+            overall_words.extend(words.clone());
+            if !current_text.is_empty() {
+                if !overall_text.is_empty() {
+                    overall_text.push(' ');
+                }
+                overall_text.push_str(current_text.trim());
+            }
+
+            // Send final result for this session
+            let session_result = TranscriptionResult {
+                text: current_text.trim().to_string(),
+                words: words.clone(),
             };
-            words.push(word_timestamp.clone());
 
-            let ws_msg = WebSocketMessage::Word {
-                word: word_timestamp.word,
-                start_time: word_timestamp.start_time,
-                end_time: word_timestamp.end_time,
+            let final_msg = WebSocketMessage::Final {
+                text: session_result.text.clone(),
+                words: session_result.words.clone(),
             };
-            let _ = ws_tx.send(ws_msg);
+            let _ = ws_tx.send(final_msg);
+
+            // Check if we should continue or exit
+            if restart_rx.try_recv().is_err() {
+                // No restart command pending, exit the loop
+                break;
+            }
         }
-
-        if !self.timestamps {
-            println!();
-        }
-
-        let final_result = TranscriptionResult {
-            text: current_text.trim().to_string(),
-            words: words.clone(),
-        };
-
-        // Send final result
-        let final_msg = WebSocketMessage::Final {
-            text: final_result.text.clone(),
-            words: final_result.words.clone(),
-        };
-        let _ = ws_tx.send(final_msg);
 
         if let Some(save_path) = save_audio {
             self.save_audio_wav(&all_audio, 24000, save_path)?;
         }
 
-        Ok(final_result)
+        Ok(TranscriptionResult {
+            text: overall_text,
+            words: overall_words,
+        })
     }
 
     fn transcribe_pcm(&mut self, mut pcm: Vec<f32>) -> Result<TranscriptionResult> {
