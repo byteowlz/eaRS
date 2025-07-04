@@ -81,30 +81,45 @@ async fn main() -> Result<()> {
             }
         }
 
-        let (audio_tx, audio_rx) = unbounded();
-
-        // Start audio capture in a separate thread
         let device_index = args.device;
-        let audio_handle = thread::spawn(move || {
-            if let Err(e) = audio::start_audio_capture(audio_tx, device_index) {
-                eprintln!("Audio capture error: {}", e);
+        let save_audio_path = args.save_audio.as_deref();
+        let ws_port = args.ws;
+        
+        let result = loop {
+            let (audio_tx, audio_rx) = unbounded();
+
+            // Start audio capture in a separate thread
+            let _audio_handle = thread::spawn(move || {
+                if let Err(e) = audio::start_audio_capture(audio_tx, device_index) {
+                    eprintln!("Audio capture error: {}", e);
+                }
+            });
+
+            let transcription_result = if let Some(ws_port) = ws_port {
+                eprintln!("Starting WebSocket server on port {}", ws_port);
+                eprintln!("Starting live transcription with WebSocket streaming. Press Ctrl+C to stop.");
+                eprintln!("WebSocket endpoint: ws://localhost:{}/", ws_port);
+                
+                // Run live transcription with WebSocket streaming
+                model.transcribe_live_ws(audio_rx, save_audio_path, ws_port).await
+            } else {
+                eprintln!("Starting live transcription. Press Ctrl+C to stop.");
+                eprintln!("Transcription output:");
+                eprintln!("{}", "-".repeat(50));
+
+                // Run live transcription
+                model.transcribe_live(audio_rx, save_audio_path)
+            };
+
+            match transcription_result {
+                Ok(result) => break result,
+                Err(e) => {
+                    eprintln!("Transcription error: {}", e);
+                    eprintln!("Attempting to restart audio capture...");
+                    thread::sleep(std::time::Duration::from_secs(2));
+                    continue;
+                }
             }
-        });
-
-        let result = if let Some(ws_port) = args.ws {
-            eprintln!("Starting WebSocket server on port {}", ws_port);
-            eprintln!("Starting live transcription with WebSocket streaming. Press Ctrl+C to stop.");
-            eprintln!("WebSocket endpoint: ws://localhost:{}/", ws_port);
-            
-            // Run live transcription with WebSocket streaming
-            model.transcribe_live_ws(audio_rx, args.save_audio.as_deref(), ws_port).await?
-        } else {
-            eprintln!("Starting live transcription. Press Ctrl+C to stop.");
-            eprintln!("Transcription output:");
-            eprintln!("{}", "-".repeat(50));
-
-            // Run live transcription
-            model.transcribe_live(audio_rx, args.save_audio.as_deref())?
         };
 
         if args.timestamps {
@@ -119,7 +134,7 @@ async fn main() -> Result<()> {
             println!("{}", result.text);
         }
 
-        audio_handle.join().unwrap();
+        // Audio handle cleanup is managed by the reconnection loop
     } else if let Some(ref in_file) = args.in_file {
         // File mode
         eprintln!("Loading audio file from: {}", in_file);

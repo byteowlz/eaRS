@@ -283,7 +283,14 @@ impl Model {
         let mut printed_eot = false;
         let mut last_voice_activity = Instant::now();
 
-        for pcm_chunk in audio_rx {
+        loop {
+            let pcm_chunk = match audio_rx.recv() {
+                Ok(chunk) => chunk,
+                Err(_) => {
+                    eprintln!("Audio receiver channel closed");
+                    return Err(anyhow::anyhow!("Audio receiver disconnected"));
+                }
+            };
             if save_audio.is_some() {
                 all_audio.extend_from_slice(&pcm_chunk);
             }
@@ -838,6 +845,27 @@ pub mod audio {
     }
 
     pub fn start_audio_capture(audio_tx: Sender<Vec<f32>>, device_index: Option<usize>) -> Result<()> {
+        let max_retries = 3;
+        let mut retry_count = 0;
+        
+        loop {
+            match start_audio_capture_internal(audio_tx.clone(), device_index) {
+                Ok(()) => break,
+                Err(e) => {
+                    retry_count += 1;
+                    if retry_count >= max_retries {
+                        return Err(e);
+                    }
+                    eprintln!("Audio capture failed (attempt {}/{}): {}", retry_count, max_retries, e);
+                    eprintln!("Retrying audio capture in 1 second...");
+                    thread::sleep(std::time::Duration::from_secs(1));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn start_audio_capture_internal(audio_tx: Sender<Vec<f32>>, device_index: Option<usize>) -> Result<()> {
         let host = cpal::default_host();
         let device = if let Some(index) = device_index {
             host.input_devices()?
@@ -857,6 +885,7 @@ pub mod audio {
         );
         eprintln!("Sample rate: {}", sample_rate);
 
+        let audio_tx_clone = audio_tx.clone();
         let stream = match config.sample_format() {
             cpal::SampleFormat::F32 => {
                 let config = config.into();
@@ -885,11 +914,15 @@ pub mod audio {
                             data.to_vec()
                         };
 
-                        if audio_tx.send(resampled).is_err() {
+                        if audio_tx_clone.send(resampled).is_err() {
                             eprintln!("Audio receiver disconnected");
+                            return;
                         }
                     },
-                    |err| eprintln!("Audio stream error: {}", err),
+                    |err| {
+                        eprintln!("Audio stream error: {}", err);
+                        std::process::exit(1);
+                    },
                     None,
                 )?
             }
