@@ -1,0 +1,78 @@
+    Checking eaRS v0.1.0 (/Users/tommyfalkowski/Code/rust/eaRS)
+error[E0408]: variable `stop_time` is not bound in all patterns
+   --> src/lib.rs:516:39
+    |
+515 | ...                   moshi::asr::AsrMsg::EndWord { stop_time, .. }
+    |                                                     --------- variable not in all patterns
+516 | ...                   | moshi::asr::AsrMsg::Word { .. } => {
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ pattern doesn't bind `stop_time`
+
+warning: unused import: `std::io::Write`
+   --> src/lib.rs:415:13
+    |
+415 |         use std::io::Write;
+    |             ^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` on by default
+
+error[E0599]: no method named `clone` found for struct `moshi::asr::State` in the current scope
+   --> src/lib.rs:478:40
+    |
+478 |             let mut state = self.state.clone(); // Assumes moshi::asr::State is Clone
+    |                                        ^^^^^ method not found in `State`
+
+error[E0599]: no method named `clone` found for struct `SentencePieceProcessor` in the current scope
+   --> src/lib.rs:479:54
+    |
+479 |             let text_tokenizer = self.text_tokenizer.clone();
+    |                                                      ^^^^^ method not found in `SentencePieceProcessor`
+
+error[E0614]: type `f64` cannot be dereferenced
+   --> src/lib.rs:554:60
+    |
+554 | ...                   end_time: Some(*start_time),
+    |                                      ^^^^^^^^^^^ can't be dereferenced
+
+error[E0614]: type `f64` cannot be dereferenced
+   --> src/lib.rs:563:61
+    |
+563 | ...                   last_word = Some((word, *start_time));
+    |                                               ^^^^^^^^^^^ can't be dereferenced
+
+error[E0614]: type `f64` cannot be dereferenced
+   --> src/lib.rs:570:60
+    |
+570 | ...                   end_time: Some(*stop_time),
+    |                                      ^^^^^^^^^^ can't be dereferenced
+
+error[E0277]: the trait bound `moshi::asr::State: Clone` is not satisfied
+  --> src/lib.rs:76:5
+   |
+74 | #[derive(Clone)]
+   |          ----- in this derive macro expansion
+75 | pub struct Model {
+76 |     state: moshi::asr::State,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `moshi::asr::State`
+
+error[E0277]: the trait bound `SentencePieceProcessor: Clone` is not satisfied
+  --> src/lib.rs:77:5
+   |
+74 | #[derive(Clone)]
+   |          ----- in this derive macro expansion
+...
+77 |     text_tokenizer: sentencepiece::SentencePieceProcessor,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `SentencePieceProcessor`
+
+error[E0277]: the trait bound `Config: Clone` is not satisfied
+  --> src/lib.rs:80:5
+   |
+74 | #[derive(Clone)]
+   |          ----- in this derive macro expansion
+...
+80 |     config: Config,
+   |     ^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `Config`
+
+Some errors have detailed explanations: E0277, E0408, E0599, E0614.
+For more information about an error, try `rustc --explain E0277`.
+warning: `eaRS` (lib) generated 1 warning
+error: could not compile `eaRS` (lib) due to 9 previous errors; 1 warning emitted
