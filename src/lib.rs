@@ -175,6 +175,10 @@ pub enum WebSocketMessage {
 pub enum WebSocketCommand {
     #[serde(rename = "restart")]
     Restart,
+    #[serde(rename = "pause")]
+    Pause,
+    #[serde(rename = "resume")]
+    Resume,
 }
 
 pub struct TranscriptionOptions {
@@ -414,7 +418,7 @@ impl Model {
         use futures::{SinkExt, StreamExt};
         use std::io::Write;
         use std::sync::Arc;
-        use tokio::sync::{broadcast, mpsc};
+        use tokio::sync::{broadcast, mpsc, watch};
         use tokio_tungstenite::{accept_async, tungstenite::Message};
 
         // WebSocket broadcast channel
@@ -425,14 +429,20 @@ impl Model {
         let (restart_tx, mut restart_rx) = mpsc::unbounded_channel();
         let restart_tx = Arc::new(restart_tx);
 
+        // Watch channel used to pause or resume transcription
+        let (pause_tx, _pause_rx) = watch::channel(false);
+        let pause_tx = Arc::new(pause_tx);
+
         // Spawn WebSocket server
         let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", ws_port)).await?;
         let ws_tx_clone = ws_tx.clone();
         let restart_tx_clone = restart_tx.clone();
+        let pause_tx_clone = pause_tx.clone();
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
                 let ws_tx = ws_tx_clone.clone();
                 let restart_tx = restart_tx_clone.clone();
+                let pause_tx = pause_tx_clone.clone();
                 tokio::spawn(async move {
                     let ws_stream = match accept_async(stream).await {
                         Ok(ws) => ws,
@@ -452,8 +462,16 @@ impl Model {
                                 Ok(Message::Text(text)) => {
                                     if let Ok(cmd) = serde_json::from_str::<WebSocketCommand>(&text)
                                     {
-                                        if let WebSocketCommand::Restart = cmd {
-                                            let _ = restart_tx.send(());
+                                        match cmd {
+                                            WebSocketCommand::Restart => {
+                                                let _ = restart_tx.send(());
+                                            }
+                                            WebSocketCommand::Pause => {
+                                                let _ = pause_tx.send(true);
+                                            }
+                                            WebSocketCommand::Resume => {
+                                                let _ = pause_tx.send(false);
+                                            }
                                         }
                                     }
                                 }
@@ -482,6 +500,7 @@ impl Model {
 
         // Bridge blocking audio receiver to async channel
         let (pcm_tx, mut pcm_rx) = mpsc::unbounded_channel();
+        let mut pause_rx = pause_tx.subscribe();
         std::thread::spawn(move || {
             while let Ok(chunk) = audio_rx.recv() {
                 if pcm_tx.send(chunk).is_err() {
@@ -501,6 +520,7 @@ impl Model {
             let mut printed_eot = false;
             let mut last_voice_activity: Option<std::time::Instant> = None;
             let mut restart = false;
+            let mut paused = *pause_rx.borrow();
 
             eprintln!("Starting transcription session...");
 
@@ -511,7 +531,18 @@ impl Model {
                         restart = true;
                         break;
                     }
+                    _ = pause_rx.changed() => {
+                        paused = *pause_rx.borrow();
+                        if paused {
+                            eprintln!("Transcription paused");
+                        } else {
+                            eprintln!("Transcription resumed");
+                        }
+                    }
                     Some(pcm_chunk) = pcm_rx.recv() => {
+                        if paused {
+                            continue;
+                        }
                         if save_audio.is_some() {
                             all_audio.extend_from_slice(&pcm_chunk);
                         }

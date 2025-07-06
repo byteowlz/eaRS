@@ -142,13 +142,21 @@ Send from client to restart transcription after timeout or final message:
 }
 ```
 
+#### Pause/Resume Transcription
+Toggle live inference without disconnecting:
+```json
+{ "type": "pause" }
+{ "type": "resume" }
+```
+
 ### Usage Pattern
 
 1. Connect to WebSocket endpoint
 2. Receive real-time word messages during transcription
 3. Receive final message when session ends (timeout or silence)
 4. Send restart command to begin new transcription session
-5. Repeat as needed
+5. Optionally send pause/resume commands to temporarily stop inference
+6. Repeat as needed
 
 ## Model
 

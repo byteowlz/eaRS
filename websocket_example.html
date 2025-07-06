@@ -37,6 +37,7 @@
         <input type="text" id="wsUrl" value="ws://localhost:8080/" size="30">
         <button onclick="connect()">Connect</button>
         <button onclick="disconnect()">Disconnect</button>
+        <button id="pauseBtn" onclick="togglePause()" disabled>Pause</button>
     </div>
     
     <div>Status: <span id="status">Disconnected</span></div>
@@ -54,8 +55,10 @@
 
     <script>
         let ws = null;
+        let isPaused = false;
         const messagesDiv = document.getElementById('messages');
         const statusSpan = document.getElementById('status');
+        const pauseBtn = document.getElementById('pauseBtn');
 
         function connect() {
             const url = document.getElementById('wsUrl').value;
@@ -70,6 +73,9 @@
                 ws.onopen = function() {
                     statusSpan.textContent = 'Connected';
                     statusSpan.style.color = 'green';
+                    pauseBtn.disabled = false;
+                    pauseBtn.textContent = 'Pause';
+                    isPaused = false;
                     addMessage('Connected to eaRS WebSocket server', 'info');
                 };
                 
@@ -85,6 +91,9 @@
                 ws.onclose = function() {
                     statusSpan.textContent = 'Disconnected';
                     statusSpan.style.color = 'red';
+                    pauseBtn.disabled = true;
+                    pauseBtn.textContent = 'Pause';
+                    isPaused = false;
                     addMessage('Disconnected from server', 'info');
                     ws = null;
                 };
@@ -102,6 +111,22 @@
             if (ws) {
                 ws.close();
                 ws = null;
+            }
+            pauseBtn.disabled = true;
+            pauseBtn.textContent = 'Pause';
+            isPaused = false;
+        }
+
+        function togglePause() {
+            if (!ws) return;
+            if (isPaused) {
+                ws.send(JSON.stringify({ type: 'resume' }));
+                pauseBtn.textContent = 'Pause';
+                isPaused = false;
+            } else {
+                ws.send(JSON.stringify({ type: 'pause' }));
+                pauseBtn.textContent = 'Resume';
+                isPaused = true;
             }
         }
         
