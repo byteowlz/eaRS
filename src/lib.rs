@@ -281,7 +281,7 @@ impl Model {
         let mut current_text = String::new();
         let mut last_word: Option<(String, f64)> = None;
         let mut printed_eot = false;
-        let mut last_voice_activity = Instant::now();
+        let mut last_voice_activity: Option<Instant> = None;
 
         loop {
             let pcm_chunk = match audio_rx.recv() {
@@ -342,8 +342,11 @@ impl Model {
                             current_text.push_str(&word);
 
                             if !self.timestamps {
-                                print!(" {}", word);
-                                std::io::stdout().flush().ok();
+                                // Only show live transcription if we're in an interactive terminal
+                                if atty::is(atty::Stream::Stdout) {
+                                    print!(" {}", word);
+                                    std::io::stdout().flush().ok();
+                                }
                             } else {
                                 if let Some((prev_word, prev_start_time)) = last_word.take() {
                                     println!(
@@ -364,13 +367,15 @@ impl Model {
 
             // Update voice activity timestamp if we detected voice
             if has_voice_activity {
-                last_voice_activity = Instant::now();
+                last_voice_activity = Some(Instant::now());
             }
 
             // Check for timeout
             if let Some(timeout_secs) = self.vad_timeout {
-                if last_voice_activity.elapsed() > Duration::from_secs_f64(timeout_secs) {
-                    break;
+                if let Some(last_activity) = last_voice_activity {
+                    if last_activity.elapsed() > Duration::from_secs_f64(timeout_secs) {
+                        break;
+                    }
                 }
             }
         }
@@ -386,7 +391,7 @@ impl Model {
             });
         }
 
-        if !self.timestamps {
+        if !self.timestamps && atty::is(atty::Stream::Stdout) {
             println!();
         }
 
@@ -492,7 +497,7 @@ impl Model {
             let mut current_text = String::new();
             let mut last_word: Option<(String, f64)> = None;
             let mut printed_eot = false;
-            let mut last_voice_activity = std::time::Instant::now();
+            let mut last_voice_activity: Option<std::time::Instant> = None;
             let mut transcription_active = true;
 
             eprintln!("Starting transcription session...");
@@ -616,14 +621,16 @@ impl Model {
 
                                 // Update voice activity timestamp if we detected voice
                                 if has_voice_activity {
-                                    last_voice_activity = std::time::Instant::now();
+                                    last_voice_activity = Some(std::time::Instant::now());
                                 }
 
                                 // Check for timeout
                                 if let Some(timeout_secs) = self.vad_timeout {
-                                    if last_voice_activity.elapsed() > std::time::Duration::from_secs_f64(timeout_secs) {
-                                        eprintln!("Voice activity timeout reached");
-                                        transcription_active = false;
+                                    if let Some(last_activity) = last_voice_activity {
+                                        if last_activity.elapsed() > std::time::Duration::from_secs_f64(timeout_secs) {
+                                            eprintln!("Voice activity timeout reached");
+                                            transcription_active = false;
+                                        }
                                     }
                                 }
                             }

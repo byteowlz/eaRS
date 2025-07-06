@@ -18,6 +18,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0"
+atty = "0.2"
 candle = { version = "0.9.1", package = "candle-core" }
 candle-nn = "0.9.1"
 clap = { version = "4.4.12", features = ["derive"] }
