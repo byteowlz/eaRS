@@ -142,6 +142,16 @@ Send from client to restart transcription after timeout or final message:
 }
 ```
 
+#### Pause / Resume Transcription
+Temporarily halt or continue audio processing without closing the WebSocket:
+```json
+{ "type": "pause" }
+```
+Resume with:
+```json
+{ "type": "resume" }
+```
+
 ### Usage Pattern
 
 1. Connect to WebSocket endpoint

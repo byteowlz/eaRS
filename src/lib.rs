@@ -177,6 +177,10 @@ pub enum WebSocketMessage {
 pub enum WebSocketCommand {
     #[serde(rename = "restart")]
     Restart,
+    #[serde(rename = "pause")]
+    Pause,
+    #[serde(rename = "resume")]
+    Resume,
 }
 
 pub struct TranscriptionOptions {
@@ -425,15 +429,21 @@ impl Model {
         let (restart_tx, mut restart_rx) = mpsc::unbounded_channel();
         let restart_tx = Arc::new(restart_tx);
 
+        // Channel for pause/resume commands
+        let (pause_tx, mut pause_rx) = mpsc::unbounded_channel::<bool>();
+        let pause_tx = Arc::new(pause_tx);
+
         // Start WebSocket server
         let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", ws_port)).await?;
         let ws_tx_clone = ws_tx.clone();
         let restart_tx_clone = restart_tx.clone();
+        let pause_tx_clone = pause_tx.clone();
 
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
                 let ws_tx = ws_tx_clone.clone();
                 let restart_tx = restart_tx_clone.clone();
+                let pause_tx = pause_tx_clone.clone();
                 tokio::spawn(async move {
                     let ws_stream = match accept_async(stream).await {
                         Ok(ws) => ws,
@@ -456,6 +466,12 @@ impl Model {
                                         match command {
                                             WebSocketCommand::Restart => {
                                                 let _ = restart_tx.send(());
+                                            }
+                                            WebSocketCommand::Pause => {
+                                                let _ = pause_tx.send(true);
+                                            }
+                                            WebSocketCommand::Resume => {
+                                                let _ = pause_tx.send(false);
                                             }
                                         }
                                     }
@@ -499,10 +515,12 @@ impl Model {
             let mut printed_eot = false;
             let mut last_voice_activity: Option<std::time::Instant> = None;
             let mut transcription_active = true;
+            let mut paused = false;
 
             eprintln!("Starting transcription session...");
 
             while transcription_active {
+                while let Ok(p) = pause_rx.try_recv() { paused = p; }
                 tokio::select! {
                     // Handle restart commands
                     _ = restart_rx.recv() => {
@@ -516,6 +534,9 @@ impl Model {
                             Ok(pcm_chunk) => {
                                 if save_audio.is_some() {
                                     all_audio.extend_from_slice(&pcm_chunk);
+                                }
+                                if paused {
+                                    continue;
                                 }
 
                                 let mut has_voice_activity = false;

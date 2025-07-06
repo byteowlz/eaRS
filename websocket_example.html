@@ -37,6 +37,7 @@
         <input type="text" id="wsUrl" value="ws://localhost:8080/" size="30">
         <button onclick="connect()">Connect</button>
         <button onclick="disconnect()">Disconnect</button>
+        <button id="pauseBtn" onclick="togglePause()" disabled>Pause</button>
     </div>
     
     <div>Status: <span id="status">Disconnected</span></div>
@@ -49,13 +50,16 @@
             <li>Start eaRS with WebSocket: <code>ears --live --ws 8080</code></li>
             <li>Click "Connect" above</li>
             <li>Start speaking - words will appear in real-time</li>
+            <li>Use the Pause button to temporarily halt transcription</li>
         </ol>
     </div>
 
     <script>
         let ws = null;
+        let paused = false;
         const messagesDiv = document.getElementById('messages');
         const statusSpan = document.getElementById('status');
+        const pauseBtn = document.getElementById('pauseBtn');
 
         function connect() {
             const url = document.getElementById('wsUrl').value;
@@ -71,6 +75,7 @@
                     statusSpan.textContent = 'Connected';
                     statusSpan.style.color = 'green';
                     addMessage('Connected to eaRS WebSocket server', 'info');
+                    pauseBtn.disabled = false;
                 };
                 
                 ws.onmessage = function(event) {
@@ -87,6 +92,9 @@
                     statusSpan.style.color = 'red';
                     addMessage('Disconnected from server', 'info');
                     ws = null;
+                    pauseBtn.disabled = true;
+                    pauseBtn.textContent = 'Pause';
+                    paused = false;
                 };
                 
                 ws.onerror = function(error) {
@@ -102,6 +110,22 @@
             if (ws) {
                 ws.close();
                 ws = null;
+                pauseBtn.disabled = true;
+                pauseBtn.textContent = 'Pause';
+                paused = false;
+            }
+        }
+
+        function togglePause() {
+            if (!ws) return;
+            if (paused) {
+                ws.send(JSON.stringify({ type: 'resume' }));
+                pauseBtn.textContent = 'Pause';
+                paused = false;
+            } else {
+                ws.send(JSON.stringify({ type: 'pause' }));
+                pauseBtn.textContent = 'Resume';
+                paused = true;
             }
         }
         
