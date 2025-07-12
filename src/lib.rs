@@ -902,6 +902,8 @@ pub mod audio {
             device.name().unwrap_or("Unknown".to_string())
         );
         eprintln!("Sample rate: {}", sample_rate);
+        eprintln!("Sample format: {:?}", config.sample_format());
+        eprintln!("Channels: {}", config.channels());
 
         let audio_tx_clone = audio_tx.clone();
         let stream = match config.sample_format() {
@@ -910,9 +912,16 @@ pub mod audio {
                 device.build_input_stream(
                     &config,
                     move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                        // Convert stereo to mono by averaging channels
+                        let mono_data = if config.channels == 2 {
+                            data.chunks(2).map(|chunk| (chunk[0] + chunk[1]) / 2.0).collect()
+                        } else {
+                            data.to_vec()
+                        };
+                        
                         let resampled = if sample_rate != 24000 {
                             let ratio = 24000.0 / sample_rate as f32;
-                            let new_len = (data.len() as f32 * ratio) as usize;
+                            let new_len = (mono_data.len() as f32 * ratio) as usize;
                             let mut resampled = Vec::with_capacity(new_len);
 
                             for i in 0..new_len {
@@ -920,16 +929,16 @@ pub mod audio {
                                 let idx = pos as usize;
                                 let frac = pos - idx as f32;
 
-                                if idx + 1 < data.len() {
-                                    let sample = data[idx] * (1.0 - frac) + data[idx + 1] * frac;
+                                if idx + 1 < mono_data.len() {
+                                    let sample = mono_data[idx] * (1.0 - frac) + mono_data[idx + 1] * frac;
                                     resampled.push(sample);
-                                } else if idx < data.len() {
-                                    resampled.push(data[idx]);
+                                } else if idx < mono_data.len() {
+                                    resampled.push(mono_data[idx]);
                                 }
                             }
                             resampled
                         } else {
-                            data.to_vec()
+                            mono_data
                         };
 
                         if audio_tx_clone.send(resampled).is_err() {
@@ -944,9 +953,107 @@ pub mod audio {
                     None,
                 )?
             }
-            _ => {
+            cpal::SampleFormat::I16 => {
+                let config = config.into();
+                device.build_input_stream(
+                    &config,
+                    move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                        // Convert I16 to F32
+                        let f32_data: Vec<f32> = data.iter().map(|&sample| sample as f32 / 32768.0).collect();
+                        
+                        // Convert stereo to mono by averaging channels
+                        let mono_data = if config.channels == 2 {
+                            f32_data.chunks(2).map(|chunk| (chunk[0] + chunk[1]) / 2.0).collect()
+                        } else {
+                            f32_data
+                        };
+                        
+                        let resampled = if sample_rate != 24000 {
+                            let ratio = 24000.0 / sample_rate as f32;
+                            let new_len = (mono_data.len() as f32 * ratio) as usize;
+                            let mut resampled = Vec::with_capacity(new_len);
+
+                            for i in 0..new_len {
+                                let pos = i as f32 / ratio;
+                                let idx = pos as usize;
+                                let frac = pos - idx as f32;
+
+                                if idx + 1 < mono_data.len() {
+                                    let sample = mono_data[idx] * (1.0 - frac) + mono_data[idx + 1] * frac;
+                                    resampled.push(sample);
+                                } else if idx < mono_data.len() {
+                                    resampled.push(mono_data[idx]);
+                                }
+                            }
+                            resampled
+                        } else {
+                            mono_data
+                        };
+
+                        if audio_tx_clone.send(resampled).is_err() {
+                            eprintln!("Audio receiver disconnected");
+                            return;
+                        }
+                    },
+                    |err| {
+                        eprintln!("Audio stream error: {}", err);
+                        std::process::exit(1);
+                    },
+                    None,
+                )?
+            }
+            cpal::SampleFormat::U16 => {
+                let config = config.into();
+                device.build_input_stream(
+                    &config,
+                    move |data: &[u16], _: &cpal::InputCallbackInfo| {
+                        // Convert U16 to F32
+                        let f32_data: Vec<f32> = data.iter().map(|&sample| (sample as f32 - 32768.0) / 32768.0).collect();
+                        
+                        // Convert stereo to mono by averaging channels
+                        let mono_data = if config.channels == 2 {
+                            f32_data.chunks(2).map(|chunk| (chunk[0] + chunk[1]) / 2.0).collect()
+                        } else {
+                            f32_data
+                        };
+                        
+                        let resampled = if sample_rate != 24000 {
+                            let ratio = 24000.0 / sample_rate as f32;
+                            let new_len = (mono_data.len() as f32 * ratio) as usize;
+                            let mut resampled = Vec::with_capacity(new_len);
+
+                            for i in 0..new_len {
+                                let pos = i as f32 / ratio;
+                                let idx = pos as usize;
+                                let frac = pos - idx as f32;
+
+                                if idx + 1 < mono_data.len() {
+                                    let sample = mono_data[idx] * (1.0 - frac) + mono_data[idx + 1] * frac;
+                                    resampled.push(sample);
+                                } else if idx < mono_data.len() {
+                                    resampled.push(mono_data[idx]);
+                                }
+                            }
+                            resampled
+                        } else {
+                            mono_data
+                        };
+
+                        if audio_tx_clone.send(resampled).is_err() {
+                            eprintln!("Audio receiver disconnected");
+                            return;
+                        }
+                    },
+                    |err| {
+                        eprintln!("Audio stream error: {}", err);
+                        std::process::exit(1);
+                    },
+                    None,
+                )?
+            }
+            format => {
                 return Err(anyhow::anyhow!(
-                    "Unsupported sample format. Only F32 is supported."
+                    "Unsupported sample format: {:?}. Supported formats: F32, I16, U16", format
                 ));
             }
         };
