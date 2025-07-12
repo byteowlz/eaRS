@@ -101,16 +101,17 @@ pub struct WordTimestamp {
 /// Connect to `ws://localhost:<port>/` where `<port>` is specified via the `--ws` option.
 ///
 /// ## Message Format
-/// All messages are JSON objects with a `type` field indicating the message type:
+/// Messages are sent as JSON objects using the enum variant name as the key:
 ///
 /// ### Word Message
 /// Sent for each transcribed word as it's recognized:
 /// ```json
 /// {
-///   "type": "word",
-///   "word": "hello",
-///   "start_time": 1.23,
-///   "end_time": 1.45  // null for real-time words without end time yet
+///   "Word": {
+///     "word": "hello",
+///     "start_time": 1.23,
+///     "end_time": 1.45  // null for real-time words without end time yet
+///   }
 /// }
 /// ```
 ///
@@ -118,8 +119,9 @@ pub struct WordTimestamp {
 /// Sent when voice activity detection detects a pause (requires --vad flag):
 /// ```json
 /// {
-///   "type": "pause",
-///   "timestamp": 1234567890.123
+///   "Pause": {
+///     "timestamp": 1234567890.123
+///   }
 /// }
 /// ```
 ///
@@ -127,21 +129,35 @@ pub struct WordTimestamp {
 /// Sent at the end of transcription with complete results:
 /// ```json
 /// {
-///   "type": "final",
-///   "text": "complete transcribed text",
-///   "words": [
-///     {"word": "hello", "start_time": 1.23, "end_time": 1.45},
-///     {"word": "world", "start_time": 1.46, "end_time": null}
-///   ]
+///   "Final": {
+///     "text": "complete transcribed text",
+///     "words": [
+///       {"word": "hello", "start_time": 1.23, "end_time": 1.45},
+///       {"word": "world", "start_time": 1.46, "end_time": null}
+///     ]
+///   }
 /// }
 /// ```
 ///
+/// ## Commands
+/// Send commands to the server as simple JSON strings:
+///
 /// ### Restart Command
-/// Send from client to restart transcription after timeout or final message:
+/// Restart transcription session:
 /// ```json
-/// {
-///   "type": "restart"
-/// }
+/// "Restart"
+/// ```
+///
+/// ### Pause Command
+/// Pause transcription:
+/// ```json
+/// "Pause"
+/// ```
+///
+/// ### Resume Command
+/// Resume transcription:
+/// ```json
+/// "Resume"
 /// ```
 ///
 /// ## Usage Example
