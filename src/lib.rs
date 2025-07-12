@@ -153,17 +153,13 @@ pub struct WordTimestamp {
 /// ears --live --ws 8080 --timestamps --vad
 /// ```
 #[derive(Debug, Clone, serde::Serialize)]
-#[serde(tag = "type")]
 pub enum WebSocketMessage {
-    #[serde(rename = "word")]
     Word {
         word: String,
         start_time: f64,
         end_time: Option<f64>,
     },
-    #[serde(rename = "pause")]
     Pause { timestamp: f64 },
-    #[serde(rename = "final")]
     Final {
         text: String,
         words: Vec<WordTimestamp>,
@@ -171,13 +167,9 @@ pub enum WebSocketMessage {
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
-#[serde(tag = "type")]
 pub enum WebSocketCommand {
-    #[serde(rename = "restart")]
     Restart,
-    #[serde(rename = "pause")]
     Pause,
-    #[serde(rename = "resume")]
     Resume,
 }
 
@@ -430,7 +422,7 @@ impl Model {
         let restart_tx = Arc::new(restart_tx);
 
         // Watch channel used to pause or resume transcription
-        let (pause_tx, _pause_rx) = watch::channel(false);
+        let (pause_tx, _pause_rx) = watch::channel(true);
         let pause_tx = Arc::new(pause_tx);
 
         // Spawn WebSocket server
@@ -522,7 +514,7 @@ impl Model {
             let mut restart = false;
             let mut paused = *pause_rx.borrow();
 
-            eprintln!("Starting transcription session...");
+            eprintln!("Starting transcription session (paused - send Resume command to begin)...");
 
             loop {
                 tokio::select! {

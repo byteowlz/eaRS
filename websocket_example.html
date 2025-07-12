@@ -38,6 +38,7 @@
         <button onclick="connect()">Connect</button>
         <button onclick="disconnect()">Disconnect</button>
         <button id="pauseBtn" onclick="togglePause()" disabled>Pause</button>
+        <button id="restartBtn" onclick="restart()" disabled>Restart</button>
     </div>
     
     <div>Status: <span id="status">Disconnected</span></div>
@@ -48,9 +49,12 @@
         <h3>Instructions:</h3>
         <ol>
             <li>Start eaRS with WebSocket: <code>ears --live --ws 8080</code></li>
-            <li>Click "Connect" above</li>
+            <li>Click "Connect" above (automatically resumes transcription)</li>
             <li>Start speaking - words will appear in real-time</li>
+            <li>Use "Pause"/"Resume" button to control transcription</li>
+            <li>Use "Restart" button to begin a new transcription session</li>
         </ol>
+        <p><strong>Note:</strong> The WebSocket server starts in paused mode and automatically resumes when you connect.</p>
     </div>
 
     <script>
@@ -59,6 +63,7 @@
         const messagesDiv = document.getElementById('messages');
         const statusSpan = document.getElementById('status');
         const pauseBtn = document.getElementById('pauseBtn');
+        const restartBtn = document.getElementById('restartBtn');
 
         function connect() {
             const url = document.getElementById('wsUrl').value;
@@ -74,9 +79,17 @@
                     statusSpan.textContent = 'Connected';
                     statusSpan.style.color = 'green';
                     pauseBtn.disabled = false;
-                    pauseBtn.textContent = 'Pause';
-                    isPaused = false;
-                    addMessage('Connected to eaRS WebSocket server', 'info');
+                    restartBtn.disabled = false;
+                    pauseBtn.textContent = 'Resume';
+                    isPaused = true;
+                    addMessage('Connected to eaRS WebSocket server (starting paused)', 'info');
+                    // Server starts in paused mode, send Resume to begin transcription
+                    ws.send(JSON.stringify("Resume"));
+                    setTimeout(() => {
+                        pauseBtn.textContent = 'Pause';
+                        isPaused = false;
+                        addMessage('Transcription started', 'info');
+                    }, 100);
                 };
                 
                 ws.onmessage = function(event) {
@@ -92,6 +105,7 @@
                     statusSpan.textContent = 'Disconnected';
                     statusSpan.style.color = 'red';
                     pauseBtn.disabled = true;
+                    restartBtn.disabled = true;
                     pauseBtn.textContent = 'Pause';
                     isPaused = false;
                     addMessage('Disconnected from server', 'info');
@@ -113,6 +127,7 @@
                 ws = null;
             }
             pauseBtn.disabled = true;
+            restartBtn.disabled = true;
             pauseBtn.textContent = 'Pause';
             isPaused = false;
         }
@@ -120,35 +135,42 @@
         function togglePause() {
             if (!ws) return;
             if (isPaused) {
-                ws.send(JSON.stringify({ type: 'resume' }));
+                ws.send(JSON.stringify("Resume"));
                 pauseBtn.textContent = 'Pause';
                 isPaused = false;
+                addMessage('Transcription resumed', 'info');
             } else {
-                ws.send(JSON.stringify({ type: 'pause' }));
+                ws.send(JSON.stringify("Pause"));
                 pauseBtn.textContent = 'Resume';
                 isPaused = true;
+                addMessage('Transcription paused', 'info');
             }
+        }
+
+        function restart() {
+            if (!ws) return;
+            ws.send(JSON.stringify("Restart"));
+            addMessage('Restart command sent - new transcription session started', 'info');
+            // Clear previous messages
+            messagesDiv.innerHTML = '';
+            addMessage('Transcription session restarted', 'info');
         }
         
         function handleMessage(message) {
-            switch (message.type) {
-                case 'word':
-                    const endTime = message.end_time ? ` (${message.start_time.toFixed(2)}-${message.end_time.toFixed(2)}s)` : ` (${message.start_time.toFixed(2)}s)`;
-                    addMessage(`Word: "${message.word}"${endTime}`, 'word');
-                    break;
-                    
-                case 'pause':
-                    addMessage(`Pause detected at ${new Date(message.timestamp * 1000).toLocaleTimeString()}`, 'pause');
-                    break;
-                    
-                case 'final':
-                    addMessage('--- FINAL RESULT ---', 'final');
-                    addMessage(`Complete text: "${message.text}"`, 'final');
-                    addMessage(`Total words: ${message.words.length}`, 'final');
-                    break;
-                    
-                default:
-                    addMessage(`Unknown message type: ${message.type}`, 'error');
+            if (message.Word) {
+                const word = message.Word;
+                const endTime = word.end_time ? ` (${word.start_time.toFixed(2)}-${word.end_time.toFixed(2)}s)` : ` (${word.start_time.toFixed(2)}s)`;
+                addMessage(`Word: "${word.word}"${endTime}`, 'word');
+            } else if (message.Pause) {
+                const pause = message.Pause;
+                addMessage(`Pause detected at ${new Date(pause.timestamp * 1000).toLocaleTimeString()}`, 'pause');
+            } else if (message.Final) {
+                const final = message.Final;
+                addMessage('--- FINAL RESULT ---', 'final');
+                addMessage(`Complete text: "${final.text}"`, 'final');
+                addMessage(`Total words: ${final.words.length}`, 'final');
+            } else {
+                addMessage(`Unknown message format: ${JSON.stringify(message)}`, 'error');
             }
         }
         
