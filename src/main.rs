@@ -64,6 +64,12 @@ async fn main() -> Result<()> {
 
     // Load config and ensure ref_audio is available
     let config = AppConfig::load()?;
+    if config.storage.model_dir == "default" {
+        eprintln!("Using HuggingFace default model cache directory");
+    } else {
+        eprintln!("Using custom model cache directory: {}", config.model_dir_path().display());
+    }
+    eprintln!("Using ref_audio directory: {}", config.ref_audio_path().display());
     ensure_ref_audio(&config).await?;
 
     let options = TranscriptionOptions {
@@ -76,7 +82,12 @@ async fn main() -> Result<()> {
     if args.live || args.in_file.is_none() {
         // Live microphone mode
         eprintln!("Loading model from repository: {}", args.hf_repo);
-        let mut model = Model::load_from_hf(&args.hf_repo, args.cpu, options)?;
+        let mut model = if config.storage.model_dir == "default" { 
+            Model::load_from_hf(&args.hf_repo, args.cpu, options, None)?
+        } else { 
+            let model_dir = config.model_dir_path();
+            Model::load_from_hf(&args.hf_repo, args.cpu, options, Some(&model_dir))?
+        };
 
         if let Some(ref lang) = args.lang {
             let path = config.ref_audio_path().join(format!("{}.mp3", lang));
@@ -143,7 +154,12 @@ async fn main() -> Result<()> {
         // File mode
         eprintln!("Loading audio file from: {}", in_file);
         eprintln!("Loading model from repository: {}", args.hf_repo);
-        let mut model = Model::load_from_hf(&args.hf_repo, args.cpu, options)?;
+        let mut model = if config.storage.model_dir == "default" { 
+            Model::load_from_hf(&args.hf_repo, args.cpu, options, None)?
+        } else { 
+            let model_dir = config.model_dir_path();
+            Model::load_from_hf(&args.hf_repo, args.cpu, options, Some(&model_dir))?
+        };
         eprintln!("Running inference");
 
         let result = model.transcribe_file(in_file, args.save_audio.as_deref())?;

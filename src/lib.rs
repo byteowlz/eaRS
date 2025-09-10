@@ -210,11 +210,17 @@ impl Default for TranscriptionOptions {
 }
 
 impl Model {
-    pub fn load_from_hf(hf_repo: &str, cpu: bool, options: TranscriptionOptions) -> Result<Self> {
+    pub fn load_from_hf(hf_repo: &str, cpu: bool, options: TranscriptionOptions, model_dir: Option<&std::path::Path>) -> Result<Self> {
         let device = create_device(cpu)?;
         let dtype = device.bf16_default_to_f32();
 
-        let api = hf_hub::api::sync::Api::new()?;
+        let api = if let Some(model_dir) = model_dir {
+            hf_hub::api::sync::ApiBuilder::new()
+                .with_cache_dir(model_dir.to_path_buf())
+                .build()?
+        } else {
+            hf_hub::api::sync::Api::new()?
+        };
         let repo = api.model(hf_repo.to_string());
         let config_file = repo.get("config.json")?;
         let config: Config = serde_json::from_str(&std::fs::read_to_string(&config_file)?)?;

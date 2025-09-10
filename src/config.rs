@@ -18,7 +18,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             storage: StorageConfig {
-                model_dir: "~/.cache/ears/models".to_string(),
+                model_dir: "default".to_string(), // "default" means use HuggingFace default cache
                 ref_audio: "~/.local/share/ears/ref_audio".to_string(),
             },
         }
@@ -101,6 +101,12 @@ pub async fn ensure_ref_audio(config: &AppConfig) -> Result<()> {
     
     // Create ref_audio directory if it doesn't exist
     fs::create_dir_all(&ref_audio_dir)?;
+    
+    // Only create custom model directory if it's not using the default
+    if config.storage.model_dir != "default" {
+        let model_dir = config.model_dir_path();
+        fs::create_dir_all(&model_dir)?;
+    }
     
     let required_files = ["esp.mp3", "ger.mp3", "jap.mp3"];
     let repo_ref_audio_dir = PathBuf::from("ref_audio");
