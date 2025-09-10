@@ -3,6 +3,8 @@ use candle::{Device, Tensor};
 use crossbeam_channel::Receiver;
 use std::path::Path;
 
+pub mod config;
+
 #[derive(Debug, serde::Deserialize)]
 pub struct SttConfig {
     pub audio_silence_prefix_seconds: f64,

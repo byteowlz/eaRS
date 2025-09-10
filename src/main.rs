@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use crossbeam_channel::unbounded;
-use ears::{Model, TranscriptionOptions, audio};
+use ears::{Model, TranscriptionOptions, audio, config::{AppConfig, ensure_ref_audio}};
 use std::thread;
 
 #[derive(Debug, Parser)]
@@ -62,6 +62,10 @@ async fn main() -> Result<()> {
         return audio::list_audio_devices();
     }
 
+    // Load config and ensure ref_audio is available
+    let config = AppConfig::load()?;
+    ensure_ref_audio(&config).await?;
+
     let options = TranscriptionOptions {
         timestamps: args.timestamps,
         vad: args.vad,
@@ -75,9 +79,9 @@ async fn main() -> Result<()> {
         let mut model = Model::load_from_hf(&args.hf_repo, args.cpu, options)?;
 
         if let Some(ref lang) = args.lang {
-            let path = format!("ref_audio/{}.mp3", lang);
+            let path = config.ref_audio_path().join(format!("{}.mp3", lang));
             if let Err(e) = model.prime_with_audio(&path) {
-                eprintln!("Warning: failed to process reference audio {}: {}", path, e);
+                eprintln!("Warning: failed to process reference audio {}: {}", path.display(), e);
             }
         }
 

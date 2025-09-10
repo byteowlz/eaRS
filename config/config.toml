@@ -1,0 +1,3 @@
+[storage]
+model_dir = "huggingface_cache"
+ref_audio = "~/.local/share/ears/"
