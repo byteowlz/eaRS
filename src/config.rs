@@ -6,12 +6,35 @@ use std::fs;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub storage: StorageConfig,
+    #[serde(default)]
+    pub whisper: WhisperConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageConfig {
     pub model_dir: String,
     pub ref_audio: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WhisperConfig {
+    pub enabled: bool,
+    pub default_model: String,
+    pub model_format: String,
+    pub quantization: String,
+    pub languages: Vec<String>,
+    pub confidence_threshold: f32,
+    pub storage_dir: String,
+    pub sentence_detection: SentenceDetectionConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SentenceDetectionConfig {
+    pub min_duration: f64,
+    pub max_duration: f64,
+    pub vad_pause_threshold: f32,
+    pub silence_duration: f64,
+    pub punctuation_markers: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -21,6 +44,37 @@ impl Default for AppConfig {
                 model_dir: "default".to_string(), // "default" means use HuggingFace default cache
                 ref_audio: "~/.local/share/ears/ref_audio".to_string(),
             },
+            whisper: WhisperConfig::default(),
+        }
+    }
+}
+
+impl Default for WhisperConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            default_model: "large-v3-turbo".to_string(),
+            model_format: "gguf".to_string(),
+            quantization: "Q5_0".to_string(),  // Use Q5_0 for whisper.cpp models
+            languages: vec!["de".to_string(), "ja".to_string(), "it".to_string()],
+            confidence_threshold: 0.7,
+            storage_dir: "default".to_string(), // Use HF cache
+            sentence_detection: SentenceDetectionConfig::default(),
+        }
+    }
+}
+
+impl Default for SentenceDetectionConfig {
+    fn default() -> Self {
+        Self {
+            min_duration: 1.0,
+            max_duration: 30.0,
+            vad_pause_threshold: 0.8,
+            silence_duration: 0.5,
+            punctuation_markers: vec![
+                ".".to_string(), "!".to_string(), "?".to_string(),
+                "。".to_string(), "！".to_string(), "？".to_string(),
+            ],
         }
     }
 }
@@ -35,11 +89,46 @@ impl AppConfig {
             Ok(default_config)
         } else {
             let contents = fs::read_to_string(&config_path)?;
-            let mut config: AppConfig = toml::from_str(&contents)?;
+            
+            // Try to parse the config
+            let mut config: AppConfig = match toml::from_str(&contents) {
+                Ok(c) => c,
+                Err(e) => {
+                    // If parsing fails due to missing whisper field, try to migrate
+                    if contents.contains("[storage]") && !contents.contains("[whisper]") {
+                        eprintln!("Migrating config file to include Whisper settings...");
+                        
+                        // Parse just the storage section
+                        #[derive(Deserialize)]
+                        struct OldConfig {
+                            storage: StorageConfig,
+                        }
+                        
+                        let old_config: OldConfig = toml::from_str(&contents)?;
+                        
+                        // Create new config with defaults for whisper
+                        let new_config = AppConfig {
+                            storage: old_config.storage,
+                            whisper: WhisperConfig::default(),
+                        };
+                        
+                        // Save the updated config
+                        new_config.save()?;
+                        eprintln!("Config file updated with Whisper defaults");
+                        
+                        new_config
+                    } else {
+                        return Err(anyhow::anyhow!("Failed to parse config: {}", e));
+                    }
+                }
+            };
             
             // Expand tilde paths
             config.storage.model_dir = expand_tilde(&config.storage.model_dir)?;
             config.storage.ref_audio = expand_tilde(&config.storage.ref_audio)?;
+            if config.whisper.storage_dir != "default" {
+                config.whisper.storage_dir = expand_tilde(&config.whisper.storage_dir)?;
+            }
             
             Ok(config)
         }
@@ -64,6 +153,18 @@ impl AppConfig {
 
     pub fn model_dir_path(&self) -> PathBuf {
         PathBuf::from(&self.storage.model_dir)
+    }
+
+    pub fn whisper_storage_path(&self) -> PathBuf {
+        if self.whisper.storage_dir == "default" {
+            // Use a subdirectory in the cache for whisper models
+            dirs::cache_dir()
+                .unwrap_or_else(|| PathBuf::from("~/.cache"))
+                .join("huggingface")
+                .join("whisper-models")
+        } else {
+            PathBuf::from(&self.whisper.storage_dir)
+        }
     }
 }
 
@@ -108,7 +209,7 @@ pub async fn ensure_ref_audio(config: &AppConfig) -> Result<()> {
         fs::create_dir_all(&model_dir)?;
     }
     
-    let required_files = ["esp.mp3", "ger.mp3", "jap.mp3"];
+    let required_files = ["esp.mp3", "ger.mp3", "jap.mp3", "ita.mp3"];
     let repo_ref_audio_dir = PathBuf::from("ref_audio");
     
     for file in &required_files {

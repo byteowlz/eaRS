@@ -1,3 +1,35 @@
+# eaRS Configuration File
+
 [storage]
-model_dir = "huggingface_cache"
-ref_audio = "~/.local/share/ears/"
+# Model storage directory - "default" uses HuggingFace cache
+model_dir = "default"
+# Reference audio directory for language priming
+ref_audio = "~/.local/share/ears/ref_audio"
+
+[whisper]
+# Enable Whisper enhancement for higher accuracy transcription
+enabled = false
+# Default Whisper model to use
+default_model = "large-v3-turbo"
+# Model format: "gguf" or "safetensors"
+model_format = "gguf"
+# Quantization level: Q5_0, Q8_0, f32 (for ggerganov/whisper.cpp models)
+quantization = "Q5_0"
+# Languages to enhance (only these will be processed by Whisper)
+languages = ["ger", "jap"]
+# Confidence threshold for accepting Whisper corrections
+confidence_threshold = 0.7
+# Storage directory for Whisper models - "default" uses HuggingFace cache
+storage_dir = "default"
+
+[whisper.sentence_detection]
+# Minimum sentence duration in seconds
+min_duration = 1.0
+# Maximum sentence duration in seconds
+max_duration = 30.0
+# VAD confidence threshold for detecting pauses
+vad_pause_threshold = 0.8
+# Minimum silence duration to consider sentence boundary
+silence_duration = 0.5
+# Punctuation markers that indicate sentence endings
+punctuation_markers = [".", "!", "?", "。", "！", "？"]

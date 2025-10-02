@@ -5,3 +5,5 @@ target/
 .env
 .env.*
 !.env.example
+fake-main.go
+dist/

@@ -38,8 +38,8 @@ cargo build --release
 # Save audio while transcribing
 ./target/release/ears --live --save-audio recording.wav
 
-# Prime the model with reference audio in another language
-./target/release/ears --live -l ger
+# Prime the model with reference audio (ISO 639-1)
+./target/release/ears --live -l de
 
 # Automatically terminate after 5 seconds of no voice activity
 ./target/release/ears --live --vad-timeout 5.0
@@ -85,7 +85,7 @@ cargo build --release
 - `--cpu` - Force CPU inference (disable GPU)
 - `--hf-repo <REPO>` - Specify Hugging Face model repository
 - `--list-devices` - List available audio devices
-- `-l, --lang <LANG>` - Prime language using audio snippet (esp, ger, jap)
+- `-l, --lang <LANG>` - Prime language using audio snippet (ISO 639-1: de, ja, es, it)
 - `--ws <PORT>` - Start WebSocket server on specified port
 - `--vad-timeout <SECONDS>` - Automatically terminate after no voice activity
 
@@ -169,4 +169,3 @@ Supports English and French transcription with 24kHz audio processing. German al
 - Rust 1.70+
 - Audio input device for live transcription
 - GPU support (CUDA/Metal) optional, falls back to CPU
-

@@ -1,0 +1,48 @@
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -378,10 +378,6 @@
+             None
+         };
+         
+-        if self.whisper_enabled {
+-            eprintln!("[Whisper] Enhancement enabled for sentence-level corrections");
+-        }
+-
+         loop {
+             let pcm_chunk = match audio_rx.recv() {
+@@ -468,9 +464,6 @@
+                                     
+                                     // Process with Whisper asynchronously
+                                     if let Some(ref whisper_model) = self.whisper_model {
+-                                        eprintln!("\n[Whisper] Processing sentence: \"{}\" ({:.1}s-{:.1}s)", 
+-                                            sentence.kyutai_text, sentence.start_time, sentence.end_time);
+-                                        
+                                         // Check if this is a language we should enhance
+                                         let should_enhance = {
+                                             let config = config::AppConfig::load().ok();
+@@ -493,23 +486,15 @@
+                                         };
+                                         
+                                         if should_enhance {
+-                                            eprintln!("[Whisper] Language detected, enhancing transcription...");
+-                                            
+                                             // Actually transcribe with Whisper!
+                                             match whisper_model.transcribe_audio(&sentence.audio_samples) {
+                                                 Ok(corrected) => {
+                                                     if corrected != sentence.kyutai_text {
+-                                                        eprintln!("[Whisper] ✓ Corrected: \"{}\"", corrected);
+-                                                        
+                                                         if let Some(ref mut dm) = display_manager {
+                                                             // Update display with correction
+                                                         }
+-                                                    } else {
+-                                                        eprintln!("[Whisper] ✓ Confirmed (no corrections needed)");
+                                                     }
+                                                 },
+                                                 Err(e) => {
+-                                                    eprintln!("[Whisper] Error during transcription: {}", e);
+                                                 }
+                                             }
+-                                        } else {
+-                                            eprintln!("[Whisper] Skipping (not a target language)");
+                                         }

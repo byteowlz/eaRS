@@ -21,6 +21,7 @@ anyhow = "1.0"
 atty = "0.2"
 candle = { version = "0.9.1", package = "candle-core" }
 candle-nn = "0.9.1"
+whisper-rs = { version = "0.11", optional = true }
 clap = { version = "4.4.12", features = ["derive"] }
 cpal = "0.15"
 crossbeam-channel = "0.5"
@@ -36,12 +37,18 @@ reqwest = { version = "0.12", features = ["stream"] }
 tokio = { version = "1.0", features = ["full"] }
 tokio-tungstenite = "0.20"
 futures = "0.3"
+indicatif = "0.17"
+uuid = { version = "1.0", features = ["v4"] }
+colored = "2.0"
+libc = "0.2"
+
 
 [features]
 default = []
-cuda = ["candle/cuda", "candle-nn/cuda"]
+whisper = ["dep:whisper-rs"]
+cuda = ["candle/cuda", "candle-nn/cuda", "whisper-rs/cuda"]
 cudnn = ["candle/cudnn", "candle-nn/cudnn"]
-metal = ["candle/metal", "candle-nn/metal"]
+metal = ["candle/metal", "candle-nn/metal", "whisper-rs/metal"]
 
 [profile.release]
 debug = true

@@ -2,8 +2,124 @@ use anyhow::Result;
 use candle::{Device, Tensor};
 use crossbeam_channel::Receiver;
 use std::path::Path;
+use std::sync::Arc;
 
 pub mod config;
+#[cfg(feature = "whisper")]
+pub mod whisper;
+#[cfg(not(feature = "whisper"))]
+pub mod whisper {
+    use anyhow::Result;
+    use candle::Device;
+    use tokio::sync::mpsc;
+
+    #[derive(Clone)]
+    pub struct WhisperModel;
+
+    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+    pub struct SentenceBuffer {
+        pub id: String,
+        pub audio_samples: Vec<f32>,
+        pub start_time: f64,
+        pub end_time: f64,
+        pub kyutai_text: String,
+        pub words: Vec<crate::WordTimestamp>,
+    }
+
+    #[derive(Debug, Clone, serde::Serialize)]
+    pub enum WhisperStatus {
+        Pending,
+        Processing,
+        Corrected(String),
+        Confirmed,
+    }
+
+    #[derive(Debug, Clone, serde::Serialize)]
+    pub enum WhisperMessage {
+        Processing {
+            sentence_id: String,
+            original_text: String,
+            start_time: f64,
+            end_time: f64,
+        },
+        Complete {
+            sentence_id: String,
+            original_text: String,
+            corrected_text: String,
+            confidence: f32,
+            changed: bool,
+        },
+    }
+
+    impl WhisperModel {
+        pub async fn load(
+            _config: &crate::config::WhisperConfig,
+            _model_override: Option<&str>,
+            _quantization_override: Option<&str>,
+            _device: Device,
+        ) -> Result<Self> {
+            Err(anyhow::anyhow!("whisper feature not enabled"))
+        }
+
+        pub fn transcribe_audio(&self, _audio_samples: &[f32]) -> Result<String> {
+            Err(anyhow::anyhow!("whisper feature not enabled"))
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct AudioBuffer;
+    impl AudioBuffer {
+        pub fn new(_max_duration: f64, _sample_rate: u32) -> Self {
+            Self
+        }
+        pub fn push_samples(&mut self, _samples: &[f32], _timestamp: f64) {}
+        pub fn extract_segment(&self, _start_time: f64, _end_time: f64) -> Vec<f32> {
+            Vec::new()
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct SentenceDetector;
+    impl SentenceDetector {
+        pub fn new(_config: crate::config::SentenceDetectionConfig) -> Self {
+            Self
+        }
+        pub fn process_word(
+            &mut self,
+            _word: &crate::WordTimestamp,
+            _vad_confidence: Option<f32>,
+        ) -> Option<SentenceBuffer> {
+            None
+        }
+    }
+
+    pub struct WhisperProcessor;
+    impl WhisperProcessor {
+        pub fn new(
+            _model: WhisperModel,
+        ) -> (
+            Self,
+            mpsc::UnboundedReceiver<SentenceBuffer>,
+            mpsc::UnboundedSender<WhisperMessage>,
+        ) {
+            let (sent_tx, sent_rx) = mpsc::unbounded_channel();
+            let (res_tx, _res_rx) = mpsc::unbounded_channel();
+            (Self, sent_rx, res_tx)
+        }
+
+        pub fn process_sentence(&self, _sentence: SentenceBuffer) -> Result<()> {
+            Ok(())
+        }
+
+        pub async fn start_processing_loop(
+            _model: std::sync::Arc<WhisperModel>,
+            _sentence_rx: mpsc::UnboundedReceiver<SentenceBuffer>,
+            _result_tx: mpsc::UnboundedSender<WhisperMessage>,
+        ) {
+        }
+    }
+}
+pub mod display;
 
 #[derive(Debug, serde::Deserialize)]
 pub struct SttConfig {
@@ -82,6 +198,8 @@ pub struct Model {
     config: Config,
     dev: Device,
     vad_timeout: Option<f64>,
+    whisper_model: Option<std::sync::Arc<whisper::WhisperModel>>,
+    whisper_enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -182,6 +300,19 @@ pub enum WebSocketMessage {
         text: String,
         words: Vec<WordTimestamp>,
     },
+    WhisperProcessing {
+        sentence_id: String,
+        original_text: String,
+        start_time: f64,
+        end_time: f64,
+    },
+    WhisperComplete {
+        sentence_id: String,
+        original_text: String,
+        corrected_text: String,
+        confidence: f32,
+        changed: bool,
+    },
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -196,6 +327,11 @@ pub struct TranscriptionOptions {
     pub vad: bool,
     pub save_audio: Option<String>,
     pub vad_timeout: Option<f64>,
+    pub whisper_enabled: bool,
+    pub whisper_model: Option<String>,
+    pub whisper_quantization: Option<String>,
+    pub whisper_languages: Option<Vec<String>>,
+    pub whisper_force_lang: Option<String>,
 }
 
 impl Default for TranscriptionOptions {
@@ -205,12 +341,17 @@ impl Default for TranscriptionOptions {
             vad: false,
             save_audio: None,
             vad_timeout: None,
+            whisper_enabled: false,
+            whisper_model: None,
+            whisper_quantization: None,
+            whisper_languages: None,
+            whisper_force_lang: None,
         }
     }
 }
 
 impl Model {
-    pub fn load_from_hf(hf_repo: &str, cpu: bool, options: TranscriptionOptions, model_dir: Option<&std::path::Path>) -> Result<Self> {
+    pub async fn load_from_hf(hf_repo: &str, cpu: bool, options: TranscriptionOptions, model_dir: Option<&std::path::Path>) -> Result<Self> {
         let device = create_device(cpu)?;
         let dtype = device.bf16_default_to_f32();
 
@@ -240,6 +381,32 @@ impl Model {
         let asr_delay_in_tokens = (config.stt_config.audio_delay_seconds * 12.5) as usize;
         let state = moshi::asr::State::new(1, asr_delay_in_tokens, 0., audio_tokenizer, lm)?;
 
+        // Initialize Whisper model if enabled
+        let whisper_model = if options.whisper_enabled {
+            // Load app config to get whisper settings
+            let app_config = config::AppConfig::load().ok();
+            if let Some(app_config) = app_config {
+                match whisper::WhisperModel::load(
+                    &app_config.whisper,
+                    options.whisper_model.as_deref(),
+                    options.whisper_quantization.as_deref(),
+                    device.clone(),
+                    options.whisper_force_lang.as_deref(),
+                ).await {
+                    Ok(model) => Some(model),
+                    Err(e) => {
+                        eprintln!("Failed to load Whisper model: {}. Continuing without Whisper enhancement.", e);
+                        None
+                    }
+                }
+            } else {
+                eprintln!("Failed to load config. Continuing without Whisper enhancement.");
+                None
+            }
+        } else {
+            None
+        };
+
         Ok(Model {
             state,
             config,
@@ -248,6 +415,8 @@ impl Model {
             vad: options.vad,
             dev: device,
             vad_timeout: options.vad_timeout,
+            whisper_model: whisper_model.map(|m| Arc::new(m)),
+            whisper_enabled: options.whisper_enabled,
         })
     }
 
@@ -302,6 +471,54 @@ impl Model {
         let mut last_word: Option<(String, f64)> = None;
         let mut printed_eot = false;
         let mut last_voice_activity: Option<Instant> = None;
+        
+        // Initialize Whisper components if enabled
+        let mut sentence_detector = if self.whisper_enabled {
+            let config = config::AppConfig::load().ok()
+                .and_then(|c| Some(c.whisper.sentence_detection));
+            config.map(|c| whisper::SentenceDetector::new(c))
+        } else { None };
+
+        let mut audio_buffer = if self.whisper_enabled {
+            Some(whisper::AudioBuffer::new(30.0, 24000))
+        } else { None };
+
+        let mut display_manager = if self.whisper_enabled && !self.timestamps {
+            Some(display::DisplayManager::new())
+        } else { None };
+
+        // Background Whisper worker (non-blocking) if model is available
+        let (wh_tx, wh_rx) = crossbeam_channel::unbounded::<whisper::SentenceBuffer>();
+        let (wh_res_tx, wh_res_rx) = crossbeam_channel::unbounded::<whisper::WhisperMessage>();
+        if self.whisper_enabled {
+            if let Some(wm) = self.whisper_model.clone() {
+                std::thread::spawn(move || {
+                    while let Ok(sentence) = wh_rx.recv() {
+                        // Notify processing
+                        let _ = wh_res_tx.send(whisper::WhisperMessage::Processing {
+                            sentence_id: sentence.id.clone(),
+                            original_text: sentence.kyutai_text.clone(),
+                            start_time: sentence.start_time,
+                            end_time: sentence.end_time,
+                        });
+                        // Run Whisper in this worker thread
+                        let result = wm.transcribe_audio(&sentence.audio_samples);
+                        let (corrected_text, confidence) = match result {
+                            Ok(t) => (t, 0.95),
+                            Err(_) => (sentence.kyutai_text.clone(), 0.0),
+                        };
+                        let changed = corrected_text != sentence.kyutai_text;
+                        let _ = wh_res_tx.send(whisper::WhisperMessage::Complete {
+                            sentence_id: sentence.id,
+                            original_text: sentence.kyutai_text,
+                            corrected_text,
+                            confidence,
+                            changed,
+                        });
+                    }
+                });
+            }
+        }
 
         loop {
             let pcm_chunk = match audio_rx.recv() {
@@ -316,6 +533,14 @@ impl Model {
             }
 
             let mut has_voice_activity = false;
+            
+            // Store audio in buffer for Whisper if enabled
+            if let Some(ref mut buffer) = audio_buffer {
+                // Use cumulative time, not chunk-relative time
+                let sample_offset = all_audio.len().saturating_sub(pcm_chunk.len());
+                let chunk_start_time = sample_offset as f64 / 24000.0;
+                buffer.push_samples(&pcm_chunk, chunk_start_time);
+            }
 
             for pcm in pcm_chunk.chunks(1920) {
                 let pcm_tensor = Tensor::new(pcm, &self.dev)?.reshape((1, 1, ()))?;
@@ -360,12 +585,49 @@ impl Model {
 
                             current_text.push(' ');
                             current_text.push_str(&word);
+                            
+                            // Create WordTimestamp for sentence detection
+                            let word_ts = WordTimestamp {
+                                word: word.clone(),
+                                start_time: *start_time,
+                                end_time: None,
+                            };
+                            
+                            // Check for sentence boundaries if Whisper is enabled
+                            if let Some(ref mut detector) = sentence_detector {
+                                // Get VAD confidence from previous Step message
+                                let vad_confidence = if self.vad && printed_eot { Some(0.9) } else { None };
+                                
+                                if let Some(mut sentence) = detector.process_word(&word_ts, vad_confidence) {
+                                    // Extract audio for the sentence
+                                    if let Some(ref buffer) = audio_buffer {
+                                        sentence.audio_samples = buffer.extract_segment(
+                                            sentence.start_time, 
+                                            sentence.end_time
+                                        );
+                                    }
+                                    
+                                    // Queue sentence for background Whisper processing
+                                    if self.whisper_enabled && self.whisper_model.is_some() {
+                                        let _ = wh_tx.send(sentence.clone());
+                                    }
+                                    
+                                    // Update display if using display manager
+                                    if let Some(ref mut dm) = display_manager {
+                                        dm.complete_sentence(sentence.id, sentence.kyutai_text);
+                                    }
+                                }
+                            }
 
                             if !self.timestamps {
                                 // Only show live transcription if we're in an interactive terminal
                                 if atty::is(atty::Stream::Stdout) {
-                                    print!(" {}", word);
-                                    std::io::stdout().flush().ok();
+                                    if let Some(ref mut dm) = display_manager {
+                                        dm.add_live_word(&word);
+                                    } else {
+                                        print!(" {}", word);
+                                        std::io::stdout().flush().ok();
+                                    }
                                 }
                             } else {
                                 if let Some((prev_word, prev_start_time)) = last_word.take() {
@@ -390,6 +652,13 @@ impl Model {
                 last_voice_activity = Some(Instant::now());
             }
 
+            // Drain whisper results and update display
+            if let Some(ref mut dm) = display_manager {
+                for msg in wh_res_rx.try_iter() {
+                    dm.handle_whisper_message(msg);
+                }
+            }
+
             // Check for timeout
             if let Some(timeout_secs) = self.vad_timeout {
                 if let Some(last_activity) = last_voice_activity {
@@ -412,7 +681,11 @@ impl Model {
         }
 
         if !self.timestamps && atty::is(atty::Stream::Stdout) {
-            println!();
+            if let Some(mut dm) = display_manager {
+                dm.finish();
+            } else {
+                println!();
+            }
         }
 
         if let Some(save_path) = save_audio {
@@ -528,6 +801,41 @@ impl Model {
         let mut all_audio = Vec::new();
         let mut overall_words = Vec::new();
         let mut overall_text = String::new();
+        
+        // Whisper async worker for WS mode
+        let (wh_tx, mut wh_rx) = tokio::sync::mpsc::unbounded_channel::<whisper::SentenceBuffer>();
+        if self.whisper_enabled {
+            if let Some(wm) = self.whisper_model.clone() {
+                let ws_tx_bg = ws_tx.clone();
+                tokio::spawn(async move {
+                    while let Some(sentence) = wh_rx.recv().await {
+                        let _ = ws_tx_bg.send(WebSocketMessage::WhisperProcessing {
+                            sentence_id: sentence.id.clone(),
+                            original_text: sentence.kyutai_text.clone(),
+                            start_time: sentence.start_time,
+                            end_time: sentence.end_time,
+                        });
+                        let wm_cl = wm.clone();
+                        let sentence_cl = sentence.clone();
+                        let res = tokio::task::spawn_blocking(move || {
+                            wm_cl.transcribe_audio(&sentence_cl.audio_samples)
+                        }).await;
+                        let corrected_text = match res {
+                            Ok(Ok(t)) => t,
+                            _ => sentence.kyutai_text.clone(),
+                        };
+                        let changed = corrected_text != sentence.kyutai_text;
+                        let _ = ws_tx_bg.send(WebSocketMessage::WhisperComplete {
+                            sentence_id: sentence.id,
+                            original_text: sentence.kyutai_text,
+                            corrected_text,
+                            confidence: 0.95,
+                            changed,
+                        });
+                    }
+                });
+            }
+        }
 
         loop {
             let mut words = Vec::new();
@@ -539,6 +847,13 @@ impl Model {
             let mut paused = *pause_rx.borrow();
 
             eprintln!("Starting transcription session (paused - send Resume command to begin)...");
+
+            // Initialize Whisper sentence detection for WS
+            let mut sentence_detector = if self.whisper_enabled {
+                let cfg = config::AppConfig::load().ok().map(|c| c.whisper.sentence_detection);
+                cfg.map(|c| whisper::SentenceDetector::new(c))
+            } else { None };
+            let mut audio_buffer = if self.whisper_enabled { Some(whisper::AudioBuffer::new(30.0, 24000)) } else { None };
 
             loop {
                 tokio::select! {
@@ -564,6 +879,13 @@ impl Model {
                         }
 
                         let mut has_voice_activity = false;
+                        
+                        // Store audio in buffer for Whisper if enabled
+                        if let Some(ref mut buffer) = audio_buffer {
+                            let sample_offset = all_audio.len().saturating_sub(pcm_chunk.len());
+                            let chunk_start_time = sample_offset as f64 / 24000.0;
+                            buffer.push_samples(&pcm_chunk, chunk_start_time);
+                        }
 
                         for pcm in pcm_chunk.chunks(1920) {
                             let pcm_tensor = Tensor::new(pcm, &self.dev)?.reshape((1, 1, ()))?;
@@ -645,7 +967,20 @@ impl Model {
                                                 };
                                                 let _ = ws_tx.send(ws_msg);
                                             }
-                                            last_word = Some((word, *start_time));
+                                            last_word = Some((word.clone(), *start_time));
+                                        }
+
+                                        // Check for sentence boundaries and queue Whisper processing
+                                        if let Some(ref mut detector) = sentence_detector {
+                                            let vad_confidence = if self.vad && printed_eot { Some(0.9) } else { None };
+                                            if let Some(mut sentence) = detector.process_word(&WordTimestamp { word: word.clone(), start_time: *start_time, end_time: None }, vad_confidence) {
+                                                if let Some(ref buffer) = audio_buffer {
+                                                    sentence.audio_samples = buffer.extract_segment(sentence.start_time, sentence.end_time);
+                                                }
+                                                if self.whisper_enabled && self.whisper_model.is_some() {
+                                                    let _ = wh_tx.send(sentence);
+                                                }
+                                            }
                                         }
                                     }
                                 }

@@ -41,8 +41,8 @@ struct Args {
     #[arg(long)]
     device: Option<usize>,
 
-    /// Inject reference audio for language priming (esp, ger, jap)
-    #[arg(long, short = 'l', value_parser = ["esp", "ger", "jap"])]
+    /// Inject reference audio for language priming (ISO 639-1: de, ja, es, it)
+    #[arg(long, short = 'l', value_parser = ["de", "ja", "es", "it"])]
     lang: Option<String>,
 
     /// Start WebSocket server on specified port to stream transcription results
@@ -52,6 +52,26 @@ struct Args {
     /// Automatically terminate after no voice activity for specified seconds
     #[arg(long)]
     vad_timeout: Option<f64>,
+
+    /// Enable Whisper enhancement for higher accuracy transcription
+    #[cfg(feature = "whisper")]
+    #[arg(long, short = 'w')]
+    whisper: bool,
+
+    /// Override default Whisper model (large-v3-turbo, large-v3, medium, etc.)
+    #[cfg(feature = "whisper")]
+    #[arg(long)]
+    whisper_model: Option<String>,
+
+    /// Override Whisper quantization level (Q4_K_M, Q5_K_M, Q8_0, f16, f32)
+    #[cfg(feature = "whisper")]
+    #[arg(long)]
+    whisper_quantization: Option<String>,
+
+    /// Comma-separated list of languages for Whisper enhancement (ISO 639-1: de,ja,es,it)
+    #[cfg(feature = "whisper")]
+    #[arg(long)]
+    whisper_languages: Option<String>,
 }
 
 #[tokio::main]
@@ -65,32 +85,65 @@ async fn main() -> Result<()> {
     // Load config and ensure ref_audio is available
     let config = AppConfig::load()?;
     if config.storage.model_dir == "default" {
-        eprintln!("Using HuggingFace default model cache directory");
+        
     } else {
-        eprintln!("Using custom model cache directory: {}", config.model_dir_path().display());
+        
     }
-    eprintln!("Using ref_audio directory: {}", config.ref_audio_path().display());
+    
     ensure_ref_audio(&config).await?;
+
+    // Parse whisper languages if provided (feature-gated)
+    #[cfg(feature = "whisper")]
+    let whisper_languages = args.whisper_languages.as_ref().map(|langs| {
+        langs.split(',').map(|s| s.trim().to_string()).collect()
+    });
+    #[cfg(not(feature = "whisper"))]
+    let whisper_languages: Option<Vec<String>> = None;
+
+    // Use --lang directly as ISO-639-1 for Whisper (de/ja/es/it)
+    let whisper_force_lang = args.lang.clone();
+
+    // Feature-gated whisper options
+    #[cfg(feature = "whisper")]
+    let whisper_enabled = args.whisper;
+    #[cfg(not(feature = "whisper"))]
+    let whisper_enabled = false;
+
+    #[cfg(feature = "whisper")]
+    let whisper_model = args.whisper_model.clone();
+    #[cfg(not(feature = "whisper"))]
+    let whisper_model: Option<String> = None;
+
+    #[cfg(feature = "whisper")]
+    let whisper_quantization = args.whisper_quantization.clone();
+    #[cfg(not(feature = "whisper"))]
+    let whisper_quantization: Option<String> = None;
 
     let options = TranscriptionOptions {
         timestamps: args.timestamps,
         vad: args.vad,
         save_audio: args.save_audio.clone(),
         vad_timeout: args.vad_timeout,
+        whisper_enabled,
+        whisper_model,
+        whisper_quantization,
+        whisper_languages,
+        whisper_force_lang,
     };
 
     if args.live || args.in_file.is_none() {
         // Live microphone mode
-        eprintln!("Loading model from repository: {}", args.hf_repo);
+        
         let mut model = if config.storage.model_dir == "default" { 
-            Model::load_from_hf(&args.hf_repo, args.cpu, options, None)?
+            Model::load_from_hf(&args.hf_repo, args.cpu, options, None).await?
         } else { 
             let model_dir = config.model_dir_path();
-            Model::load_from_hf(&args.hf_repo, args.cpu, options, Some(&model_dir))?
+            Model::load_from_hf(&args.hf_repo, args.cpu, options, Some(&model_dir)).await?
         };
 
         if let Some(ref lang) = args.lang {
-            let path = config.ref_audio_path().join(format!("{}.mp3", lang));
+            let ref_code = match lang.as_str() { "de" => "ger", "ja" => "jap", "es" => "esp", "it" => "ita", other => other };
+            let path = config.ref_audio_path().join(format!("{}.mp3", ref_code));
             if let Err(e) = model.prime_with_audio(&path) {
                 eprintln!("Warning: failed to process reference audio {}: {}", path.display(), e);
             }
@@ -152,15 +205,15 @@ async fn main() -> Result<()> {
         // Audio handle cleanup is managed by the reconnection loop
     } else if let Some(ref in_file) = args.in_file {
         // File mode
-        eprintln!("Loading audio file from: {}", in_file);
-        eprintln!("Loading model from repository: {}", args.hf_repo);
+        
+        
         let mut model = if config.storage.model_dir == "default" { 
-            Model::load_from_hf(&args.hf_repo, args.cpu, options, None)?
+            Model::load_from_hf(&args.hf_repo, args.cpu, options, None).await?
         } else { 
             let model_dir = config.model_dir_path();
-            Model::load_from_hf(&args.hf_repo, args.cpu, options, Some(&model_dir))?
+            Model::load_from_hf(&args.hf_repo, args.cpu, options, Some(&model_dir)).await?
         };
-        eprintln!("Running inference");
+        
 
         let result = model.transcribe_file(in_file, args.save_audio.as_deref())?;
 
@@ -182,4 +235,3 @@ async fn main() -> Result<()> {
 
     Ok(())
 }
-
