@@ -47,10 +47,10 @@ async fn main() -> Result<()> {
                 if let Ok(json) = serde_json::from_str::<Value>(&text) {
                     if let Some(event_type) = json.get("type").and_then(|v| v.as_str()) {
                         match event_type {
-                            "partial" if !args.only_final => {
-                                if let Some(text) = json.get("text").and_then(|v| v.as_str()) {
-                                    if !text.is_empty() {
-                                        eprintln!("[PARTIAL] {}", text);
+                            "word" if !args.only_final => {
+                                if let Some(word) = json.get("word").and_then(|v| v.as_str()) {
+                                    if !word.is_empty() {
+                                        eprintln!("[WORD] {}", word);
                                     }
                                 }
                             }
@@ -60,13 +60,6 @@ async fn main() -> Result<()> {
                                         eprintln!("[FINAL] {}", text);
                                         let _ = enigo.text(text);
                                         let _ = enigo.key(Key::Space, enigo::Direction::Click);
-                                    }
-                                }
-                            }
-                            "complete" => {
-                                if let Some(text) = json.get("text").and_then(|v| v.as_str()) {
-                                    if !text.is_empty() {
-                                        eprintln!("[COMPLETE] {}", text);
                                     }
                                 }
                             }

@@ -289,6 +289,7 @@ pub struct WordTimestamp {
 /// ears --live --ws 8080 --timestamps --vad
 /// ```
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
 pub enum WebSocketMessage {
     Word {
         word: String,
@@ -299,6 +300,14 @@ pub enum WebSocketMessage {
     Final {
         text: String,
         words: Vec<WordTimestamp>,
+    },
+    LanguageChanged { lang: String },
+    Status {
+        paused: bool,
+        vad: bool,
+        timestamps: bool,
+        vad_timeout: Option<f64>,
+        lang: Option<String>,
     },
     WhisperProcessing {
         sentence_id: String,
@@ -316,10 +325,14 @@ pub enum WebSocketMessage {
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
 pub enum WebSocketCommand {
     Restart,
     Pause,
     Resume,
+    SetLanguage { lang: String },
+    GetStatus,
+    SetVadTimeout { seconds: f64 },
 }
 
 pub struct TranscriptionOptions {
@@ -721,16 +734,22 @@ impl Model {
         let (pause_tx, _pause_rx) = watch::channel(true);
         let pause_tx = Arc::new(pause_tx);
 
+        // Track language and settings
+        let (lang_tx, lang_rx_watch) = watch::channel::<Option<String>>(None);
+        let lang_tx = Arc::new(lang_tx);
+
         // Spawn WebSocket server
         let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", ws_port)).await?;
         let ws_tx_clone = ws_tx.clone();
         let restart_tx_clone = restart_tx.clone();
         let pause_tx_clone = pause_tx.clone();
+        let lang_tx_clone = lang_tx.clone();
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
                 let ws_tx = ws_tx_clone.clone();
                 let restart_tx = restart_tx_clone.clone();
                 let pause_tx = pause_tx_clone.clone();
+                let lang_tx = lang_tx_clone.clone();
                 tokio::spawn(async move {
                     let ws_stream = match accept_async(stream).await {
                         Ok(ws) => ws,
@@ -748,8 +767,7 @@ impl Model {
                             match msg {
                                 Ok(Message::Close(_)) => break,
                                 Ok(Message::Text(text)) => {
-                                    if let Ok(cmd) = serde_json::from_str::<WebSocketCommand>(&text)
-                                    {
+                                    if let Ok(cmd) = serde_json::from_str::<WebSocketCommand>(&text) {
                                         match cmd {
                                             WebSocketCommand::Restart => {
                                                 let _ = restart_tx.send(());
@@ -759,6 +777,32 @@ impl Model {
                                             }
                                             WebSocketCommand::Resume => {
                                                 let _ = pause_tx.send(false);
+                                            }
+                                            WebSocketCommand::SetLanguage { lang } => {
+                                                let _ = lang_tx.send(Some(lang.clone()));
+                                                let _ = ws_tx.send(WebSocketMessage::LanguageChanged { lang });
+                                            }
+                                            WebSocketCommand::GetStatus => {
+                                                // Broadcast current status
+                                                let status = WebSocketMessage::Status {
+                                                    paused: *pause_tx.borrow(),
+                                                    vad: false,
+                                                    timestamps: false,
+                                                    vad_timeout: None,
+                                                    lang: lang_tx.borrow().clone(),
+                                                };
+                                                let _ = ws_tx.send(status);
+                                            }
+                                            WebSocketCommand::SetVadTimeout { seconds } => {
+                                                // No-op here: handled in processing loop via vad_timeout
+                                                let status = WebSocketMessage::Status {
+                                                    paused: *pause_tx.borrow(),
+                                                    vad: false,
+                                                    timestamps: false,
+                                                    vad_timeout: Some(seconds),
+                                                    lang: lang_tx.borrow().clone(),
+                                                };
+                                                let _ = ws_tx.send(status);
                                             }
                                         }
                                     }
@@ -800,6 +844,10 @@ impl Model {
         let mut all_audio = Vec::new();
         let mut overall_words = Vec::new();
         let mut overall_text = String::new();
+
+        // Subscribe to language changes
+        let mut lang_rx = lang_rx_watch.clone();
+        let mut current_lang: Option<String> = None;
         
         // Whisper async worker for WS mode
         let (wh_tx, mut wh_rx) = tokio::sync::mpsc::unbounded_channel::<whisper::SentenceBuffer>();
@@ -847,6 +895,15 @@ impl Model {
 
             eprintln!("Starting transcription session (paused - send Resume command to begin)...");
 
+            // Apply initial language priming if any
+            if current_lang.is_some() {
+                if let Some(lang) = &current_lang {
+                    if let Err(e) = self.prime_with_lang_code(lang) {
+                        eprintln!("Failed to prime language {}: {}", lang, e);
+                    }
+                }
+            }
+
             // Initialize Whisper sentence detection for WS
             let mut sentence_detector = if self.whisper_enabled {
                 let cfg = config::AppConfig::load().ok().map(|c| c.whisper.sentence_detection);
@@ -867,6 +924,15 @@ impl Model {
                             eprintln!("Transcription paused");
                         } else {
                             eprintln!("Transcription resumed");
+                        }
+                    }
+                    _ = lang_rx.changed() => {
+                        if let Some(lang) = lang_rx.borrow().clone() {
+                            current_lang = Some(lang.clone());
+                            if let Err(e) = self.prime_with_lang_code(&lang) {
+                                eprintln!("Failed to prime language {}: {}", lang, e);
+                            }
+                            let _ = ws_tx.send(WebSocketMessage::LanguageChanged { lang });
                         }
                     }
                     Some(pcm_chunk) = pcm_rx.recv() => {
@@ -1057,6 +1123,23 @@ impl Model {
             words: overall_words,
         })
     }
+
+    
+
+fn prime_with_lang_code(&mut self, iso_lang: &str) -> Result<()> {
+    let ref_code = match iso_lang {
+        "de" => "ger",
+        "ja" => "jap",
+        "es" => "esp",
+        "it" => "ita",
+        "pt" => "por",
+        other => other,
+    };
+    let config = config::AppConfig::load()?;
+    let path = config.ref_audio_path().join(format!("{}.mp3", ref_code));
+    self.prime_with_audio(path)
+}
+
     fn transcribe_pcm(&mut self, mut pcm: Vec<f32>) -> Result<TranscriptionResult> {
         if self.config.stt_config.audio_silence_prefix_seconds > 0.0 {
             let silence_len =

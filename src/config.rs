@@ -10,6 +10,8 @@ pub struct AppConfig {
     pub whisper: WhisperConfig,
     #[serde(default)]
     pub server: ServerConfig,
+    #[serde(default)]
+    pub hotkeys: HotkeyConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +46,23 @@ pub struct ServerConfig {
     pub websocket_port: u16,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HotkeyConfig {
+    pub enable_internal: bool,
+    pub toggle: String,
+    pub language_cycle: String,
+}
+
+impl Default for HotkeyConfig {
+    fn default() -> Self {
+        Self {
+            enable_internal: true,
+            toggle: "ctrl+shift+v".to_string(),
+            language_cycle: "ctrl+shift+l".to_string(),
+        }
+    }
+}
+
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
@@ -61,6 +80,7 @@ impl Default for AppConfig {
             },
             whisper: WhisperConfig::default(),
             server: ServerConfig::default(),
+            hotkeys: HotkeyConfig::default(),
         }
     }
 }
@@ -127,6 +147,7 @@ impl AppConfig {
                             storage: old_config.storage,
                             whisper: WhisperConfig::default(),
                             server: ServerConfig::default(),
+                            hotkeys: HotkeyConfig::default(),
                         };
                         
                         // Save the updated config
@@ -226,29 +247,34 @@ pub async fn ensure_ref_audio(config: &AppConfig) -> Result<()> {
         fs::create_dir_all(&model_dir)?;
     }
     
-    let required_files = ["esp.mp3", "ger.mp3", "jap.mp3", "ita.mp3"];
+    let required_files = ["esp.mp3", "ger.mp3", "jap.mp3", "ita.mp3", "por.mp3"];
     let repo_ref_audio_dir = PathBuf::from("ref_audio");
     
     for file in &required_files {
         let target_path = ref_audio_dir.join(file);
+        if target_path.exists() { continue; }
         
-        // Skip if file already exists
-        if target_path.exists() {
+        let source_path = repo_ref_audio_dir.join(file);
+        if source_path.exists() {
+            fs::copy(&source_path, &target_path)?;
+            eprintln!("Copied {} from source to {}", file, target_path.display());
             continue;
         }
         
-        let source_path = repo_ref_audio_dir.join(file);
-        
-        // Check if we're building from source (ref_audio directory exists)
-        if source_path.exists() {
-            // Copy from source
-            fs::copy(&source_path, &target_path)?;
-            eprintln!("Copied {} from source to {}", file, target_path.display());
+        // Fallback: write from embedded assets (no network)
+        let bytes: Option<&'static [u8]> = match *file {
+            "esp.mp3" => Some(include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/ref_audio/esp.mp3"))),
+            "ger.mp3" => Some(include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/ref_audio/ger.mp3"))),
+            "jap.mp3" => Some(include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/ref_audio/jap.mp3"))),
+            "ita.mp3" => Some(include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/ref_audio/ita.mp3"))),
+            "por.mp3" => Some(include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/ref_audio/por.mp3"))),
+            _ => None,
+        };
+        if let Some(data) = bytes {
+            fs::write(&target_path, data)?;
+            eprintln!("Installed {} to {}", file, target_path.display());
         } else {
-            // Download from GitHub
-            let url = format!("https://raw.githubusercontent.com/byteowlz/eaRS/main/ref_audio/{}", file);
-            download_file(&url, &target_path).await?;
-            eprintln!("Downloaded {} from GitHub to {}", file, target_path.display());
+            eprintln!("Warning: missing embedded asset {}", file);
         }
     }
     

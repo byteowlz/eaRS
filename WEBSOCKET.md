@@ -6,7 +6,7 @@ This guide explains how to integrate eaRS's real-time speech-to-text WebSocket i
 
 eaRS provides a WebSocket server that streams real-time transcription results, allowing you to build applications that need live speech recognition capabilities. The implementation supports multiple concurrent connections, real-time word streaming, and session control commands.
 
-**Important**: The WebSocket server starts in **paused mode** by default. You must send a `Resume` command to begin transcription.
+Important: The WebSocket server starts in paused mode by default. Send `{ "type": "resume" }` to begin transcription. Language can be changed at runtime with `{ "type":"set_language", "lang":"de" }`.
 
 ## Quick Start
 
@@ -46,62 +46,77 @@ ws.onclose = () => {
 
 ### Incoming Messages (Server → Client)
 
+Schema uses a tagged format: `{ "type": "...", ... }`.
+
 #### 1. Word Messages
 Sent for each transcribed word in real-time:
 
-```json
+```
 {
-    "Word": {
-        "word": "hello",
-        "start_time": 1.234,
-        "end_time": 1.567
-    }
+  "type": "word",
+  "word": "hello",
+  "start_time": 1.234,
+  "end_time": 1.567
 }
 ```
 
 #### 2. Pause Messages
 Sent when voice activity detection detects silence:
 
-```json
+```
 {
-    "Pause": {
-        "timestamp": 2.345
-    }
+  "type": "pause",
+  "timestamp": 2.345
 }
 ```
 
 #### 3. Final Messages
 Sent at the end of utterances with complete text and word timings:
 
-```json
+```
 {
-    "Final": {
-        "text": "hello world how are you",
-        "words": [
-            {
-                "word": "hello",
-                "start_time": 1.234,
-                "end_time": 1.567
-            },
-            {
-                "word": "world",
-                "start_time": 1.678,
-                "end_time": 1.890
-            }
-        ]
-    }
+  "type": "final",
+  "text": "hello world how are you",
+  "words": [
+    { "word": "hello", "start_time": 1.234, "end_time": 1.567 },
+    { "word": "world", "start_time": 1.678, "end_time": 1.890 }
+  ]
 }
 ```
 
 ### Outgoing Commands (Client → Server)
 
-#### 1. Restart Command
-Starts a new transcription session:
+Use the same tagged schema: `{ "type": "...", ... }`.
 
-```json
-{
-    "Restart": {}
-}
+#### 1. Restart
+```
+{ "type": "restart" }
+```
+
+#### 2. Pause
+```
+{ "type": "pause" }
+```
+
+#### 3. Resume
+```
+{ "type": "resume" }
+```
+
+#### 4. Set Language
+Prime model with language reference audio (ISO 639-1):
+```
+{ "type": "set_language", "lang": "de" }
+```
+
+#### 5. Get Status
+```
+{ "type": "get_status" }
+```
+
+#### 6. Set VAD Timeout
+```
+{ "type": "set_vad_timeout", "seconds": 3.0 }
 ```
 
 #### 2. Pause Command
@@ -126,59 +141,48 @@ Resumes paused transcription (required to start transcription as server starts i
 
 ### JavaScript/TypeScript Client
 
-```javascript
+```
 class EarsWebSocketClient {
-    constructor(port = 8080) {
-        this.ws = new WebSocket(`ws://localhost:${port}/`);
-        this.setupEventHandlers();
-    }
+  constructor(port = 8080) {
+    this.ws = new WebSocket(`ws://localhost:${port}/`);
+    this.setupEventHandlers();
+  }
 
-    setupEventHandlers() {
-        this.ws.onopen = () => {
-            console.log('Connected to eaRS WebSocket');
-            // Start transcription by sending Resume command
-            this.resume();
-        };
-        
-        this.ws.onmessage = (event) => {
-            const message = JSON.parse(event.data);
-            
-            if (message.Word) {
-                this.onWord(message.Word);
-            } else if (message.Pause) {
-                this.onPause(message.Pause);
-            } else if (message.Final) {
-                this.onFinal(message.Final);
-            }
-        };
-    }
+  setupEventHandlers() {
+    this.ws.onopen = () => {
+      console.log('Connected to eaRS WebSocket');
+      this.resume();
+    };
 
-    onWord(wordData) {
-        console.log(`Word: ${wordData.word} (${wordData.start_time}s)`);
-        // Update your UI with the new word
-    }
+    this.ws.onmessage = (event) => {
+      const msg = JSON.parse(event.data);
+      switch (msg.type) {
+        case 'word': this.onWord(msg); break;
+        case 'pause': this.onPause(msg); break;
+        case 'final': this.onFinal(msg); break;
+        case 'language_changed': this.onLanguage(msg.lang); break;
+        case 'status': this.onStatus(msg); break;
+      }
+    };
+  }
 
-    onPause(pauseData) {
-        console.log(`Paused at ${pauseData.timestamp}s`);
-        // Handle pause in your UI
-    }
+  onWord({ word, start_time }) {
+    console.log(`Word: ${word} (${start_time}s)`);
+  }
 
-    onFinal(finalData) {
-        console.log(`Final: ${finalData.text}`);
-        // Process complete utterance
-    }
+  onPause({ timestamp }) {
+    console.log(`Paused at ${timestamp}s`);
+  }
 
-    restart() {
-        this.ws.send(JSON.stringify({ "Restart": {} }));
-    }
+  onFinal({ text }) {
+    console.log(`Final: ${text}`);
+  }
 
-    pause() {
-        this.ws.send(JSON.stringify({ "Pause": {} }));
-    }
-
-    resume() {
-        this.ws.send(JSON.stringify({ "Resume": {} }));
-    }
+  restart() { this.ws.send(JSON.stringify({ type: 'restart' })); }
+  pause() { this.ws.send(JSON.stringify({ type: 'pause' })); }
+  resume() { this.ws.send(JSON.stringify({ type: 'resume' })); }
+  setLanguage(lang) { this.ws.send(JSON.stringify({ type: 'set_language', lang })); }
+  getStatus() { this.ws.send(JSON.stringify({ type: 'get_status' })); }
 }
 
 // Usage
