@@ -1,3 +1,5 @@
+![ears_banner](banner.png)
+
 # eaRS
 
 A Rust-based speech-to-text transcription tool using Kyutai's STT models.
@@ -109,6 +111,7 @@ Commands: `ears-ctl toggle|pause|resume|lang <code>|status`.
 ```
 
 Control it via JSON commands sent over WebSocket:
+
 - `{ "type": "resume" }` to start
 - `{ "type": "pause" }` to pause
 - `{ "type": "restart" }` to start a new session
@@ -165,6 +168,7 @@ Connect to `ws://localhost:<port>/` where `<port>` is specified via the `--ws` o
 ### Control Commands
 
 Send JSON to control the server:
+
 - Resume: `{ "type": "resume" }`
 - Pause: `{ "type": "pause" }`
 - Restart: `{ "type": "restart" }`
@@ -172,7 +176,9 @@ Send JSON to control the server:
 - Get Status: `{ "type": "get_status" }`
 
 #### Pause Messages
+
 Sent when voice activity detection detects a pause (requires `--vad` flag):
+
 ```json
 {
   "type": "pause",
@@ -181,7 +187,9 @@ Sent when voice activity detection detects a pause (requires `--vad` flag):
 ```
 
 #### Final Messages
+
 Sent at the end of each transcription session:
+
 ```json
 {
   "type": "final",
@@ -196,7 +204,9 @@ Sent at the end of each transcription session:
 ### Client Commands
 
 #### Restart Transcription
+
 Send from client to restart transcription after timeout or final message:
+
 ```json
 {
   "type": "restart"
@@ -204,7 +214,9 @@ Send from client to restart transcription after timeout or final message:
 ```
 
 #### Pause/Resume Transcription
+
 Toggle live inference without disconnecting:
+
 ```json
 { "type": "pause" }
 { "type": "resume" }
@@ -232,6 +244,7 @@ Start the server, then run the daemon to control it via global hotkeys:
 ```
 
 Default hotkeys:
+
 - Ctrl+Shift+V: toggle pause/resume
 - Ctrl+Shift+L: cycle language (en, de, fr, es, ja)
 
@@ -244,11 +257,13 @@ The `ears-dictation` binary provides keyboard input simulation, allowing transcr
 ### Setup
 
 1. Start the eaRS WebSocket server:
+
 ```bash
 ./target/release/ears --live --ws 8765
 ```
 
 2. Run the dictation client:
+
 ```bash
 ./target/release/ears-dictation
 ```
@@ -264,6 +279,7 @@ The `ears-dictation` binary provides keyboard input simulation, allowing transcr
 ### macOS Permissions
 
 On macOS, you'll need to grant accessibility permissions:
+
 1. System Settings → Privacy & Security → Accessibility
 2. Add the `ears-dictation` binary to the allowed apps
 
