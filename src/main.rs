@@ -45,7 +45,7 @@ struct Args {
     #[arg(long, short = 'l', value_parser = ["de", "ja", "es", "it"])]
     lang: Option<String>,
 
-    /// Start WebSocket server on specified port to stream transcription results
+    /// Start WebSocket server on specified port to stream transcription results (default from config)
     #[arg(long)]
     ws: Option<u16>,
 
@@ -151,7 +151,7 @@ async fn main() -> Result<()> {
 
         let device_index = args.device;
         let save_audio_path = args.save_audio.as_deref();
-        let ws_port = args.ws;
+        let ws_port = args.ws.or(Some(config.server.websocket_port));
         
         let result = loop {
             let (audio_tx, audio_rx) = unbounded();

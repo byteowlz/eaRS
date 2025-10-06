@@ -33,3 +33,7 @@ vad_pause_threshold = 0.8
 silence_duration = 0.5
 # Punctuation markers that indicate sentence endings
 punctuation_markers = [".", "!", "?", "。", "！", "？"]
+
+[server]
+# WebSocket server port for streaming transcription
+websocket_port = 8765

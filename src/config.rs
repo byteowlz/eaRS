@@ -8,6 +8,8 @@ pub struct AppConfig {
     pub storage: StorageConfig,
     #[serde(default)]
     pub whisper: WhisperConfig,
+    #[serde(default)]
+    pub server: ServerConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,6 +39,19 @@ pub struct SentenceDetectionConfig {
     pub punctuation_markers: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerConfig {
+    pub websocket_port: u16,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            websocket_port: 8765,
+        }
+    }
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -45,6 +60,7 @@ impl Default for AppConfig {
                 ref_audio: "~/.local/share/ears/ref_audio".to_string(),
             },
             whisper: WhisperConfig::default(),
+            server: ServerConfig::default(),
         }
     }
 }
@@ -110,6 +126,7 @@ impl AppConfig {
                         let new_config = AppConfig {
                             storage: old_config.storage,
                             whisper: WhisperConfig::default(),
+                            server: ServerConfig::default(),
                         };
                         
                         // Save the updated config

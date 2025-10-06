@@ -391,7 +391,6 @@ impl Model {
                     options.whisper_model.as_deref(),
                     options.whisper_quantization.as_deref(),
                     device.clone(),
-                    options.whisper_force_lang.as_deref(),
                 ).await {
                     Ok(model) => Some(model),
                     Err(e) => {

@@ -16,6 +16,10 @@ path = "src/lib.rs"
 name = "ears"
 path = "src/main.rs"
 
+[[bin]]
+name = "ears-dictation"
+path = "src/bin/dictation.rs"
+
 [dependencies]
 anyhow = "1.0"
 atty = "0.2"
@@ -41,6 +45,8 @@ indicatif = "0.17"
 uuid = { version = "1.0", features = ["v4"] }
 colored = "2.0"
 libc = "0.2"
+enigo = "0.2"
+futures-util = "0.3"
 
 
 [features]

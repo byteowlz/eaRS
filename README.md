@@ -14,6 +14,7 @@ A Rust-based speech-to-text transcription tool using Kyutai's STT models.
 - WebSocket streaming for real-time applications
 - Automatic termination after voice activity timeout
 - WebSocket session restart capability
+- Dictation mode with keyboard input simulation
 
 ## Installation
 
@@ -157,6 +158,46 @@ Toggle live inference without disconnecting:
 4. Send restart command to begin new transcription session
 5. Optionally send pause/resume commands to temporarily stop inference
 6. Repeat as needed
+
+## Dictation Mode
+
+The `ears-dictation` binary provides keyboard input simulation, allowing transcribed speech to be typed directly into any text field.
+
+### Setup
+
+1. Start the eaRS WebSocket server:
+```bash
+./target/release/ears --live --ws 8765
+```
+
+2. Run the dictation client:
+```bash
+./target/release/ears-dictation
+```
+
+3. Focus your target text field and start speaking. Transcribed text will be typed automatically.
+
+### Options
+
+- `--host <HOST>` - WebSocket server host (default: localhost)
+- `--port <PORT>` - WebSocket server port (default: 8765)
+- `--only-final` - Only type final transcriptions, skip partial results
+
+### macOS Permissions
+
+On macOS, you'll need to grant accessibility permissions:
+1. System Settings → Privacy & Security → Accessibility
+2. Add the `ears-dictation` binary to the allowed apps
+
+### Example
+
+```bash
+# Start transcription server
+./target/release/ears --live --ws 8765 --vad-timeout 2.0
+
+# In another terminal, start dictation client
+./target/release/ears-dictation --only-final
+```
 
 ## Model
 
