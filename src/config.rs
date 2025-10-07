@@ -281,14 +281,4 @@ pub async fn ensure_ref_audio(config: &AppConfig) -> Result<()> {
     Ok(())
 }
 
-async fn download_file(url: &str, path: &PathBuf) -> Result<()> {
-    let response = reqwest::get(url).await?;
-    
-    if !response.status().is_success() {
-        return Err(anyhow::anyhow!("Failed to download {}: {}", url, response.status()));
-    }
-    
-    let bytes = response.bytes().await?;
-    fs::write(path, bytes)?;
-    Ok(())
-}
+

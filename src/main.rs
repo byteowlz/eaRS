@@ -218,7 +218,7 @@ async fn main() -> Result<()> {
                      if args.tray {
                          let url_t = url.clone();
                          std::thread::spawn(move || {
-                             use image::GenericImageView;
+
                              use serde_json::json;
                              use futures_util::{SinkExt, StreamExt};
                              use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -226,7 +226,7 @@ async fn main() -> Result<()> {
                              use tray_icon::{TrayIconBuilder, Icon};
 
                              // Build menu
-                             let mut menu = Menu::new();
+                             let menu = Menu::new();
                              let toggle = MenuItem::new("Toggle Dictation", true, None);
                              let _ = menu.append(&toggle);
                              let _ = menu.append(&PredefinedMenuItem::separator());
@@ -303,7 +303,9 @@ async fn main() -> Result<()> {
                                  while let Some(Ok(Message::Text(txt))) = read.next().await {
                                      if let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) {
                                          if v.get("type").and_then(|s| s.as_str()) == Some("status") {
-                                             if let Some(b) = v.get("paused").and_then(|b| b.as_bool()) { paused = b; }
+                                             if let Some(_b) = v.get("paused").and_then(|b| b.as_bool()) {
+                                                 // Status received; could update UI here
+                                             }
                                          }
                                      }
                                  }
@@ -325,9 +327,10 @@ async fn main() -> Result<()> {
                                      },
                                      EventType::KeyRelease(Key::KeyL) if args.hotkey_lang_cycle => unsafe {
                                          if CTRL && SHIFT {
-                                             // cycle preset langs
-                                             static mut IDX: usize = 0; const LIST: [&str;5] = ["en","de","fr","es","ja"]; unsafe { IDX = (IDX+1)%LIST.len(); }
-                                             let lang = unsafe { LIST[IDX] };
+                                             static mut IDX: usize = 0;
+                                             const LIST: [&str;5] = ["en","de","fr","es","ja"];
+                                             IDX = (IDX+1)%LIST.len();
+                                             let lang = LIST[IDX];
                                              let _ = futures::executor::block_on(write.send(Message::Text(serde_json::json!({"type":"set_language","lang":lang}).to_string())));
                                          }
                                      },

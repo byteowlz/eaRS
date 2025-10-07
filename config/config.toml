@@ -37,11 +37,14 @@ punctuation_markers = [".", "!", "?", "。", "！", "？"]
 [server]
 # WebSocket server port for streaming transcription
 websocket_port = 8765
+# Note: VAD timeout is set per-command-line invocation (--vad-timeout <sec>).
+# ears-auto does not use VAD timeout by default (runs indefinitely until manually stopped).
 
 [hotkeys]
 # Enable internal global hotkeys (disable if using WM binds like Hyprland)
 enable_internal = true
-# Toggle dictation
+# Toggle dictation pause/resume (default: ctrl+shift+v)
 toggle = "ctrl+shift+v"
-# Cycle language
+# Cycle language among en, de, fr, es, ja (default: ctrl+shift+l)
 language_cycle = "ctrl+shift+l"
+# Note: On macOS, grant Accessibility and Input Monitoring permissions to your terminal or ears-auto/ears-daemon binary.

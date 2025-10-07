@@ -14,7 +14,7 @@ A Rust-based speech-to-text transcription tool using Kyutai's STT models.
 - Audio recording to WAV files
 - Multiple audio format support (WAV, MP3, OGG)
 - WebSocket streaming for real-time applications
-- Automatic termination after voice activity timeout
+- Optional termination after voice activity timeout
 - WebSocket session restart capability
 - Dictation mode with keyboard input simulation
 - Hotkey daemon to toggle dictation and switch languages
@@ -45,9 +45,13 @@ Or use the zero-setup binary:
 ./target/release/ears-auto
 ```
 
-This auto-starts the server (WS using config port), dictation, hotkeys, and tray.
+This auto-starts the server (WS using config port), dictation, hotkeys, and tray. Each transcribed word is typed immediately to the focused text field.
 
-Note: On macOS, grant Accessibility permissions to allow typing and hotkeys. Tray icon uses the bundled logo; macOS template mode can be added later if needed for auto light/dark.
+Note: On macOS, you must grant permissions:
+- System Settings → Privacy & Security → Accessibility (add your terminal or ears-auto binary)
+- System Settings → Privacy & Security → Input Monitoring (add your terminal or ears-auto binary)
+
+Tray icon uses the bundled logo; macOS template mode can be added later if needed for auto light/dark.
 
 ### Configurable Hotkeys
 
@@ -74,6 +78,8 @@ bind=SUPER,L,exec,ears-ctl lang de
 ```
 
 Commands: `ears-ctl toggle|pause|resume|lang <code>|status`.
+
+ears-ctl connects with a 2s timeout and waits up to 800ms for status responses, so it won't hang indefinitely if the server is unreachable.
 
 ### Live Transcription
 
@@ -147,7 +153,7 @@ Control it via JSON commands sent over WebSocket:
 - `--list-devices` - List available audio devices
 - `-l, --lang <LANG>` - Prime language using audio snippet (ISO 639-1: de, ja, es, it)
 - `--ws <PORT>` - Start WebSocket server on specified port
-- `--vad-timeout <SECONDS>` - Automatically terminate after no voice activity
+- `--vad-timeout <SECONDS>` - Automatically terminate after no voice activity (not used in ears-auto)
 
 ## WebSocket API
 
@@ -225,11 +231,13 @@ Toggle live inference without disconnecting:
 ### Usage Pattern
 
 1. Connect to WebSocket endpoint
-2. Receive real-time word messages during transcription
+2. Receive real-time word messages during transcription (clients can type each word immediately)
 3. Receive final message when session ends (timeout or silence)
 4. Send restart command to begin new transcription session
 5. Optionally send pause/resume commands to temporarily stop inference
 6. Repeat as needed
+
+See [WEBSOCKET.md](WEBSOCKET.md) for full protocol details and examples.
 
 ## Daemon (Hotkey Control)
 
@@ -248,11 +256,13 @@ Default hotkeys:
 - Ctrl+Shift+V: toggle pause/resume
 - Ctrl+Shift+L: cycle language (en, de, fr, es, ja)
 
-Note: On macOS, grant Accessibility permissions to the terminal/binary.
+Alternatively, use `ears-auto` for a single-binary experience with hotkeys + dictation + WebSocket all in one.
+
+Note: On macOS, grant Accessibility and Input Monitoring permissions to the terminal/binary.
 
 ## Dictation Mode
 
-The `ears-dictation` binary provides keyboard input simulation, allowing transcribed speech to be typed directly into any text field.
+The `ears-dictation` binary provides keyboard input simulation, allowing transcribed speech to be typed directly into any text field. Alternatively, use `ears-auto` for a zero-setup experience that includes dictation, hotkeys, and WebSocket in a single binary.
 
 ### Setup
 
@@ -268,7 +278,7 @@ The `ears-dictation` binary provides keyboard input simulation, allowing transcr
 ./target/release/ears-dictation
 ```
 
-3. Focus your target text field and start speaking. Transcribed text will be typed automatically.
+3. Focus your target text field and start speaking. Transcribed text will be typed automatically as each word arrives (immediate typing, not batched).
 
 ### Options
 
@@ -278,19 +288,20 @@ The `ears-dictation` binary provides keyboard input simulation, allowing transcr
 
 ### macOS Permissions
 
-On macOS, you'll need to grant accessibility permissions:
+On macOS, you'll need to grant accessibility and input monitoring permissions:
 
 1. System Settings → Privacy & Security → Accessibility
-2. Add the `ears-dictation` binary to the allowed apps
+2. System Settings → Privacy & Security → Input Monitoring
+3. Add the `ears-dictation` binary (or your terminal app) to both allowed apps
 
 ### Example
 
 ```bash
 # Start transcription server
-./target/release/ears --live --ws 8765 --vad-timeout 2.0
+./target/release/ears --live --ws 8765
 
 # In another terminal, start dictation client
-./target/release/ears-dictation --only-final
+./target/release/ears-dictation
 ```
 
 ## Model
@@ -301,8 +312,28 @@ Supports English and French transcription with 24kHz audio processing. German al
 
 Whisper integration is optional and behind the `whisper` feature flag. It is experimental and disabled by default.
 
+## Troubleshooting
+
+### ears-ctl hangs or times out
+- Ensure `ears-auto` or `ears --live --ws <port>` is running and printed "WS on <port>".
+- Check the config port in `~/.config/ears/config.toml` matches the server.
+- ears-ctl uses 2s connection timeout and 800ms response timeout; if it fails, the server may not be reachable.
+
+### Hotkeys don't work on macOS
+- Grant Accessibility and Input Monitoring permissions to your terminal app or the `ears-auto` / `ears-daemon` binary in System Settings → Privacy & Security.
+- Restart the app after granting permissions.
+
+### Dictation doesn't type
+- Verify permissions (Accessibility + Input Monitoring) are granted.
+- Ensure the text field is focused and accepts keyboard input.
+- Check that ears-auto or ears-dictation is receiving Word messages (stdout shows transcription).
+
+### Process exits unexpectedly
+- If using `ears --live --vad-timeout <sec>`, the session ends after silence. Use `ears-auto` (no timeout) or omit `--vad-timeout`.
+
 ## Requirements
 
 - Rust 1.70+
 - Audio input device for live transcription
 - GPU support (CUDA/Metal) optional, falls back to CPU
+- macOS: Accessibility and Input Monitoring permissions for hotkeys and dictation

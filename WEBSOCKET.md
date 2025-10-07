@@ -29,7 +29,7 @@ ws.onopen = () => {
     console.log('Connected to eaRS WebSocket');
     
     // Resume transcription to start receiving messages
-    ws.send(JSON.stringify({ "Resume": {} }));
+    ws.send(JSON.stringify({ "type": "resume" }));
 };
 
 ws.onmessage = (event) => {
@@ -119,23 +119,21 @@ Prime model with language reference audio (ISO 639-1):
 { "type": "set_vad_timeout", "seconds": 3.0 }
 ```
 
-#### 2. Pause Command
-Temporarily pauses transcription:
+#### Status Response
+After sending `{ "type": "get_status" }`, the server responds with:
 
 ```json
 {
-    "Pause": {}
+  "type": "status",
+  "paused": true,
+  "vad": false,
+  "timestamps": false,
+  "vad_timeout": null,
+  "lang": "en"
 }
 ```
 
-#### 3. Resume Command
-Resumes paused transcription (required to start transcription as server starts in paused mode):
-
-```json
-{
-    "Resume": {}
-}
-```
+This is used by `ears-ctl` and other control clients to synchronize state.
 
 ## Implementation Examples
 
@@ -203,22 +201,22 @@ class EarsWebSocketClient:
     async def connect_and_listen(self):
         async with websockets.connect(self.uri) as websocket:
             # Start transcription by sending Resume command
-            await websocket.send(json.dumps({"Resume": {}}))
+            await websocket.send(json.dumps({"type": "resume"}))
             
             async for message in websocket:
                 data = json.loads(message)
                 await self.handle_message(data)
     
     async def handle_message(self, message):
-        if "Word" in message:
-            word_data = message["Word"]
-            print(f"Word: {word_data['word']} ({word_data['start_time']}s)")
-        elif "Pause" in message:
-            pause_data = message["Pause"]
-            print(f"Paused at {pause_data['timestamp']}s")
-        elif "Final" in message:
-            final_data = message["Final"]
-            print(f"Final: {final_data['text']}")
+        msg_type = message.get("type")
+        if msg_type == "word":
+            print(f"Word: {message['word']} ({message['start_time']}s)")
+        elif msg_type == "pause":
+            print(f"Paused at {message['timestamp']}s")
+        elif msg_type == "final":
+            print(f"Final: {message['text']}")
+        elif msg_type == "status":
+            print(f"Status: paused={message['paused']}, lang={message.get('lang')}")
     
     async def send_command(self, websocket, command):
         await websocket.send(json.dumps(command))
@@ -243,9 +241,13 @@ interface WordData {
 }
 
 interface TranscriptionMessage {
-    Word?: WordData;
-    Pause?: { timestamp: number };
-    Final?: { text: string; words: WordData[] };
+    type: string;
+    word?: string;
+    start_time?: number;
+    end_time?: number;
+    timestamp?: number;
+    text?: string;
+    words?: WordData[];
 }
 
 export const LiveTranscription: React.FC = () => {
@@ -261,19 +263,19 @@ export const LiveTranscription: React.FC = () => {
         ws.onopen = () => {
             setIsConnected(true);
             // Start transcription by sending Resume command
-            ws.send(JSON.stringify({ Resume: {} }));
+            ws.send(JSON.stringify({ type: "resume" }));
         };
         ws.onclose = () => setIsConnected(false);
         
         ws.onmessage = (event) => {
             const message: TranscriptionMessage = JSON.parse(event.data);
             
-            if (message.Word) {
-                setCurrentText(prev => prev + message.Word!.word + ' ');
-            } else if (message.Pause) {
+            if (message.type === "word") {
+                setCurrentText(prev => prev + message.word + ' ');
+            } else if (message.type === "pause") {
                 // Handle pause if needed
-            } else if (message.Final) {
-                setFinalTexts(prev => [...prev, message.Final!.text]);
+            } else if (message.type === "final") {
+                setFinalTexts(prev => [...prev, message.text!]);
                 setCurrentText('');
             }
         };
@@ -292,9 +294,9 @@ export const LiveTranscription: React.FC = () => {
             <div>Status: {isConnected ? 'Connected' : 'Disconnected'}</div>
             
             <div>
-                <button onClick={() => sendCommand({ Restart: {} })}>Restart</button>
-                <button onClick={() => sendCommand({ Pause: {} })}>Pause</button>
-                <button onClick={() => sendCommand({ Resume: {} })}>Resume</button>
+                <button onClick={() => sendCommand({ type: "restart" })}>Restart</button>
+                <button onClick={() => sendCommand({ type: "pause" })}>Pause</button>
+                <button onClick={() => sendCommand({ type: "resume" })}>Resume</button>
             </div>
             
             <div>
@@ -368,13 +370,15 @@ class RobustWebSocketClient {
 
 ## Performance Considerations
 
-1. **Message Frequency**: Word messages are sent in real-time, which can be high-frequency. Consider throttling UI updates if needed.
+1. **Message Frequency**: Word messages are sent in real-time as each word is recognized, which can be high-frequency. Consider throttling UI updates if needed. For immediate dictation (keyboard typing), use `ears-auto` which types each word on arrival.
 
 2. **Connection Limits**: The server supports multiple concurrent connections, but consider your system's limits.
 
 3. **Buffer Management**: For long sessions, implement proper buffer management to prevent memory leaks.
 
 4. **Network Resilience**: Implement reconnection logic for production applications.
+
+5. **Immediate Typing**: If building a dictation client, handle each `word` message immediately rather than waiting for `final`.
 
 ## Testing
 
@@ -406,10 +410,11 @@ Use pause/resume commands to control transcription flow based on application sta
 
 ### Common Issues
 
-1. **Connection Refused**: Ensure eaRS server is running with `--ws` flag
+1. **Connection Refused**: Ensure eaRS server is running with `--ws` flag. Use `ears-auto` or `ears --live --ws <port>`.
 2. **No Audio**: Check microphone permissions and audio device settings
 3. **High Latency**: Consider adjusting VAD timeout or using faster hardware
-4. **Message Parsing Errors**: Ensure you're handling all message types properly
+4. **Message Parsing Errors**: Ensure you're handling all message types properly and using the tagged schema `{ "type": "...", ... }`
+5. **ears-ctl hangs**: Connection timeout is 2s; if the server isn't running, ctl will fail quickly. Status responses wait up to 800ms.
 
 ### Debug Mode
 

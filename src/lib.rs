@@ -102,7 +102,7 @@ pub mod whisper {
             mpsc::UnboundedReceiver<SentenceBuffer>,
             mpsc::UnboundedSender<WhisperMessage>,
         ) {
-            let (sent_tx, sent_rx) = mpsc::unbounded_channel();
+            let (_sent_tx, sent_rx) = mpsc::unbounded_channel();
             let (res_tx, _res_rx) = mpsc::unbounded_channel();
             (Self, sent_rx, res_tx)
         }
