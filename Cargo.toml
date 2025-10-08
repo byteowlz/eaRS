@@ -16,6 +16,10 @@ path = "src/lib.rs"
 name = "ears"
 path = "src/main.rs"
 
+[[bin]]
+name = "ears-server"
+path = "src/bin/ears-server.rs"
+
 [dependencies]
 anyhow = "1.0"
 atty = "0.2"
