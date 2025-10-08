@@ -23,6 +23,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.36.0",
+    "@tauri-apps/cli": "^2.8.4",
     "@types/node": "^24.7.0",
     "@types/react": "^19.1.16",
     "@types/react-dom": "^19.1.9",
