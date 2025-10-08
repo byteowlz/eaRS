@@ -7,13 +7,27 @@
 - **Server management**: `ears server start|stop` launches and controls the inference backend.
 - **Client capture**: Running `ears` without subcommands streams microphone audio to the server and prints live transcripts.
 
-## Installation
+## Build
 
 ```bash
 cargo build --release
+
+cargo build --release --features metal # For Apple silicon
+
+cargo build --release --features cuda # For NVIDIA GPU
 ```
 
 All binaries are emitted into `./target/release/`.
+
+## Installation
+
+```bash
+cargo install --path .
+
+cargo install --path . --features metal # For Apple silicon
+
+cargo install --path . --features cuda # For NVIDIA GPU
+```
 
 ## Quick start
 
