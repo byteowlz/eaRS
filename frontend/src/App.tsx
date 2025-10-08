@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { TranscriptionWaveform } from './components/transcription-waveform'
+import { LiveWaveform } from './components/ui/live-waveform'
 import { Button } from './components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './components/ui/card'
 import { ThemeToggle } from './components/theme-toggle'
@@ -25,18 +25,114 @@ interface TranscriptionMessage {
 
 function App() {
   const [isConnected, setIsConnected] = useState(false)
-  const [isPaused, setIsPaused] = useState(true)
+  const [isListening, setIsListening] = useState(false)
   const [currentText, setCurrentText] = useState('')
   const [finalTexts, setFinalTexts] = useState<string[]>([])
-  const [wsPort, setWsPort] = useState('8080')
+  const [wsPort, setWsPort] = useState('8765')
   const [connecting, setConnecting] = useState(false)
-  const [hasActivity, setHasActivity] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
-  const activityTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const audioContextRef = useRef<AudioContext | null>(null)
+  const analyserRef = useRef<AnalyserNode | null>(null)
+  const processorRef = useRef<ScriptProcessorNode | null>(null)
+  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const isListeningRef = useRef(false)
 
-  const connect = () => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) return
+  const startAudio = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      })
+      
+      streamRef.current = stream
+      audioContextRef.current = new AudioContext()
+      
+      sourceRef.current = audioContextRef.current.createMediaStreamSource(stream)
+      
+      const analyser = audioContextRef.current.createAnalyser()
+      analyser.fftSize = 256
+      analyser.smoothingTimeConstant = 0.8
+      
+      processorRef.current = audioContextRef.current.createScriptProcessor(4096, 1, 1)
+      
+      processorRef.current.onaudioprocess = (e) => {
+        if (wsRef.current?.readyState === WebSocket.OPEN && isListeningRef.current) {
+          const inputSamples = e.inputBuffer.getChannelData(0)
+          const inputSampleRate = audioContextRef.current!.sampleRate
+          const targetSampleRate = 24000
+          
+          const resampled = resample(inputSamples, inputSampleRate, targetSampleRate)
+          wsRef.current.send(resampled.buffer)
+        }
+      }
+      
+      sourceRef.current.connect(analyser)
+      analyser.connect(processorRef.current)
+      processorRef.current.connect(audioContextRef.current.destination)
+      
+      analyserRef.current = analyser
+      isListeningRef.current = true
+      setIsListening(true)
+    } catch (error) {
+      console.error('Failed to start audio:', error)
+      throw error
+    }
+  }
+  
+  const resample = (samples: Float32Array, fromRate: number, toRate: number): Float32Array => {
+    if (fromRate === toRate) {
+      return samples
+    }
     
+    const ratio = fromRate / toRate
+    const newLength = Math.round(samples.length / ratio)
+    const result = new Float32Array(newLength)
+    
+    for (let i = 0; i < newLength; i++) {
+      const srcIndex = i * ratio
+      const srcIndexFloor = Math.floor(srcIndex)
+      const srcIndexCeil = Math.min(srcIndexFloor + 1, samples.length - 1)
+      const t = srcIndex - srcIndexFloor
+      
+      result[i] = samples[srcIndexFloor] * (1 - t) + samples[srcIndexCeil] * t
+    }
+    
+    return result
+  }
+
+  const stopAudio = () => {
+    isListeningRef.current = false
+    setIsListening(false)
+    
+    if (processorRef.current) {
+      processorRef.current.disconnect()
+      processorRef.current = null
+    }
+    if (analyserRef.current) {
+      analyserRef.current.disconnect()
+      analyserRef.current = null
+    }
+    if (sourceRef.current) {
+      sourceRef.current.disconnect()
+      sourceRef.current = null
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close()
+      audioContextRef.current = null
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop())
+      streamRef.current = null
+    }
+  }
+
+  const connect = async () => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) return
+
     setConnecting(true)
     const ws = new WebSocket(`ws://localhost:${wsPort}/`)
     wsRef.current = ws
@@ -44,13 +140,12 @@ function App() {
     ws.onopen = () => {
       setIsConnected(true)
       setConnecting(false)
-      setIsPaused(true)
     }
 
     ws.onclose = () => {
       setIsConnected(false)
       setConnecting(false)
-      setIsPaused(true)
+      stopAudio()
     }
 
     ws.onerror = () => {
@@ -63,40 +158,23 @@ function App() {
       switch (message.type) {
         case 'word':
           setCurrentText(prev => prev + (message.word || '') + ' ')
-          setHasActivity(true)
-          if (activityTimeoutRef.current) {
-            clearTimeout(activityTimeoutRef.current)
-          }
-          activityTimeoutRef.current = setTimeout(() => {
-            setHasActivity(false)
-          }, 100)
           break
         case 'final':
           if (message.text) {
             setFinalTexts(prev => [...prev, message.text!])
             setCurrentText('')
           }
-          setHasActivity(true)
-          if (activityTimeoutRef.current) {
-            clearTimeout(activityTimeoutRef.current)
-          }
-          activityTimeoutRef.current = setTimeout(() => {
-            setHasActivity(false)
-          }, 100)
-          break
-        case 'status':
-          setIsPaused(message.paused ?? true)
           break
       }
     }
   }
 
   const disconnect = () => {
+    stopAudio()
     if (wsRef.current) {
       wsRef.current.close()
       wsRef.current = null
       setIsConnected(false)
-      setIsPaused(true)
     }
   }
 
@@ -106,13 +184,15 @@ function App() {
     }
   }
 
-  const handleToggleTranscription = () => {
-    if (isPaused) {
-      sendCommand({ type: 'resume' })
-      setIsPaused(false)
+  const handleToggleTranscription = async () => {
+    if (!isListening) {
+      try {
+        await startAudio()
+      } catch (error) {
+        console.error('Failed to start listening:', error)
+      }
     } else {
-      sendCommand({ type: 'pause' })
-      setIsPaused(true)
+      stopAudio()
     }
   }
 
@@ -130,9 +210,6 @@ function App() {
   useEffect(() => {
     return () => {
       disconnect()
-      if (activityTimeoutRef.current) {
-        clearTimeout(activityTimeoutRef.current)
-      }
     }
   }, [])
 
@@ -158,7 +235,7 @@ function App() {
                 type="text"
                 value={wsPort}
                 onChange={(e) => setWsPort(e.target.value)}
-                placeholder="Port (default: 8080)"
+                placeholder="Port (default: 8765)"
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={isConnected}
               />
@@ -187,21 +264,23 @@ function App() {
             <CardDescription>Transcription activity visualization</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <TranscriptionWaveform
-              active={isConnected && !isPaused}
-              processing={isConnected && isPaused}
-              activity={hasActivity}
+            <LiveWaveform
+              active={isListening}
+              processing={false}
               height={100}
               barWidth={3}
               barGap={2}
+              mode="static"
+              sensitivity={1.5}
+              analyser={analyserRef.current}
             />
             <div className="flex flex-wrap gap-2">
               <Button
                 onClick={handleToggleTranscription}
                 disabled={!isConnected}
-                variant={!isPaused ? 'default' : 'outline'}
+                variant={isListening ? 'default' : 'outline'}
               >
-                {!isPaused ? (
+                {isListening ? (
                   <>
                     <Mic className="mr-2 h-4 w-4" />
                     Stop Listening

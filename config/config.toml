@@ -6,6 +6,11 @@ model_dir = "default"
 # Reference audio directory for language priming
 ref_audio = "~/.local/share/ears/ref_audio"
 
+[model]
+# Languages to prime on model startup (e.g., ["de", "ja"] to inject German and Japanese audio snippets)
+# This improves transcription accuracy for these languages from the first words
+prime_languages = []
+
 [whisper]
 # Enable Whisper enhancement for higher accuracy transcription
 enabled = false
@@ -35,6 +40,8 @@ silence_duration = 0.5
 punctuation_markers = [".", "!", "?", "。", "！", "？"]
 
 [server]
+# WebSocket server host address (default: local machine "127.0.0.1")
+host = "127.0.0.1"
 # WebSocket server port for streaming transcription
 websocket_port = 8765
 # Note: VAD timeout is set per-command-line invocation (--vad-timeout <sec>).

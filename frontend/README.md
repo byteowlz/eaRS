@@ -29,10 +29,10 @@ bun install
 
 ### 1. Start the eaRS WebSocket Server
 
-First, start the eaRS daemon with WebSocket support:
+First, start the eaRS WebSocket server:
 
 ```bash
-ears --live --ws 8080 --timestamps --vad
+ears start sever
 ```
 
 ### 2. Run the Development Server
@@ -46,7 +46,7 @@ The application will be available at `http://localhost:5173`
 ### 3. Connect and Transcribe
 
 1. Open the application in your browser
-2. Enter the WebSocket port (default: 8080)
+2. Enter the WebSocket port (default: 8765)
 3. Click "Connect"
 4. Click "Start Listening" to begin transcription
 5. Speak into your microphone to see live transcription
@@ -68,7 +68,9 @@ bun run preview
 ## Components
 
 ### Transcription Waveform
+
 Real-time visualization that responds to transcription activity from the backend. Shows different states:
+
 - Active: Dynamic waveform that pulses when words are being transcribed
 - Processing: Gentle animated wave pattern when paused but connected
 - Idle: Dotted line when disconnected
@@ -76,11 +78,14 @@ Real-time visualization that responds to transcription activity from the backend
 The waveform visualizes transcription activity without accessing the microphone (the backend eaRS server handles audio capture). The animation intensity increases when words are being transcribed and gradually fades during silence.
 
 ### Transcription Display
+
 Two sections:
+
 - Live Transcription: Shows the current utterance being transcribed
 - Transcript History: Shows completed transcriptions
 
 ### Controls
+
 - Connect/Disconnect: Manage WebSocket connection
 - Start/Stop Listening: Control transcription state
 - Restart: Clear session and restart transcription
@@ -91,11 +96,13 @@ Two sections:
 The UI communicates with eaRS using these message types:
 
 ### Outgoing (Client → Server)
+
 - `{ "type": "resume" }` - Start transcription
 - `{ "type": "pause" }` - Pause transcription
 - `{ "type": "restart" }` - Restart session
 
 ### Incoming (Server → Client)
+
 - `{ "type": "word", "word": "...", "start_time": ... }` - Individual words
 - `{ "type": "final", "text": "...", "words": [...] }` - Complete utterances
 - `{ "type": "status", "paused": true/false, ... }` - Status updates

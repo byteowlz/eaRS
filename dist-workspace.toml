@@ -8,7 +8,7 @@ cargo-dist-version = "0.28.7-prerelease.1"
 # CI backends to support
 ci = "github"
 # The installers to generate for each app
-installers = ["shell", "powershell", "npm", "homebrew"]
+installers = ["homebrew", "aur"]
 # A GitHub repo to push Homebrew formulas to
 tap = "byteowlz/homebrew-tap"
 # Target platforms to build apps for (Rust target-triple syntax)
@@ -19,6 +19,23 @@ install-path = "CARGO_HOME"
 publish-jobs = ["homebrew"]
 # Whether to install an updater program
 install-updater = false
+
+# CPU-only variant (default)
+[[dist.variants]]
+name = "cpu"
+targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+
+# Metal variant for Apple Silicon
+[[dist.variants]]
+name = "metal"
+features = ["metal"]
+targets = ["aarch64-apple-darwin"]
+
+# CUDA variant for NVIDIA GPUs
+[[dist.variants]]
+name = "cuda"
+features = ["cuda"]
+targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 
 [workspace.metadata.dist.dependencies.apt]
 libasound2-dev = "*"

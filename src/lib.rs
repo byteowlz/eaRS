@@ -504,6 +504,7 @@ impl Model {
         let mut words = Vec::new();
         let mut current_text = String::new();
         let mut last_word: Option<(String, f64)> = None;
+        let mut word_sent = false;
         let mut printed_eot = false;
         let mut last_voice_activity: Option<Instant> = None;
         
@@ -601,16 +602,19 @@ impl Model {
                                 if self.timestamps {
                                     println!("[{start_time:5.2}-{stop_time:5.2}] {word}");
                                 }
-                                sink.handle_message(WebSocketMessage::Word {
-                                    word: word.clone(),
-                                    start_time,
-                                    end_time: Some(*stop_time),
-                                });
+                                if !self.timestamps && !word_sent {
+                                    sink.handle_message(WebSocketMessage::Word {
+                                        word: word.clone(),
+                                        start_time,
+                                        end_time: Some(*stop_time),
+                                    });
+                                }
                                 words.push(WordTimestamp {
                                     word,
                                     start_time,
                                     end_time: Some(*stop_time),
                                 });
+                                word_sent = false;
                             }
                         }
                         moshi::asr::AsrMsg::Word {
@@ -625,12 +629,6 @@ impl Model {
 
                             current_text.push(' ');
                             current_text.push_str(&word);
-
-                            sink.handle_message(WebSocketMessage::Word {
-                                word: word.clone(),
-                                start_time: *start_time,
-                                end_time: None,
-                            });
                              
                             // Create WordTimestamp for sentence detection
                             let word_ts = WordTimestamp {
@@ -666,6 +664,13 @@ impl Model {
                             }
 
                             if !self.timestamps {
+                                sink.handle_message(WebSocketMessage::Word {
+                                    word: word.clone(),
+                                    start_time: *start_time,
+                                    end_time: None,
+                                });
+                                word_sent = true;
+                                
                                 // Only show live transcription if we're in an interactive terminal
                                 if atty::is(atty::Stream::Stdout) {
                                     if let Some(ref mut dm) = display_manager {
@@ -691,6 +696,7 @@ impl Model {
                                         end_time: Some(*start_time),
                                     });
                                 }
+                                word_sent = false;
                             }
 
                             last_word = Some((word, *start_time));
@@ -1225,7 +1231,7 @@ impl Model {
 
     
 
-fn prime_with_lang_code(&mut self, iso_lang: &str) -> Result<()> {
+pub fn prime_with_lang_code(&mut self, iso_lang: &str) -> Result<()> {
     let ref_code = match iso_lang {
         "de" => "ger",
         "ja" => "jap",

@@ -10,6 +10,7 @@ interface TranscriptionWaveformProps {
   barWidth?: number
   barGap?: number
   barColor?: string
+  analyser?: AnalyserNode | null
 }
 
 export function TranscriptionWaveform({
@@ -21,12 +22,14 @@ export function TranscriptionWaveform({
   barWidth = 3,
   barGap = 2,
   barColor,
+  analyser,
 }: TranscriptionWaveformProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const animationRef = useRef<number>(0)
   const activityLevelRef = useRef<number>(0)
   const lastActivityRef = useRef<number>(0)
+  const dataArrayRef = useRef<Uint8Array<ArrayBuffer> | null>(null)
 
   useEffect(() => {
     if (activity) {
@@ -34,6 +37,16 @@ export function TranscriptionWaveform({
       activityLevelRef.current = 1.0
     }
   }, [activity])
+
+  useEffect(() => {
+    if (analyser) {
+      analyser.fftSize = 256
+      const bufferLength = analyser.frequencyBinCount
+      dataArrayRef.current = new Uint8Array(bufferLength)
+    } else {
+      dataArrayRef.current = null
+    }
+  }, [analyser])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -89,31 +102,57 @@ export function TranscriptionWaveform({
         '#000'
 
       if (active && !processing) {
-        time += 0.05 * activityLevelRef.current
+        time += 0.05
 
-        for (let i = 0; i < barCount; i++) {
-          const normalizedPosition = (i - halfCount) / halfCount
-          const centerWeight = 1 - Math.abs(normalizedPosition) * 0.3
-
-          const wave1 = Math.sin(time * 2 + normalizedPosition * 4) * 0.3
-          const wave2 = Math.sin(time * 1.5 - normalizedPosition * 3) * 0.25
-          const wave3 = Math.cos(time * 2.5 + normalizedPosition * 2) * 0.2
+        if (analyser && dataArrayRef.current) {
+          analyser.getByteFrequencyData(dataArrayRef.current)
           
-          const combinedWave = wave1 + wave2 + wave3
-          const baseValue = 0.15 + combinedWave * activityLevelRef.current
-          const value = baseValue * centerWeight
+          for (let i = 0; i < barCount; i++) {
+            const dataIndex = Math.floor((i / barCount) * dataArrayRef.current.length)
+            const amplitude = dataArrayRef.current[dataIndex] / 255
+            
+            const normalizedPosition = (i - halfCount) / halfCount
+            const centerWeight = 1 - Math.abs(normalizedPosition) * 0.3
+            
+            const value = amplitude * centerWeight * 0.8
 
-          const x = i * step
-          const barHeight = Math.max(4, Math.abs(value) * rect.height * 0.85)
-          const y = centerY - barHeight / 2
+            const x = i * step
+            const barHeight = Math.max(4, value * rect.height * 0.9)
+            const y = centerY - barHeight / 2
 
-          const alpha = 0.3 + Math.abs(value) * 0.7
-          ctx.fillStyle = computedBarColor
-          ctx.globalAlpha = alpha
+            const alpha = 0.4 + amplitude * 0.6
+            ctx.fillStyle = computedBarColor
+            ctx.globalAlpha = alpha
 
-          ctx.beginPath()
-          ctx.roundRect(x, y, barWidth, barHeight, 1.5)
-          ctx.fill()
+            ctx.beginPath()
+            ctx.roundRect(x, y, barWidth, barHeight, 1.5)
+            ctx.fill()
+          }
+        } else {
+          for (let i = 0; i < barCount; i++) {
+            const normalizedPosition = (i - halfCount) / halfCount
+            const centerWeight = 1 - Math.abs(normalizedPosition) * 0.3
+
+            const wave1 = Math.sin(time * 2 + normalizedPosition * 4) * 0.3
+            const wave2 = Math.sin(time * 1.5 - normalizedPosition * 3) * 0.25
+            const wave3 = Math.cos(time * 2.5 + normalizedPosition * 2) * 0.2
+            
+            const combinedWave = wave1 + wave2 + wave3
+            const baseValue = 0.15 + combinedWave * activityLevelRef.current
+            const value = baseValue * centerWeight
+
+            const x = i * step
+            const barHeight = Math.max(4, Math.abs(value) * rect.height * 0.85)
+            const y = centerY - barHeight / 2
+
+            const alpha = 0.3 + Math.abs(value) * 0.7
+            ctx.fillStyle = computedBarColor
+            ctx.globalAlpha = alpha
+
+            ctx.beginPath()
+            ctx.roundRect(x, y, barWidth, barHeight, 1.5)
+            ctx.fill()
+          }
         }
       } else if (processing) {
         for (let i = 0; i < barCount; i++) {
@@ -146,7 +185,7 @@ export function TranscriptionWaveform({
         cancelAnimationFrame(animationRef.current)
       }
     }
-  }, [active, processing, barWidth, barGap, barColor])
+  }, [active, processing, barWidth, barGap, barColor, analyser])
 
   return (
     <div

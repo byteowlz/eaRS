@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>eaRS WebSocket Audio Streaming Client</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            margin-top: 0;
+            color: #333;
+        }
+        #messages {
+            border: 1px solid #ddd;
+            height: 400px;
+            overflow-y: auto;
+            padding: 15px;
+            margin: 15px 0;
+            background-color: #fafafa;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+        .word { color: #0066cc; }
+        .final { color: #006600; font-weight: bold; }
+        .error { color: #cc0000; font-weight: bold; }
+        .info { color: #666; }
+        .whisper { color: #9900cc; font-style: italic; }
+        .controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin: 15px 0;
+        }
+        input[type="text"] {
+            flex: 1;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            background: #0066cc;
+            color: white;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover:not(:disabled) {
+            background: #0052a3;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        button.stop {
+            background: #cc0000;
+        }
+        button.stop:hover:not(:disabled) {
+            background: #a30000;
+        }
+        .status {
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-weight: 500;
+        }
+        .status.connected {
+            background: #e6f4ea;
+            color: #137333;
+        }
+        .status.disconnected {
+            background: #fce8e6;
+            color: #c5221f;
+        }
+        .status.streaming {
+            background: #e8f0fe;
+            color: #1a73e8;
+        }
+        .instructions {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            border-left: 4px solid #0066cc;
+        }
+        .instructions code {
+            background: #e8eaed;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>eaRS WebSocket Audio Streaming Client</h1>
+        
+        <div class="controls">
+            <label>Server: </label>
+            <input type="text" id="wsUrl" value="ws://localhost:8765/" placeholder="ws://localhost:8765/">
+            <button id="connectBtn" onclick="connect()">Connect & Stream</button>
+            <button id="stopBtn" onclick="stop()" disabled class="stop">Stop</button>
+            <span id="status" class="status disconnected">Disconnected</span>
+        </div>
+        
+        <div id="messages"></div>
+        
+        <div class="instructions">
+            <h3>Instructions:</h3>
+            <ol>
+                <li>Start the eaRS server: <code>ears server start</code></li>
+                <li>Click "Connect & Stream" to begin audio streaming</li>
+                <li>Allow microphone access when prompted</li>
+                <li>Speak and watch transcription appear in real-time</li>
+                <li>Click "Stop" to end the session</li>
+            </ol>
+            <p><strong>Note:</strong> This client streams live audio from your microphone to the server for real-time transcription.</p>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let audioContext = null;
+        let processor = null;
+        let source = null;
+        const messagesDiv = document.getElementById('messages');
+        const statusSpan = document.getElementById('status');
+        const connectBtn = document.getElementById('connectBtn');
+        const stopBtn = document.getElementById('stopBtn');
+
+        async function connect() {
+            const url = document.getElementById('wsUrl').value;
+            
+            try {
+                addMessage('Connecting to server...', 'info');
+                ws = new WebSocket(url);
+                ws.binaryType = 'arraybuffer';
+                
+                ws.onopen = async function() {
+                    updateStatus('connected', 'Connected');
+                    addMessage('Connected to server', 'info');
+                    
+                    try {
+                        await startAudio();
+                        updateStatus('streaming', 'Streaming Audio');
+                        addMessage('Audio streaming started', 'info');
+                    } catch (e) {
+                        addMessage('Failed to start audio: ' + e.message, 'error');
+                        disconnect();
+                    }
+                };
+                
+                ws.onmessage = function(event) {
+                    try {
+                        const message = JSON.parse(event.data);
+                        handleMessage(message);
+                    } catch (e) {
+                        addMessage('Error parsing message: ' + e.message, 'error');
+                    }
+                };
+                
+                ws.onclose = function() {
+                    updateStatus('disconnected', 'Disconnected');
+                    addMessage('Disconnected from server', 'info');
+                    stopAudio();
+                };
+                
+                ws.onerror = function(error) {
+                    addMessage('WebSocket error: ' + error, 'error');
+                };
+                
+            } catch (e) {
+                addMessage('Connection error: ' + e.message, 'error');
+                updateStatus('disconnected', 'Disconnected');
+            }
+        }
+        
+        async function startAudio() {
+            audioContext = new AudioContext({ sampleRate: 24000 });
+            
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    channelCount: 1,
+                    sampleRate: 24000,
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                }
+            });
+            
+            source = audioContext.createMediaStreamSource(stream);
+            processor = audioContext.createScriptProcessor(4096, 1, 1);
+            
+            processor.onaudioprocess = function(e) {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    const samples = e.inputBuffer.getChannelData(0);
+                    const buffer = new Float32Array(samples);
+                    ws.send(buffer.buffer);
+                }
+            };
+            
+            source.connect(processor);
+            processor.connect(audioContext.destination);
+        }
+        
+        function stopAudio() {
+            if (processor) {
+                processor.disconnect();
+                processor = null;
+            }
+            if (source) {
+                source.disconnect();
+                source.mediaStream.getTracks().forEach(track => track.stop());
+                source = null;
+            }
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+            }
+        }
+        
+        function stop() {
+            if (ws) {
+                ws.send('stop');
+                ws.close();
+                ws = null;
+            }
+            stopAudio();
+            updateStatus('disconnected', 'Disconnected');
+            addMessage('Session stopped', 'info');
+        }
+        
+        function handleMessage(message) {
+            const type = message.type;
+            
+            if (type === 'word') {
+                const timeStr = message.end_time 
+                    ? `${message.start_time.toFixed(2)}-${message.end_time.toFixed(2)}s`
+                    : `${message.start_time.toFixed(2)}s`;
+                addMessage(`[${timeStr}] ${message.word}`, 'word');
+            } else if (type === 'final') {
+                addMessage('', 'info');
+                addMessage(`FINAL: ${message.text}`, 'final');
+                addMessage(`(${message.words.length} words)`, 'final');
+                addMessage('', 'info');
+            } else if (type === 'error') {
+                addMessage(`ERROR: ${message.message}`, 'error');
+                if (message.message === 'server busy') {
+                    addMessage('Another client is already streaming. Please wait.', 'error');
+                }
+            } else if (type === 'whisper_processing') {
+                addMessage(`Whisper processing: "${message.original_text}"`, 'whisper');
+            } else if (type === 'whisper_complete') {
+                if (message.changed) {
+                    addMessage(`Whisper: "${message.original_text}" → "${message.corrected_text}"`, 'whisper');
+                }
+            } else {
+                addMessage(`Unknown message: ${JSON.stringify(message)}`, 'info');
+            }
+        }
+        
+        function updateStatus(state, text) {
+            statusSpan.className = `status ${state}`;
+            statusSpan.textContent = text;
+            
+            if (state === 'streaming' || state === 'connected') {
+                connectBtn.disabled = true;
+                stopBtn.disabled = false;
+            } else {
+                connectBtn.disabled = false;
+                stopBtn.disabled = true;
+            }
+        }
+        
+        function addMessage(text, className) {
+            const div = document.createElement('div');
+            div.className = className;
+            const time = new Date().toLocaleTimeString();
+            div.textContent = text ? `[${time}] ${text}` : '';
+            messagesDiv.appendChild(div);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+    </script>
+</body>
+</html>

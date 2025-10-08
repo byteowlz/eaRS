@@ -5,7 +5,7 @@ use ears::{config::AppConfig, server, TranscriptionOptions};
 #[derive(Debug, Parser)]
 #[command(name = "ears-server", about = "Standalone transcription server for eaRS")]
 struct Args {
-    /// Address to bind the transcription server to (default: 0.0.0.0:<config port>)
+    /// Address to bind the transcription server to (default: <config host>:<config port>)
     #[arg(long)]
     bind: Option<String>,
 
@@ -44,7 +44,7 @@ fn build_server_options(args: &Args) -> Result<server::ServerOptions> {
     let bind_addr = args
         .bind
         .clone()
-        .unwrap_or_else(|| format!("0.0.0.0:{}", config.server.websocket_port));
+        .unwrap_or_else(|| format!("{}:{}", config.server.host, config.server.websocket_port));
 
     let mut transcription = TranscriptionOptions::default();
     transcription.timestamps = args.timestamps;

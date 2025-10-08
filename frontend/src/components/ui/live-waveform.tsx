@@ -18,6 +18,7 @@ export type LiveWaveformProps = HTMLAttributes<HTMLDivElement> & {
   historySize?: number
   updateRate?: number
   mode?: "scrolling" | "static"
+  analyser?: AnalyserNode | null
   onError?: (error: Error) => void
   onStreamReady?: (stream: MediaStream) => void
   onStreamEnd?: () => void
@@ -39,6 +40,7 @@ export const LiveWaveform = ({
   historySize = 60,
   updateRate = 30,
   mode = "static",
+  analyser,
   onError,
   onStreamReady,
   onStreamEnd,
@@ -49,8 +51,6 @@ export const LiveWaveform = ({
   const containerRef = useRef<HTMLDivElement>(null)
   const historyRef = useRef<number[]>([])
   const analyserRef = useRef<AnalyserNode | null>(null)
-  const audioContextRef = useRef<AudioContext | null>(null)
-  const streamRef = useRef<MediaStream | null>(null)
   const animationRef = useRef<number>(0)
   const lastUpdateRef = useRef<number>(0)
   const processingAnimationRef = useRef<number | null>(null)
@@ -222,20 +222,11 @@ export const LiveWaveform = ({
     }
   }, [processing, active, barWidth, barGap, mode])
 
-  // Handle microphone setup and teardown
+  // Handle analyser setup
   useEffect(() => {
-    if (!active) {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop())
-        streamRef.current = null
-        onStreamEnd?.()
-      }
-      if (
-        audioContextRef.current &&
-        audioContextRef.current.state !== "closed"
-      ) {
-        audioContextRef.current.close()
-        audioContextRef.current = null
+    if (!active || !analyser) {
+      if (analyserRef.current) {
+        analyserRef.current = null
       }
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current)
@@ -244,68 +235,19 @@ export const LiveWaveform = ({
       return
     }
 
-    const setupMicrophone = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          },
-        })
-        streamRef.current = stream
-        onStreamReady?.(stream)
-
-        const AudioContextConstructor =
-          window.AudioContext ||
-          (window as unknown as { webkitAudioContext: typeof AudioContext })
-            .webkitAudioContext
-        const audioContext = new AudioContextConstructor()
-        const analyser = audioContext.createAnalyser()
-        analyser.fftSize = fftSize
-        analyser.smoothingTimeConstant = smoothingTimeConstant
-
-        const source = audioContext.createMediaStreamSource(stream)
-        source.connect(analyser)
-
-        audioContextRef.current = audioContext
-        analyserRef.current = analyser
-
-        // Clear history when starting
-        historyRef.current = []
-      } catch (error) {
-        onError?.(error as Error)
-      }
-    }
-
-    setupMicrophone()
+    analyserRef.current = analyser
+    historyRef.current = []
 
     return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop())
-        streamRef.current = null
-        onStreamEnd?.()
-      }
-      if (
-        audioContextRef.current &&
-        audioContextRef.current.state !== "closed"
-      ) {
-        audioContextRef.current.close()
-        audioContextRef.current = null
+      if (analyserRef.current) {
+        analyserRef.current = null
       }
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current)
         animationRef.current = 0
       }
     }
-  }, [
-    active,
-    fftSize,
-    smoothingTimeConstant,
-    onError,
-    onStreamReady,
-    onStreamEnd,
-  ])
+  }, [active, analyser])
 
   // Animation loop
   useEffect(() => {

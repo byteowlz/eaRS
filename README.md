@@ -97,5 +97,3 @@ Clients may send `{"type":"stop"}` to end the current session (the capture clien
 - **`ears server start` reports "already running"** – Use `ears server stop` to terminate the existing instance. If the PID no longer exists, `stop` will clean up the stale PID file.
 - **Client prints "failed to connect"** – Ensure the server is running and reachable at the URL passed via `--server` (check the configured port).
 - **High latency** – Run the server on the same machine as the client or enable GPU acceleration (`--features cuda` or `--features metal`).
-
-Happy transcribing!

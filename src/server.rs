@@ -32,7 +32,7 @@ pub async fn run(options: ServerOptions) -> Result<()> {
         Some(config.model_dir_path())
     };
 
-    let model = if let Some(dir) = model_dir.as_ref() {
+    let mut model = if let Some(dir) = model_dir.as_ref() {
         Model::load_from_hf(
             &options.hf_repo,
             options.cpu,
@@ -50,20 +50,31 @@ pub async fn run(options: ServerOptions) -> Result<()> {
         .await?
     };
 
+    for lang in &config.model.prime_languages {
+        eprintln!("Priming model with language: {}", lang);
+        if let Err(e) = model.prime_with_lang_code(lang) {
+            eprintln!("Failed to prime language {}: {}", lang, e);
+        }
+    }
+
     let model = Arc::new(Mutex::new(model));
     let listener = TcpListener::bind(&options.bind_addr).await?;
-    let session_limit = Arc::new(Semaphore::new(1));
+    let session_limit = Arc::new(Semaphore::new(5));
+
+    eprintln!("Server listening on {} (max 5 concurrent sessions)", options.bind_addr);
 
     loop {
         let (stream, addr) = listener.accept().await?;
+        eprintln!("[ears-server] new connection from {}", addr);
         let permit = match session_limit.clone().try_acquire_owned() {
             Ok(permit) => permit,
             Err(_) => {
+                eprintln!("[ears-server] rejecting connection from {} (server busy)", addr);
                 tokio::spawn(async move {
                     if let Ok(mut ws) = accept_async(stream).await {
                         let _ = ws
                             .send(Message::Text(
-                                json!({ "type": "error", "message": "server busy" }).to_string(),
+                                json!({ "type": "error", "message": "server busy - maximum concurrent sessions reached" }).to_string(),
                             ))
                             .await;
                         let _ = ws.close(None).await;
@@ -75,15 +86,20 @@ pub async fn run(options: ServerOptions) -> Result<()> {
 
         let model = model.clone();
         tokio::spawn(async move {
+            eprintln!("[ears-server] handling connection from {}", addr);
             if let Err(err) = handle_connection(stream, model).await {
-                eprintln!("[ears-server] connection {addr} error: {err}");
+                eprintln!("[ears-server] connection {} error: {}", addr, err);
             }
+            eprintln!("[ears-server] connection from {} closed", addr);
             drop(permit);
         });
     }
 }
 
 async fn handle_connection(stream: tokio::net::TcpStream, model: Arc<Mutex<Model>>) -> Result<()> {
+    // Set TCP keepalive to detect dead connections
+    let _ = stream.set_nodelay(true);
+    
     let ws_stream = accept_async(stream).await?;
     let (mut ws_writer, mut ws_reader) = ws_stream.split();
 
@@ -99,6 +115,7 @@ async fn handle_connection(stream: tokio::net::TcpStream, model: Arc<Mutex<Model
     });
 
     let audio_sender = audio_tx.clone();
+    let model_for_priming = model.clone();
     let reader = tokio::spawn(async move {
         while let Some(msg) = ws_reader.next().await {
             match msg {
@@ -117,6 +134,25 @@ async fn handle_connection(stream: tokio::net::TcpStream, model: Arc<Mutex<Model
                 Ok(Message::Text(text)) => {
                     if should_stop(&text) {
                         break;
+                    }
+                    
+                    if let Ok(cmd) = serde_json::from_str::<serde_json::Value>(&text) {
+                        if let Some(cmd_type) = cmd.get("type").and_then(|v| v.as_str()) {
+                            if cmd_type == "setlanguage" {
+                                if let Some(lang) = cmd.get("lang").and_then(|v| v.as_str()) {
+                                    let model_clone = model_for_priming.clone();
+                                    let lang_str = lang.to_string();
+                                    tokio::task::spawn_blocking(move || {
+                                        if let Ok(mut model) = model_clone.lock() {
+                                            eprintln!("Priming model with language: {}", lang_str);
+                                            if let Err(e) = model.prime_with_lang_code(&lang_str) {
+                                                eprintln!("Failed to prime language {}: {}", lang_str, e);
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+                        }
                     }
                 }
                 Ok(Message::Close(_)) => break,

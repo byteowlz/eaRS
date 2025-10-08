@@ -1,7 +1,9 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::{Args, Parser, Subcommand};
 use crossbeam_channel::unbounded;
-use ears::{audio, config::AppConfig, server, TranscriptionOptions, WebSocketMessage, WordTimestamp};
+use ears::{
+    TranscriptionOptions, WebSocketMessage, WordTimestamp, audio, config::AppConfig, server,
+};
 use futures::{SinkExt, StreamExt};
 use serde_json::json;
 use std::{
@@ -14,7 +16,7 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 #[cfg(unix)]
-use libc::{kill, SIGTERM};
+use libc::{SIGTERM, kill};
 
 #[derive(Parser)]
 #[command(author, version, about = "eaRS client and server controller")]
@@ -36,6 +38,7 @@ enum Commands {
 enum ServerCommand {
     Start(ServerStartArgs),
     Stop,
+    Status,
     #[command(hide = true)]
     Run(ServerStartArgs),
 }
@@ -57,6 +60,18 @@ struct ClientArgs {
     /// Print final output with per-word timestamps
     #[arg(long, default_value_t = false)]
     timestamps: bool,
+
+    /// Show verbose metadata output (debug messages)
+    #[arg(long, default_value_t = false)]
+    verbose: bool,
+
+    /// Enable VAD with silence timeout in seconds (auto-terminate after silence)
+    #[arg(long)]
+    vad: Option<f64>,
+
+    /// Set language for transcription (e.g., "de", "ja", "it", "es", "pt")
+    #[arg(long)]
+    lang: Option<String>,
 }
 
 #[derive(Args, Clone)]
@@ -104,6 +119,7 @@ async fn handle_server_command(command: ServerCommand) -> Result<()> {
     match command {
         ServerCommand::Start(args) => start_server(args),
         ServerCommand::Stop => stop_server(),
+        ServerCommand::Status => check_server_status(),
         ServerCommand::Run(args) => run_server(args).await,
     }
 }
@@ -125,15 +141,17 @@ fn start_server(args: ServerStartArgs) -> Result<()> {
 
     let child = cmd.spawn().context("failed to spawn ears server process")?;
     let pid = child.id();
-    
+
     print!("ears server starting (pid {})...", pid);
     io::stdout().flush().ok();
-    
+
     let config = AppConfig::load()?;
-    
+
     for i in 0..30 {
         thread::sleep(Duration::from_millis(500));
-        if let Ok(stream) = std::net::TcpStream::connect(("127.0.0.1", config.server.websocket_port)) {
+        if let Ok(stream) =
+            std::net::TcpStream::connect(("127.0.0.1", config.server.websocket_port))
+        {
             drop(stream);
             println!("\rears server started (pid {}) and ready", pid);
             return Ok(());
@@ -143,9 +161,42 @@ fn start_server(args: ServerStartArgs) -> Result<()> {
             io::stdout().flush().ok();
         }
     }
-    
+
     println!("\rears server started (pid {}) but not yet ready", pid);
     println!("server may still be loading the model - try connecting in a few seconds");
+    Ok(())
+}
+
+fn check_server_status() -> Result<()> {
+    let config = AppConfig::load()?;
+
+    match server::read_pid_file()? {
+        Some(pid) => {
+            if server::is_process_alive(pid) {
+                println!("ears server is running (pid {})", pid);
+
+                if let Ok(stream) =
+                    std::net::TcpStream::connect(("127.0.0.1", config.server.websocket_port))
+                {
+                    drop(stream);
+                    println!(
+                        "server is accepting connections on port {}",
+                        config.server.websocket_port
+                    );
+                } else {
+                    println!(
+                        "server process exists but not accepting connections (may be loading model)"
+                    );
+                }
+            } else {
+                println!("ears server is not running (stale pid file exists)");
+            }
+        }
+        None => {
+            println!("ears server is not running");
+        }
+    }
+
     Ok(())
 }
 
@@ -175,7 +226,10 @@ fn stop_server() -> Result<()> {
                     thread::sleep(Duration::from_millis(100));
                 }
             } else {
-                println!("No running server found for PID {} (removing stale pid file).", pid);
+                println!(
+                    "No running server found for PID {} (removing stale pid file).",
+                    pid
+                );
             }
 
             server::remove_pid_file()?;
@@ -274,10 +328,22 @@ async fn run_client(args: ClientArgs) -> Result<()> {
     let (ws_stream, _) = connect_async(&server_url)
         .await
         .with_context(|| format!("failed to connect to {}", server_url))?;
+    if args.verbose {
+        eprintln!("Connected to server at {}", server_url);
+    }
     let (mut ws_writer, mut ws_reader) = ws_stream.split();
 
     let (writer_tx, mut writer_rx) = mpsc::unbounded_channel::<WriterCommand>();
+
+    let lang_to_send = args.lang.clone();
     let writer_handle = tokio::spawn(async move {
+        if let Some(lang) = lang_to_send {
+            let set_lang_cmd = json!({ "type": "setlanguage", "lang": lang }).to_string();
+            if ws_writer.send(Message::Text(set_lang_cmd)).await.is_err() {
+                eprintln!("Failed to send language change command");
+            }
+        }
+
         while let Some(cmd) = writer_rx.recv().await {
             match cmd {
                 WriterCommand::Audio(bytes) => {
@@ -310,19 +376,48 @@ async fn run_client(args: ClientArgs) -> Result<()> {
 
     let mut printed_live = false;
     let mut final_result: Option<(String, Vec<WordTimestamp>)> = None;
+    let vad_timeout = args.vad.map(|seconds| Duration::from_secs_f64(seconds));
+    let (silence_tx, mut silence_rx) = mpsc::unbounded_channel::<()>();
+    let mut vad_timeout_triggered = false;
 
     'client: loop {
+        let timeout_future = async {
+            if vad_timeout.is_some() {
+                silence_rx.recv().await
+            } else {
+                std::future::pending().await
+            }
+        };
+
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
+                let _ = writer_tx.send(WriterCommand::Stop);
+                break;
+            }
+            _ = timeout_future => {
+                if args.verbose {
+                    eprintln!("VAD timeout reached, stopping...");
+                }
+                vad_timeout_triggered = true;
                 let _ = writer_tx.send(WriterCommand::Stop);
                 break;
             }
             maybe_msg = ws_reader.next() => {
                 match maybe_msg {
                     Some(Ok(Message::Text(payload))) => {
+                        if args.verbose {
+                            eprintln!("Received message: {}", payload);
+                        }
                         if let Ok(event) = serde_json::from_str::<WebSocketMessage>(&payload) {
                             match event {
                                 WebSocketMessage::Word { word, end_time, .. } => {
+                                    if let Some(timeout_duration) = vad_timeout {
+                                        let silence_notifier = silence_tx.clone();
+                                        tokio::spawn(async move {
+                                            tokio::time::sleep(timeout_duration).await;
+                                            let _ = silence_notifier.send(());
+                                        });
+                                    }
                                     if !args.timestamps && end_time.is_none() {
                                         print!(" {}", word);
                                         io::stdout().flush().ok();
@@ -338,6 +433,9 @@ async fn run_client(args: ClientArgs) -> Result<()> {
                         }
                     }
                     Some(Ok(Message::Close(_))) | None => {
+                        if args.verbose {
+                            eprintln!("WebSocket connection closed");
+                        }
                         break 'client;
                     }
                     _ => {}
@@ -365,7 +463,11 @@ async fn run_client(args: ClientArgs) -> Result<()> {
             println!("{text}");
         }
     } else {
-        eprintln!("No transcription received from server.");
+        if vad_timeout_triggered {
+            eprintln!("\nVAD timeout reached");
+        } else {
+            eprintln!("\nNo transcription received from server.");
+        }
     }
 
     Ok(())

@@ -7,6 +7,8 @@ use std::fs;
 pub struct AppConfig {
     pub storage: StorageConfig,
     #[serde(default)]
+    pub model: ModelConfig,
+    #[serde(default)]
     pub whisper: WhisperConfig,
     #[serde(default)]
     pub server: ServerConfig,
@@ -18,6 +20,11 @@ pub struct AppConfig {
 pub struct StorageConfig {
     pub model_dir: String,
     pub ref_audio: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelConfig {
+    pub prime_languages: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +51,7 @@ pub struct SentenceDetectionConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
     pub websocket_port: u16,
+    pub host: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +59,14 @@ pub struct HotkeyConfig {
     pub enable_internal: bool,
     pub toggle: String,
     pub language_cycle: String,
+}
+
+impl Default for ModelConfig {
+    fn default() -> Self {
+        Self {
+            prime_languages: vec![],
+        }
+    }
 }
 
 impl Default for HotkeyConfig {
@@ -67,6 +83,7 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             websocket_port: 8765,
+            host: "localhost".to_string(),
         }
     }
 }
@@ -78,6 +95,7 @@ impl Default for AppConfig {
                 model_dir: "default".to_string(), // "default" means use HuggingFace default cache
                 ref_audio: "~/.local/share/ears/ref_audio".to_string(),
             },
+            model: ModelConfig::default(),
             whisper: WhisperConfig::default(),
             server: ServerConfig::default(),
             hotkeys: HotkeyConfig::default(),
@@ -145,6 +163,7 @@ impl AppConfig {
                         // Create new config with defaults for whisper
                         let new_config = AppConfig {
                             storage: old_config.storage,
+                            model: ModelConfig::default(),
                             whisper: WhisperConfig::default(),
                             server: ServerConfig::default(),
                             hotkeys: HotkeyConfig::default(),
