@@ -120,11 +120,32 @@ fn start_server(args: ServerStartArgs) -> Result<()> {
     cmd.arg("server").arg("run");
     append_server_args(&mut cmd, &args);
     cmd.stdin(Stdio::null());
-    cmd.stdout(Stdio::inherit());
-    cmd.stderr(Stdio::inherit());
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::null());
 
     let child = cmd.spawn().context("failed to spawn ears server process")?;
-    println!("ears server started (pid {})", child.id());
+    let pid = child.id();
+    
+    print!("ears server starting (pid {})...", pid);
+    io::stdout().flush().ok();
+    
+    let config = AppConfig::load()?;
+    
+    for i in 0..30 {
+        thread::sleep(Duration::from_millis(500));
+        if let Ok(stream) = std::net::TcpStream::connect(("127.0.0.1", config.server.websocket_port)) {
+            drop(stream);
+            println!("\rears server started (pid {}) and ready", pid);
+            return Ok(());
+        }
+        if i % 2 == 1 {
+            print!(".");
+            io::stdout().flush().ok();
+        }
+    }
+    
+    println!("\rears server started (pid {}) but not yet ready", pid);
+    println!("server may still be loading the model - try connecting in a few seconds");
     Ok(())
 }
 
