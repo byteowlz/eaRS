@@ -120,6 +120,7 @@ pub mod whisper {
     }
 }
 pub mod display;
+pub mod server;
 
 #[derive(Debug, serde::Deserialize)]
 pub struct SttConfig {
@@ -288,7 +289,7 @@ pub struct WordTimestamp {
 /// # With timestamps and VAD
 /// ears --live --ws 8080 --timestamps --vad
 /// ```
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum WebSocketMessage {
     Word {
@@ -324,6 +325,16 @@ pub enum WebSocketMessage {
     },
 }
 
+pub trait TranscriptionSink: Send {
+    fn handle_message(&mut self, message: WebSocketMessage);
+}
+
+pub struct NullSink;
+
+impl TranscriptionSink for NullSink {
+    fn handle_message(&mut self, _message: WebSocketMessage) {}
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum WebSocketCommand {
@@ -335,6 +346,7 @@ pub enum WebSocketCommand {
     SetVadTimeout { seconds: f64 },
 }
 
+#[derive(Debug, Clone)]
 pub struct TranscriptionOptions {
     pub timestamps: bool,
     pub vad: bool,
@@ -474,6 +486,16 @@ impl Model {
         audio_rx: Receiver<Vec<f32>>,
         save_audio: Option<&str>,
     ) -> Result<TranscriptionResult> {
+        let mut sink = NullSink;
+        self.transcribe_live_with_sink(audio_rx, save_audio, &mut sink)
+    }
+
+    pub fn transcribe_live_with_sink<S: TranscriptionSink>(
+        &mut self,
+        audio_rx: Receiver<Vec<f32>>,
+        save_audio: Option<&str>,
+        sink: &mut S,
+    ) -> Result<TranscriptionResult> {
         use std::io::Write;
         use std::time::{Duration, Instant};
 
@@ -574,15 +596,20 @@ impl Model {
                         moshi::asr::AsrMsg::EndWord { stop_time, .. } => {
                             printed_eot = false;
                             has_voice_activity = true;
-                            if self.timestamps {
-                                if let Some((word, start_time)) = last_word.take() {
+                            if let Some((word, start_time)) = last_word.take() {
+                                if self.timestamps {
                                     println!("[{start_time:5.2}-{stop_time:5.2}] {word}");
-                                    words.push(WordTimestamp {
-                                        word: word.clone(),
-                                        start_time,
-                                        end_time: Some(*stop_time),
-                                    });
                                 }
+                                sink.handle_message(WebSocketMessage::Word {
+                                    word: word.clone(),
+                                    start_time,
+                                    end_time: Some(*stop_time),
+                                });
+                                words.push(WordTimestamp {
+                                    word,
+                                    start_time,
+                                    end_time: Some(*stop_time),
+                                });
                             }
                         }
                         moshi::asr::AsrMsg::Word {
@@ -597,19 +624,25 @@ impl Model {
 
                             current_text.push(' ');
                             current_text.push_str(&word);
-                            
+
+                            sink.handle_message(WebSocketMessage::Word {
+                                word: word.clone(),
+                                start_time: *start_time,
+                                end_time: None,
+                            });
+                             
                             // Create WordTimestamp for sentence detection
                             let word_ts = WordTimestamp {
                                 word: word.clone(),
                                 start_time: *start_time,
                                 end_time: None,
                             };
-                            
+                             
                             // Check for sentence boundaries if Whisper is enabled
                             if let Some(ref mut detector) = sentence_detector {
                                 // Get VAD confidence from previous Step message
                                 let vad_confidence = if self.vad && printed_eot { Some(0.9) } else { None };
-                                
+                                 
                                 if let Some(mut sentence) = detector.process_word(&word_ts, vad_confidence) {
                                     // Extract audio for the sentence
                                     if let Some(ref buffer) = audio_buffer {
@@ -618,12 +651,12 @@ impl Model {
                                             sentence.end_time
                                         );
                                     }
-                                    
+                                     
                                     // Queue sentence for background Whisper processing
                                     if self.whisper_enabled && self.whisper_model.is_some() {
                                         let _ = wh_tx.send(sentence.clone());
                                     }
-                                    
+                                     
                                     // Update display if using display manager
                                     if let Some(ref mut dm) = display_manager {
                                         dm.complete_sentence(sentence.id, sentence.kyutai_text);
@@ -646,15 +679,22 @@ impl Model {
                                     println!(
                                         "[{prev_start_time:5.2}-{start_time:5.2}] {prev_word}"
                                     );
+                                    sink.handle_message(WebSocketMessage::Word {
+                                        word: prev_word.clone(),
+                                        start_time: prev_start_time,
+                                        end_time: Some(*start_time),
+                                    });
                                     words.push(WordTimestamp {
                                         word: prev_word,
                                         start_time: prev_start_time,
                                         end_time: Some(*start_time),
                                     });
                                 }
-                                last_word = Some((word, *start_time));
                             }
+
+                            last_word = Some((word, *start_time));
                         }
+
                     }
                 }
             }
@@ -665,9 +705,42 @@ impl Model {
             }
 
             // Drain whisper results and update display
-            if let Some(ref mut dm) = display_manager {
-                for msg in wh_res_rx.try_iter() {
-                    dm.handle_whisper_message(msg);
+            for msg in wh_res_rx.try_iter() {
+                if let Some(ref mut dm) = display_manager {
+                    dm.handle_whisper_message(msg.clone());
+                } else {
+                    display::print_whisper_status(&msg);
+                }
+
+                match msg {
+                    whisper::WhisperMessage::Processing {
+                        sentence_id,
+                        original_text,
+                        start_time,
+                        end_time,
+                    } => {
+                        sink.handle_message(WebSocketMessage::WhisperProcessing {
+                            sentence_id,
+                            original_text,
+                            start_time,
+                            end_time,
+                        });
+                    }
+                    whisper::WhisperMessage::Complete {
+                        sentence_id,
+                        original_text,
+                        corrected_text,
+                        confidence,
+                        changed,
+                    } => {
+                        sink.handle_message(WebSocketMessage::WhisperComplete {
+                            sentence_id,
+                            original_text,
+                            corrected_text,
+                            confidence,
+                            changed,
+                        });
+                    }
                 }
             }
 
@@ -703,11 +776,19 @@ impl Model {
         if let Some(save_path) = save_audio {
             self.save_audio_wav(&all_audio, 24000, save_path)?;
         }
-
-        Ok(TranscriptionResult {
+ 
+        let result = TranscriptionResult {
             text: current_text.trim().to_string(),
             words,
-        })
+        };
+
+        sink.handle_message(WebSocketMessage::Final {
+            text: result.text.clone(),
+            words: result.words.clone(),
+        });
+ 
+        Ok(result)
+
     }
 
     pub async fn transcribe_live_ws(

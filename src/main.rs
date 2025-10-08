@@ -1,411 +1,364 @@
-use anyhow::Result;
-use clap::Parser;
+use anyhow::{anyhow, Context, Result};
+use clap::{Args, Parser, Subcommand};
 use crossbeam_channel::unbounded;
-use ears::{Model, TranscriptionOptions, audio, config::{AppConfig, ensure_ref_audio}};
-use std::thread;
+use ears::{audio, config::AppConfig, server, TranscriptionOptions, WebSocketMessage, WordTimestamp};
+use futures::{SinkExt, StreamExt};
+use serde_json::json;
+use std::{
+    io::{self, Write},
+    process::{Command as ProcessCommand, Stdio},
+    thread,
+    time::Duration,
+};
+use tokio::sync::mpsc;
+use tokio_tungstenite::{connect_async, tungstenite::Message};
 
-#[derive(Debug, Parser)]
-struct Args {
-    /// The audio input file, in wav/mp3/ogg/... format. If not provided, uses microphone.
-    in_file: Option<String>,
+#[cfg(unix)]
+use libc::{kill, SIGTERM};
 
-    /// Use live microphone input instead of file.
-    #[arg(long)]
-    live: bool,
+#[derive(Parser)]
+#[command(author, version, about = "eaRS client and server controller")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
 
-    /// List available audio devices.
+    #[command(flatten)]
+    client: ClientArgs,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    #[command(subcommand)]
+    Server(ServerCommand),
+}
+
+#[derive(Subcommand)]
+enum ServerCommand {
+    Start(ServerStartArgs),
+    Stop,
+    #[command(hide = true)]
+    Run(ServerStartArgs),
+}
+
+#[derive(Args, Clone)]
+struct ClientArgs {
+    /// List available audio input devices
     #[arg(long)]
     list_devices: bool,
 
-    /// The repo where to get the model from.
-    #[arg(long, default_value = "kyutai/stt-1b-en_fr-candle")]
-    hf_repo: String,
-
-    /// Run the model on cpu.
-    #[arg(long)]
-    cpu: bool,
-
-    /// Display word level timestamps.
-    #[arg(long)]
-    timestamps: bool,
-
-    /// Display the level of voice activity detection (VAD).
-    #[arg(long)]
-    vad: bool,
-
-    /// Save the audio recording to a file (WAV format).
-    #[arg(long)]
-    save_audio: Option<String>,
-
-    /// Select audio input device by index. Use --list-devices to see available devices.
+    /// Select audio input device by index
     #[arg(long)]
     device: Option<usize>,
 
-    /// Inject reference audio for language priming (ISO 639-1: de, ja, es, it)
-    #[arg(long, short = 'l', value_parser = ["de", "ja", "es", "it"])]
-    lang: Option<String>,
-
-     /// Start WebSocket server on specified port to stream transcription results (default from config)
-     #[arg(long)]
-     ws: Option<u16>,
-
-     /// Unified mode: enable global hotkeys in this process
-     #[arg(long, default_value_t = false)]
-     hotkeys: bool,
-
-     /// Unified mode: type final transcriptions into focused field
-     #[arg(long, default_value_t = false)]
-     dictation: bool,
-
-     /// Show system tray icon with controls
-     #[arg(long, default_value_t = false)]
-     tray: bool,
-
-     /// Unified mode: cycle languages with Ctrl+Shift+L (WS SetLanguage)
-     #[arg(long, default_value_t = true)]
-     hotkey_lang_cycle: bool,
-
-
-    /// Automatically terminate after no voice activity for specified seconds
+    /// Override transcription server WebSocket URL
     #[arg(long)]
-    vad_timeout: Option<f64>,
+    server: Option<String>,
 
-    /// Enable Whisper enhancement for higher accuracy transcription
+    /// Print final output with per-word timestamps
+    #[arg(long, default_value_t = false)]
+    timestamps: bool,
+}
+
+#[derive(Args, Clone)]
+struct ServerStartArgs {
+    /// Address to bind the server to (default: 0.0.0.0:<config port>)
+    #[arg(long)]
+    bind: Option<String>,
+
+    /// Hugging Face repository containing the Kyutai model
+    #[arg(long, default_value = "kyutai/stt-1b-en_fr-candle")]
+    hf_repo: String,
+
+    /// Force CPU execution instead of GPU/Metal
+    #[arg(long, default_value_t = false)]
+    cpu: bool,
+
+    /// Emit word-level timestamps in server events
+    #[arg(long, default_value_t = false)]
+    timestamps: bool,
+
+    /// Enable voice-activity detection in the server session
+    #[arg(long, default_value_t = false)]
+    vad: bool,
+
+    /// Force-enable Whisper enhancements (requires --features whisper)
     #[cfg(feature = "whisper")]
-    #[arg(long, short = 'w')]
+    #[arg(long, default_value_t = false)]
     whisper: bool,
-
-    /// Override default Whisper model (large-v3-turbo, large-v3, medium, etc.)
-    #[cfg(feature = "whisper")]
-    #[arg(long)]
-    whisper_model: Option<String>,
-
-    /// Override Whisper quantization level (Q4_K_M, Q5_K_M, Q8_0, f16, f32)
-    #[cfg(feature = "whisper")]
-    #[arg(long)]
-    whisper_quantization: Option<String>,
-
-    /// Comma-separated list of languages for Whisper enhancement (ISO 639-1: de,ja,es,it)
-    #[cfg(feature = "whisper")]
-    #[arg(long)]
-    whisper_languages: Option<String>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args = Args::parse();
+    let cli = Cli::parse();
+    let Cli { command, client } = cli;
 
+    if let Some(Commands::Server(server_cmd)) = command {
+        handle_server_command(server_cmd).await?;
+        return Ok(());
+    }
+
+    run_client(client).await
+}
+
+async fn handle_server_command(command: ServerCommand) -> Result<()> {
+    match command {
+        ServerCommand::Start(args) => start_server(args),
+        ServerCommand::Stop => stop_server(),
+        ServerCommand::Run(args) => run_server(args).await,
+    }
+}
+
+fn start_server(args: ServerStartArgs) -> Result<()> {
+    if let Some(pid) = server::read_pid_file()? {
+        if server::is_process_alive(pid) {
+            return Err(anyhow!("ears server already running (pid {})", pid));
+        }
+        server::remove_pid_file()?;
+    }
+
+    let mut cmd = ProcessCommand::new(std::env::current_exe()?);
+    cmd.arg("server").arg("run");
+    append_server_args(&mut cmd, &args);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::inherit());
+    cmd.stderr(Stdio::inherit());
+
+    let child = cmd.spawn().context("failed to spawn ears server process")?;
+    println!("ears server started (pid {})", child.id());
+    Ok(())
+}
+
+fn stop_server() -> Result<()> {
+    match server::read_pid_file()? {
+        Some(pid) => {
+            if server::is_process_alive(pid) {
+                #[cfg(unix)]
+                unsafe {
+                    if kill(pid, SIGTERM) != 0 {
+                        return Err(io::Error::last_os_error())
+                            .context("failed to send SIGTERM to ears server");
+                    }
+                }
+
+                #[cfg(not(unix))]
+                {
+                    return Err(anyhow!(
+                        "stopping the server is currently supported only on unix platforms"
+                    ));
+                }
+
+                for _ in 0..50 {
+                    if !server::is_process_alive(pid) {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(100));
+                }
+            } else {
+                println!("No running server found for PID {} (removing stale pid file).", pid);
+            }
+
+            server::remove_pid_file()?;
+            println!("ears server stopped.");
+        }
+        None => {
+            println!("ears server is not running.");
+        }
+    }
+
+    Ok(())
+}
+
+async fn run_server(args: ServerStartArgs) -> Result<()> {
+    let options = build_server_options(&args)?;
+    server::run(options).await
+}
+
+fn append_server_args(cmd: &mut ProcessCommand, args: &ServerStartArgs) {
+    if let Some(bind) = &args.bind {
+        cmd.arg("--bind").arg(bind);
+    }
+    if args.cpu {
+        cmd.arg("--cpu");
+    }
+    if args.timestamps {
+        cmd.arg("--timestamps");
+    }
+    if args.vad {
+        cmd.arg("--vad");
+    }
+    if args.hf_repo != "kyutai/stt-1b-en_fr-candle" {
+        cmd.arg("--hf-repo").arg(&args.hf_repo);
+    }
+    #[cfg(feature = "whisper")]
+    if args.whisper {
+        cmd.arg("--whisper");
+    }
+}
+
+fn build_server_options(args: &ServerStartArgs) -> Result<server::ServerOptions> {
+    let config = AppConfig::load()?;
+
+    let bind_addr = args
+        .bind
+        .clone()
+        .unwrap_or_else(|| format!("0.0.0.0:{}", config.server.websocket_port));
+
+    let mut transcription = TranscriptionOptions::default();
+    transcription.timestamps = args.timestamps;
+    transcription.vad = args.vad;
+
+    #[cfg(feature = "whisper")]
+    {
+        let whisper_enabled = if args.whisper {
+            true
+        } else {
+            config.whisper.enabled
+        };
+        transcription.whisper_enabled = whisper_enabled;
+        if whisper_enabled {
+            transcription.whisper_model = Some(config.whisper.default_model.clone());
+            transcription.whisper_quantization = Some(config.whisper.quantization.clone());
+            transcription.whisper_languages = Some(config.whisper.languages.clone());
+        }
+    }
+
+    Ok(server::ServerOptions {
+        bind_addr,
+        hf_repo: args.hf_repo.clone(),
+        cpu: args.cpu,
+        transcription,
+    })
+}
+
+async fn run_client(args: ClientArgs) -> Result<()> {
     if args.list_devices {
         return audio::list_audio_devices();
     }
 
-    // Load config and ensure ref_audio is available
     let config = AppConfig::load()?;
-    if config.storage.model_dir == "default" {
-        
-    } else {
-        
-    }
-    
-    ensure_ref_audio(&config).await?;
+    let server_url = args
+        .server
+        .clone()
+        .unwrap_or_else(|| format!("ws://127.0.0.1:{}/", config.server.websocket_port));
 
-    // Parse whisper languages if provided (feature-gated)
-    #[cfg(feature = "whisper")]
-    let whisper_languages = args.whisper_languages.as_ref().map(|langs| {
-        langs.split(',').map(|s| s.trim().to_string()).collect()
+    let (audio_tx, audio_rx) = unbounded();
+    let device_index = args.device;
+
+    thread::spawn(move || {
+        if let Err(err) = audio::start_audio_capture(audio_tx, device_index) {
+            eprintln!("Audio capture error: {err}");
+        }
     });
-    #[cfg(not(feature = "whisper"))]
-    let whisper_languages: Option<Vec<String>> = None;
 
-    // Use --lang directly as ISO-639-1 for Whisper (de/ja/es/it)
-    let whisper_force_lang = args.lang.clone();
+    let (ws_stream, _) = connect_async(&server_url)
+        .await
+        .with_context(|| format!("failed to connect to {}", server_url))?;
+    let (mut ws_writer, mut ws_reader) = ws_stream.split();
 
-    // Feature-gated whisper options
-    #[cfg(feature = "whisper")]
-    let whisper_enabled = args.whisper;
-    #[cfg(not(feature = "whisper"))]
-    let whisper_enabled = false;
-
-    #[cfg(feature = "whisper")]
-    let whisper_model = args.whisper_model.clone();
-    #[cfg(not(feature = "whisper"))]
-    let whisper_model: Option<String> = None;
-
-    #[cfg(feature = "whisper")]
-    let whisper_quantization = args.whisper_quantization.clone();
-    #[cfg(not(feature = "whisper"))]
-    let whisper_quantization: Option<String> = None;
-
-    let options = TranscriptionOptions {
-        timestamps: args.timestamps,
-        vad: args.vad,
-        save_audio: args.save_audio.clone(),
-        vad_timeout: args.vad_timeout,
-        whisper_enabled,
-        whisper_model,
-        whisper_quantization,
-        whisper_languages,
-        whisper_force_lang,
-    };
-
-    if args.live || args.in_file.is_none() {
-        // Live microphone mode
-        
-        let mut model = if config.storage.model_dir == "default" { 
-            Model::load_from_hf(&args.hf_repo, args.cpu, options, None).await?
-        } else { 
-            let model_dir = config.model_dir_path();
-            Model::load_from_hf(&args.hf_repo, args.cpu, options, Some(&model_dir)).await?
-        };
-
-        if let Some(ref lang) = args.lang {
-            let ref_code = match lang.as_str() { "de" => "ger", "ja" => "jap", "es" => "esp", "it" => "ita", other => other };
-            let path = config.ref_audio_path().join(format!("{}.mp3", ref_code));
-            if let Err(e) = model.prime_with_audio(&path) {
-                eprintln!("Warning: failed to process reference audio {}: {}", path.display(), e);
-            }
-        }
-
-        let device_index = args.device;
-        let save_audio_path = args.save_audio.as_deref();
-        let ws_port = args.ws.or(Some(config.server.websocket_port));
-        
-         let result = loop {
-             let (audio_tx, audio_rx) = unbounded();
-
-             // Start audio capture in a separate thread
-             let _audio_handle = thread::spawn(move || {
-                 if let Err(e) = audio::start_audio_capture(audio_tx, device_index) {
-                     eprintln!("Audio capture error: {}", e);
-                 }
-             });
-
-             let transcription_result = if let Some(ws_port) = ws_port {
-                 eprintln!("Starting WebSocket server on port {}", ws_port);
-                 eprintln!("Starting live transcription with WebSocket streaming. Press Ctrl+C to stop.");
-                 eprintln!("WebSocket endpoint: ws://localhost:{}/", ws_port);
-
-                 // If unified dictation or hotkeys requested, spawn clients now
-                 if args.dictation || args.hotkeys {
-                     let url = format!("ws://localhost:{}/", ws_port);
-
-                     if args.dictation {
-                         let url1 = url.clone();
-                         std::thread::spawn(move || {
-                             use enigo::{Enigo, Keyboard, Key, Settings};
-                             use futures_util::StreamExt;
-                             use tokio_tungstenite::{connect_async, tungstenite::Message};
-                             let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-                             rt.block_on(async move {
-                                 let (ws, _) = match connect_async(&url1).await { Ok(x) => x, Err(_) => return };
-                                 let (_write, mut read) = ws.split();
-                                 let mut enigo = Enigo::new(&Settings::default()).ok();
-                                 while let Some(msg) = read.next().await {
-                                     if let Ok(Message::Text(txt)) = msg {
-                                         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) {
-                                             if v.get("type").and_then(|s| s.as_str()) == Some("final") {
-                                                 if let Some(text) = v.get("text").and_then(|t| t.as_str()) {
-                                                     if let Some(ref mut e) = enigo { let _ = e.text(text); let _ = e.key(Key::Space, enigo::Direction::Click); }
-                                                 }
-                                             }
-                                         }
-                                     }
-                                 }
-                             });
-                         });
-                     }
-
-                     if args.tray {
-                         let url_t = url.clone();
-                         std::thread::spawn(move || {
-
-                             use serde_json::json;
-                             use futures_util::{SinkExt, StreamExt};
-                             use tokio_tungstenite::{connect_async, tungstenite::Message};
-                             use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
-                             use tray_icon::{TrayIconBuilder, Icon};
-
-                             // Build menu
-                             let menu = Menu::new();
-                             let toggle = MenuItem::new("Toggle Dictation", true, None);
-                             let _ = menu.append(&toggle);
-                             let _ = menu.append(&PredefinedMenuItem::separator());
-                             let langs = ["en","de","fr","es","ja"];
-                             let lang_items: Vec<MenuItem> = langs.iter().map(|&l| MenuItem::new(l.to_uppercase(), true, None)).collect();
-                             for item in &lang_items { let _ = menu.append(item); }
-                             let _ = menu.append(&PredefinedMenuItem::separator());
-                             let quit = MenuItem::new("Quit", true, None);
-                             let _ = menu.append(&quit);
-
-                             // Load icon from embedded bytes
-                             let bytes = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/logo/ears_logo_rounded_white_on_black.png"));
-                             let img = image::load_from_memory(bytes).expect("icon").into_rgba8();
-                             let (w,h) = img.dimensions();
-                             let icon = Icon::from_rgba(img.into_raw(), w, h).expect("icon rgba");
-
-                             let _tray = TrayIconBuilder::new()
-                                 .with_tooltip("eaRS")
-                                 .with_icon(icon)
-                                 .with_menu(Box::new(menu))
-                                 .build()
-                                 .expect("tray");
-
-                             // WebSocket control runtime
-                             let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-                             rt.block_on(async move {
-                                 let (mut write, mut read) = match connect_async(&url_t).await { Ok((ws,_)) => ws.split(), Err(_) => return };
-                                 let _ = write.send(Message::Text(json!({"type":"get_status"}).to_string())).await;
-                                 let mut paused = true;
-                                 // update paused from first status if any
-                                 if let Some(Ok(Message::Text(txt))) = read.next().await {
-                                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) {
-                                         if v.get("type").and_then(|s| s.as_str()) == Some("status") {
-                                             if let Some(b) = v.get("paused").and_then(|b| b.as_bool()) { paused = b; }
-                                         }
-                                     }
-                                 }
-                                 let rx = MenuEvent::receiver();
-                                 loop {
-                                     if let Ok(event) = rx.recv() {
-                                         let id = event.id;
-                                         if id == toggle.id() {
-                                             let cmd = if paused { "resume" } else { "pause" };
-                                             let _ = write.send(Message::Text(json!({"type": cmd}).to_string())).await;
-                                             paused = !paused;
-                                         } else if id == quit.id() {
-                                             std::process::exit(0);
-                                         } else {
-                                             for (i, item) in lang_items.iter().enumerate() {
-                                                 if id == item.id() {
-                                                     let lang = langs[i];
-                                                     let _ = write.send(Message::Text(json!({"type":"set_language","lang":lang}).to_string())).await;
-                                                 }
-                                             }
-                                         }
-                                     }
-                                 }
-                             });
-                         });
-                     }
-
-                     if args.hotkeys {
-                         let url2 = url.clone();
-                         tokio::spawn(async move {
-                             use futures_util::{SinkExt, StreamExt};
-                             use rdev::{listen, EventType, Key};
-                             use tokio_tungstenite::{connect_async, tungstenite::Message};
-                             let (mut write, mut read) = match connect_async(&url2).await { Ok((ws,_)) => ws.split(), Err(_) => return };
-                             // start paused; request status
-                             let _ = write.send(Message::Text(serde_json::json!({"type":"get_status"}).to_string())).await;
-                             let mut paused = true;
-                             // spawn reader to update paused
-                             tokio::spawn(async move {
-                                 while let Some(Ok(Message::Text(txt))) = read.next().await {
-                                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) {
-                                         if v.get("type").and_then(|s| s.as_str()) == Some("status") {
-                                             if let Some(_b) = v.get("paused").and_then(|b| b.as_bool()) {
-                                                 // Status received; could update UI here
-                                             }
-                                         }
-                                     }
-                                 }
-                             });
-                             // block in listen (runs in this spawned task)
-                             let _ = listen(move |ev| {
-                                 static mut CTRL: bool = false; static mut SHIFT: bool = false;
-                                 match ev.event_type {
-                                     EventType::KeyPress(Key::ControlLeft) | EventType::KeyPress(Key::ControlRight) => unsafe { CTRL = true; },
-                                     EventType::KeyRelease(Key::ControlLeft) | EventType::KeyRelease(Key::ControlRight) => unsafe { CTRL = false; },
-                                     EventType::KeyPress(Key::ShiftLeft) | EventType::KeyPress(Key::ShiftRight) => unsafe { SHIFT = true; },
-                                     EventType::KeyRelease(Key::ShiftLeft) | EventType::KeyRelease(Key::ShiftRight) => unsafe { SHIFT = false; },
-                                     EventType::KeyRelease(Key::KeyV) => unsafe {
-                                         if CTRL && SHIFT {
-                                             let cmd = if paused { "resume" } else { "pause" };
-                                             let _ = futures::executor::block_on(write.send(Message::Text(serde_json::json!({"type": cmd}).to_string())));
-                                             paused = !paused;
-                                         }
-                                     },
-                                     EventType::KeyRelease(Key::KeyL) if args.hotkey_lang_cycle => unsafe {
-                                         if CTRL && SHIFT {
-                                             static mut IDX: usize = 0;
-                                             const LIST: [&str;5] = ["en","de","fr","es","ja"];
-                                             IDX = (IDX+1)%LIST.len();
-                                             let lang = LIST[IDX];
-                                             let _ = futures::executor::block_on(write.send(Message::Text(serde_json::json!({"type":"set_language","lang":lang}).to_string())));
-                                         }
-                                     },
-                                     _ => {}
-                                 }
-                             });
-                         });
-                     }
-                 }
-                 
-                 // Run live transcription with WebSocket streaming
-                 model.transcribe_live_ws(audio_rx, save_audio_path, ws_port).await
-             } else {
-                 eprintln!("Starting live transcription. Press Ctrl+C to stop.");
-                 eprintln!("Transcription output:");
-                 eprintln!("{}", "-".repeat(50));
-
-                 // Run live transcription
-                 model.transcribe_live(audio_rx, save_audio_path)
-             };
-
-
-            match transcription_result {
-                Ok(result) => break result,
-                Err(e) => {
-                    eprintln!("Transcription error: {}", e);
-                    eprintln!("Attempting to restart audio capture...");
-                    thread::sleep(std::time::Duration::from_secs(2));
-                    continue;
+    let (writer_tx, mut writer_rx) = mpsc::unbounded_channel::<WriterCommand>();
+    let writer_handle = tokio::spawn(async move {
+        while let Some(cmd) = writer_rx.recv().await {
+            match cmd {
+                WriterCommand::Audio(bytes) => {
+                    if ws_writer.send(Message::Binary(bytes)).await.is_err() {
+                        break;
+                    }
+                }
+                WriterCommand::Stop => {
+                    let _ = ws_writer
+                        .send(Message::Text(json!({ "type": "stop" }).to_string()))
+                        .await;
+                    break;
                 }
             }
-        };
+        }
+        let _ = ws_writer.close().await;
+    });
 
+    let audio_writer = writer_tx.clone();
+    thread::spawn(move || {
+        while let Ok(chunk) = audio_rx.recv() {
+            if audio_writer
+                .send(WriterCommand::Audio(encode_chunk(&chunk)))
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+
+    let mut printed_live = false;
+    let mut final_result: Option<(String, Vec<WordTimestamp>)> = None;
+
+    'client: loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                let _ = writer_tx.send(WriterCommand::Stop);
+                break;
+            }
+            maybe_msg = ws_reader.next() => {
+                match maybe_msg {
+                    Some(Ok(Message::Text(payload))) => {
+                        if let Ok(event) = serde_json::from_str::<WebSocketMessage>(&payload) {
+                            match event {
+                                WebSocketMessage::Word { word, end_time, .. } => {
+                                    if !args.timestamps && end_time.is_none() {
+                                        print!(" {}", word);
+                                        io::stdout().flush().ok();
+                                        printed_live = true;
+                                    }
+                                }
+                                WebSocketMessage::Final { text, words } => {
+                                    final_result = Some((text, words));
+                                    break 'client;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None => {
+                        break 'client;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    let _ = writer_tx.send(WriterCommand::Stop);
+    let _ = writer_handle.await;
+
+    if let Some((text, words)) = final_result {
         if args.timestamps {
-            for word in result.words {
+            for word in words {
                 if let Some(end_time) = word.end_time {
-                    println!("[{:5.2}-{:5.2}] {}", word.start_time, end_time, word.word);
+                    println!("[{:.2}-{:.2}] {}", word.start_time, end_time, word.word);
                 } else {
-                    println!("[{:5.2}-     ] {}", word.start_time, word.word);
+                    println!("[{:.2}-     ] {}", word.start_time, word.word);
                 }
             }
         } else {
-            println!("{}", result.text);
-        }
-
-        // Audio handle cleanup is managed by the reconnection loop
-    } else if let Some(ref in_file) = args.in_file {
-        // File mode
-        
-        
-        let mut model = if config.storage.model_dir == "default" { 
-            Model::load_from_hf(&args.hf_repo, args.cpu, options, None).await?
-        } else { 
-            let model_dir = config.model_dir_path();
-            Model::load_from_hf(&args.hf_repo, args.cpu, options, Some(&model_dir)).await?
-        };
-        
-
-        let result = model.transcribe_file(in_file, args.save_audio.as_deref())?;
-
-        if args.timestamps {
-            for word in result.words {
-                if let Some(end_time) = word.end_time {
-                    println!("[{:5.2}-{:5.2}] {}", word.start_time, end_time, word.word);
-                } else {
-                    println!("[{:5.2}-     ] {}", word.start_time, word.word);
-                }
+            if printed_live {
+                println!();
             }
-        } else {
-            println!("{}", result.text);
+            println!("{text}");
         }
     } else {
-        eprintln!("Either provide a file or use --live for microphone input");
-        std::process::exit(1);
+        eprintln!("No transcription received from server.");
     }
 
     Ok(())
+}
+
+enum WriterCommand {
+    Audio(Vec<u8>),
+    Stop,
+}
+
+fn encode_chunk(chunk: &[f32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(chunk.len() * 4);
+    for sample in chunk {
+        bytes.extend_from_slice(&sample.to_le_bytes());
+    }
+    bytes
 }
