@@ -2,6 +2,7 @@ use anyhow::Result;
 use candle::{Device, Tensor};
 use crossbeam_channel::Receiver;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 pub mod config;
@@ -814,6 +815,7 @@ impl Model {
         // Watch channel used to pause or resume transcription
         let (pause_tx, _pause_rx) = watch::channel(true);
         let pause_tx = Arc::new(pause_tx);
+        let auto_resume_pending = Arc::new(AtomicBool::new(true));
 
         // Track language and settings
         let (lang_tx, lang_rx_watch) = watch::channel::<Option<String>>(None);
@@ -824,12 +826,14 @@ impl Model {
         let ws_tx_clone = ws_tx.clone();
         let restart_tx_clone = restart_tx.clone();
         let pause_tx_clone = pause_tx.clone();
+        let auto_resume_clone = auto_resume_pending.clone();
         let lang_tx_clone = lang_tx.clone();
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
                 let ws_tx = ws_tx_clone.clone();
                 let restart_tx = restart_tx_clone.clone();
                 let pause_tx = pause_tx_clone.clone();
+                let auto_resume_pending = auto_resume_clone.clone();
                 let lang_tx = lang_tx_clone.clone();
                 tokio::spawn(async move {
                     let ws_stream = match accept_async(stream).await {
@@ -854,9 +858,11 @@ impl Model {
                                                 let _ = restart_tx.send(());
                                             }
                                             WebSocketCommand::Pause => {
+                                                auto_resume_pending.store(false, Ordering::SeqCst);
                                                 let _ = pause_tx.send(true);
                                             }
                                             WebSocketCommand::Resume => {
+                                                auto_resume_pending.store(false, Ordering::SeqCst);
                                                 let _ = pause_tx.send(false);
                                             }
                                             WebSocketCommand::SetLanguage { lang } => {
@@ -966,6 +972,7 @@ impl Model {
         }
 
         loop {
+            auto_resume_pending.store(true, Ordering::SeqCst);
             let mut words = Vec::new();
             let mut current_text = String::new();
             let mut last_word: Option<(String, f64)> = None;
@@ -974,7 +981,9 @@ impl Model {
             let mut restart = false;
             let mut paused = *pause_rx.borrow();
 
-            eprintln!("Starting transcription session (paused - send Resume command to begin)...");
+            eprintln!(
+                "Starting transcription session (paused - will auto-resume on incoming audio)..."
+            );
 
             // Apply initial language priming if any
             if current_lang.is_some() {
@@ -1018,7 +1027,16 @@ impl Model {
                     }
                     Some(pcm_chunk) = pcm_rx.recv() => {
                         if paused {
-                            continue;
+                            if auto_resume_pending.load(Ordering::SeqCst) {
+                                eprintln!(
+                                    "Audio received while paused - automatically resuming session"
+                                );
+                                auto_resume_pending.store(false, Ordering::SeqCst);
+                                let _ = pause_tx.send(false);
+                                paused = false;
+                            } else {
+                                continue;
+                            }
                         }
                         if save_audio.is_some() {
                             all_audio.extend_from_slice(&pcm_chunk);
