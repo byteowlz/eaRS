@@ -13,6 +13,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub server: ServerConfig,
     #[serde(default)]
+    pub dictation: DictationConfig,
+    #[serde(default)]
     pub hotkeys: HotkeyConfig,
 }
 
@@ -55,6 +57,12 @@ pub struct ServerConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DictationConfig {
+    pub enabled: bool,
+    pub type_live_words: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HotkeyConfig {
     pub enable_internal: bool,
     pub toggle: String,
@@ -88,16 +96,26 @@ impl Default for ServerConfig {
     }
 }
 
+impl Default for DictationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            type_live_words: true,
+        }
+    }
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
             storage: StorageConfig {
-                model_dir: "default".to_string(), // "default" means use HuggingFace default cache
+                model_dir: "default".to_string(),
                 ref_audio: "~/.local/share/ears/ref_audio".to_string(),
             },
             model: ModelConfig::default(),
             whisper: WhisperConfig::default(),
             server: ServerConfig::default(),
+            dictation: DictationConfig::default(),
             hotkeys: HotkeyConfig::default(),
         }
     }
@@ -160,12 +178,12 @@ impl AppConfig {
                         
                         let old_config: OldConfig = toml::from_str(&contents)?;
                         
-                        // Create new config with defaults for whisper
                         let new_config = AppConfig {
                             storage: old_config.storage,
                             model: ModelConfig::default(),
                             whisper: WhisperConfig::default(),
                             server: ServerConfig::default(),
+                            dictation: DictationConfig::default(),
                             hotkeys: HotkeyConfig::default(),
                         };
                         

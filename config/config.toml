@@ -47,11 +47,17 @@ websocket_port = 8765
 # Note: VAD timeout is set per-command-line invocation (--vad-timeout <sec>).
 # ears-auto does not use VAD timeout by default (runs indefinitely until manually stopped).
 
+[dictation]
+# Enable dictation mode (types transcribed text directly into any focused textbox)
+enabled = false
+# Type words immediately as they arrive (true) or only when final transcription is ready (false)
+type_live_words = true
+
 [hotkeys]
-# Enable internal global hotkeys (disable if using WM binds like Hyprland)
+# Enable internal global hotkeys for dictation control (disable if using WM binds like Hyprland)
 enable_internal = true
 # Toggle dictation pause/resume (default: ctrl+shift+v)
 toggle = "ctrl+shift+v"
 # Cycle language among en, de, fr, es, ja (default: ctrl+shift+l)
 language_cycle = "ctrl+shift+l"
-# Note: On macOS, grant Accessibility and Input Monitoring permissions to your terminal or ears-auto/ears-daemon binary.
+# Note: On macOS, grant Accessibility and Input Monitoring permissions to your terminal or ears-dictation binary.

@@ -32,6 +32,8 @@ struct Cli {
 enum Commands {
     #[command(subcommand)]
     Server(ServerCommand),
+    #[command(subcommand)]
+    Dictation(DictationCommand),
 }
 
 #[derive(Subcommand)]
@@ -41,6 +43,15 @@ enum ServerCommand {
     Status,
     #[command(hide = true)]
     Run(ServerStartArgs),
+}
+
+#[derive(Subcommand)]
+enum DictationCommand {
+    Start,
+    Stop,
+    Status,
+    #[command(about = "Run dictation in foreground with debug output")]
+    Debug,
 }
 
 #[derive(Args, Clone)]
@@ -107,9 +118,16 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let Cli { command, client } = cli;
 
-    if let Some(Commands::Server(server_cmd)) = command {
-        handle_server_command(server_cmd).await?;
-        return Ok(());
+    match command {
+        Some(Commands::Server(server_cmd)) => {
+            handle_server_command(server_cmd).await?;
+            return Ok(());
+        }
+        Some(Commands::Dictation(dictation_cmd)) => {
+            handle_dictation_command(dictation_cmd)?;
+            return Ok(());
+        }
+        None => {}
     }
 
     run_client(client).await
@@ -122,6 +140,31 @@ async fn handle_server_command(command: ServerCommand) -> Result<()> {
         ServerCommand::Status => check_server_status(),
         ServerCommand::Run(args) => run_server(args).await,
     }
+}
+
+fn handle_dictation_command(command: DictationCommand) -> Result<()> {
+    match command {
+        DictationCommand::Start => start_dictation(),
+        DictationCommand::Stop => stop_dictation(),
+        DictationCommand::Status => check_dictation_status(),
+        DictationCommand::Debug => run_dictation_foreground(),
+    }
+}
+
+fn run_dictation_foreground() -> Result<()> {
+    let exe = std::env::current_exe()?;
+    let exe_dir = exe.parent().context("failed to get exe directory")?;
+    let dictation_bin = exe_dir.join("ears-dictation");
+
+    let status = ProcessCommand::new(&dictation_bin)
+        .status()
+        .context("failed to run ears-dictation")?;
+
+    if !status.success() {
+        return Err(anyhow!("ears-dictation exited with error"));
+    }
+
+    Ok(())
 }
 
 fn start_server(args: ServerStartArgs) -> Result<()> {
@@ -237,6 +280,26 @@ fn stop_server() -> Result<()> {
         }
         None => {
             println!("ears server is not running.");
+        }
+    }
+
+    if let Some(dictation_pid) = read_dictation_pid()? {
+        if server::is_process_alive(dictation_pid) {
+            println!("stopping associated dictation process (pid {})...", dictation_pid);
+            #[cfg(unix)]
+            unsafe {
+                let _ = kill(dictation_pid, SIGTERM);
+            }
+            
+            for _ in 0..50 {
+                if !server::is_process_alive(dictation_pid) {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+            
+            let _ = std::fs::remove_file(get_dictation_pid_file());
+            println!("ears dictation stopped.");
         }
     }
 
@@ -484,4 +547,114 @@ fn encode_chunk(chunk: &[f32]) -> Vec<u8> {
         bytes.extend_from_slice(&sample.to_le_bytes());
     }
     bytes
+}
+
+fn get_dictation_pid_file() -> std::path::PathBuf {
+    let state_dir = if let Ok(xdg_state) = std::env::var("XDG_STATE_HOME") {
+        if !xdg_state.is_empty() {
+            std::path::PathBuf::from(xdg_state)
+        } else {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            std::path::PathBuf::from(home).join(".local/state")
+        }
+    } else {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        std::path::PathBuf::from(home).join(".local/state")
+    };
+    state_dir.join("ears").join("dictation.pid")
+}
+
+fn read_dictation_pid() -> Result<Option<i32>> {
+    let pid_file = get_dictation_pid_file();
+    if !pid_file.exists() {
+        return Ok(None);
+    }
+    let contents = std::fs::read_to_string(&pid_file)?;
+    Ok(contents.trim().parse::<i32>().ok())
+}
+
+fn start_dictation() -> Result<()> {
+    if let Some(pid) = read_dictation_pid()? {
+        if server::is_process_alive(pid) {
+            return Err(anyhow!("ears dictation already running (pid {})", pid));
+        }
+        let _ = std::fs::remove_file(get_dictation_pid_file());
+    }
+
+    let exe = std::env::current_exe()?;
+    let exe_dir = exe.parent().context("failed to get exe directory")?;
+    let dictation_bin = exe_dir.join("ears-dictation");
+
+    let mut cmd = ProcessCommand::new(&dictation_bin);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::null());
+
+    let child = cmd.spawn().context("failed to spawn ears-dictation process")?;
+    let pid = child.id();
+
+    println!("ears dictation started (pid {})", pid);
+    println!("Use keyboard shortcut to toggle pause/resume (see config)");
+
+    Ok(())
+}
+
+fn stop_dictation() -> Result<()> {
+    match read_dictation_pid()? {
+        Some(pid) => {
+            if server::is_process_alive(pid) {
+                #[cfg(unix)]
+                unsafe {
+                    if kill(pid, SIGTERM) != 0 {
+                        return Err(io::Error::last_os_error())
+                            .context("failed to send SIGTERM to ears-dictation");
+                    }
+                }
+
+                #[cfg(not(unix))]
+                {
+                    return Err(anyhow!(
+                        "stopping dictation is currently supported only on unix platforms"
+                    ));
+                }
+
+                for _ in 0..50 {
+                    if !server::is_process_alive(pid) {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(100));
+                }
+            } else {
+                println!(
+                    "No running dictation process found for PID {} (removing stale pid file).",
+                    pid
+                );
+            }
+
+            let _ = std::fs::remove_file(get_dictation_pid_file());
+            println!("ears dictation stopped.");
+        }
+        None => {
+            println!("ears dictation is not running.");
+        }
+    }
+
+    Ok(())
+}
+
+fn check_dictation_status() -> Result<()> {
+    match read_dictation_pid()? {
+        Some(pid) => {
+            if server::is_process_alive(pid) {
+                println!("ears dictation is running (pid {})", pid);
+            } else {
+                println!("ears dictation is not running (stale pid file exists)");
+            }
+        }
+        None => {
+            println!("ears dictation is not running");
+        }
+    }
+
+    Ok(())
 }
