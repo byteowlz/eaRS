@@ -61,3 +61,14 @@ toggle = "ctrl+shift+v"
 # Cycle language among en, de, fr, es, ja (default: ctrl+shift+l)
 language_cycle = "ctrl+shift+l"
 # Note: On macOS, grant Accessibility and Input Monitoring permissions to your terminal or ears-dictation binary.
+
+[subs]
+
+font = "JetBrainsMono NerdFond"
+# Position of the subtitle bar in percent relative to the top left corner of the screen
+x_position = 50
+y_position = 90
+
+# width and height in percentage relative to the height and width of the screen
+width = 90
+heigth = 10
