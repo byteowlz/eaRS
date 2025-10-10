@@ -16,6 +16,8 @@ pub struct AppConfig {
     pub dictation: DictationConfig,
     #[serde(default)]
     pub hotkeys: HotkeyConfig,
+    #[serde(default)]
+    pub subs: SubsConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,6 +71,15 @@ pub struct HotkeyConfig {
     pub language_cycle: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubsConfig {
+    pub font: String,
+    pub x_position: u32,
+    pub y_position: u32,
+    pub width: u32,
+    pub heigth: u32,
+}
+
 impl Default for ModelConfig {
     fn default() -> Self {
         Self {
@@ -105,6 +116,18 @@ impl Default for DictationConfig {
     }
 }
 
+impl Default for SubsConfig {
+    fn default() -> Self {
+        Self {
+            font: "JetBrainsMono NerdFont".to_string(),
+            x_position: 50,
+            y_position: 90,
+            width: 90,
+            heigth: 10,
+        }
+    }
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -117,6 +140,7 @@ impl Default for AppConfig {
             server: ServerConfig::default(),
             dictation: DictationConfig::default(),
             hotkeys: HotkeyConfig::default(),
+            subs: SubsConfig::default(),
         }
     }
 }
@@ -185,6 +209,7 @@ impl AppConfig {
                             server: ServerConfig::default(),
                             dictation: DictationConfig::default(),
                             hotkeys: HotkeyConfig::default(),
+                            subs: SubsConfig::default(),
                         };
                         
                         // Save the updated config

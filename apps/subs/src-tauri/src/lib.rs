@@ -1,3 +1,5 @@
+use tauri::Manager;
+
 #[tauri::command]
 fn toggle_always_on_top(window: tauri::Window, on_top: bool) -> Result<(), String> {
     window.set_always_on_top(on_top).map_err(|e| e.to_string())
@@ -25,6 +27,33 @@ pub fn run() {
             .build(),
         )?;
       }
+
+      let config = ears::config::AppConfig::load()
+        .map_err(|e| format!("Failed to load config: {}", e))?;
+      
+      let window = app.get_webview_window("main")
+        .ok_or("Failed to get main window")?;
+
+      let monitor = window.current_monitor()
+        .map_err(|e| format!("Failed to get monitor: {}", e))?
+        .ok_or("No monitor found")?;
+      
+      let monitor_size = monitor.size();
+      let screen_width = monitor_size.width as f64;
+      let screen_height = monitor_size.height as f64;
+
+      let width = (screen_width * config.subs.width as f64 / 100.0) as u32;
+      let height = (screen_height * config.subs.heigth as f64 / 100.0) as u32;
+
+      let x = ((screen_width * config.subs.x_position as f64 / 100.0) - (width as f64 / 2.0)) as i32;
+      let y = ((screen_height * config.subs.y_position as f64 / 100.0) - (height as f64 / 2.0)) as i32;
+
+      window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }))
+        .map_err(|e| format!("Failed to set position: {}", e))?;
+      
+      window.set_size(tauri::Size::Physical(tauri::PhysicalSize { width, height }))
+        .map_err(|e| format!("Failed to set size: {}", e))?;
+
       Ok(())
     })
     .invoke_handler(tauri::generate_handler![
