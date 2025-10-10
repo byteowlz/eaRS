@@ -11,6 +11,8 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:mac": "tauri dev --config src-tauri/tauri.macos.conf.json",
+    "tauri:linux": "tauri dev --config src-tauri/tauri.linux.conf.json",
+    "tauri:linux:build": "tauri build --config src-tauri/tauri.linux.conf.json",
     "tauri:build": "tauri build"
   },
   "dependencies": {

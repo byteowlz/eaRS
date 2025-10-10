@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/main.tsx","./src/vite-env.d.ts","./src/components/theme-provider.tsx","./src/components/theme-toggle.tsx","./src/components/transcription-waveform.tsx","./src/components/ui/button.tsx","./src/components/ui/card.tsx","./src/components/ui/dropdown-menu.tsx","./src/components/ui/live-waveform.tsx","./src/lib/utils.ts"],"version":"5.9.3"}

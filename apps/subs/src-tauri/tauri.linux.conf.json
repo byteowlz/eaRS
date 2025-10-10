@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "ears-frontend",
   "version": "0.1.0",
-  "identifier": "com.tauri.dev",
+  "identifier": "com.byteowlz.ears-subs",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
@@ -17,14 +17,13 @@
         "height": 70,
         "resizable": true,
         "fullscreen": false,
-        "decorations": false,
+        "decorations": true,
         "alwaysOnTop": true,
-        "transparent": true,
-        "skipTaskbar": true,
+        "transparent": false,
+        "shadow": true,
+        "skipTaskbar": false,
         "visible": true,
-        "center": false,
-        "x": 300,
-        "y": 1000
+        "center": true
       }
     ],
     "security": {

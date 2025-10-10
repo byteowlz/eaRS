@@ -1,5 +1,5 @@
 {
-  "name": "frontend",
+  "name": "simple_gui",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -7,7 +7,11 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "tauri:mac": "tauri dev --config src-tauri/tauri.macos.conf.json",
+    "tauri:linux": "tauri dev --config src-tauri/tauri.linux.conf.json",
+    "tauri:linux:build": "tauri build --config src-tauri/tauri.linux.conf.json",
+    "tauri:build": "tauri build"
   },
   "dependencies": {
     "@radix-ui/react-dropdown-menu": "^2.1.16",

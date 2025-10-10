@@ -51,6 +51,19 @@ pub fn run() {
       let window = app.get_webview_window("main")
         .ok_or("Failed to get main window")?;
 
+      #[cfg(target_os = "linux")]
+      {
+        use webkit2gtk::WebViewExt;
+        window.with_webview(|webview| {
+          let webview = webview.inner().clone();
+          webview.connect_permission_request(|_, request| {
+            use webkit2gtk::PermissionRequestExt;
+            request.allow();
+            true
+          });
+        }).map_err(|e| format!("Failed to set permission handler: {}", e))?;
+      }
+
       let monitor = window.current_monitor()
         .map_err(|e| format!("Failed to get monitor: {}", e))?
         .ok_or("No monitor found")?;

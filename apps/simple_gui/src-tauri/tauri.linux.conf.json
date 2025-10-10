@@ -1,8 +1,8 @@
 {
-  "$schema": "https://schema.tauri.app/config/2",
-  "productName": "ears-frontend",
+  "$schema": "https://schema.tauri.app/config/2.0.0-rc",
+  "productName": "simple_gui",
   "version": "0.1.0",
-  "identifier": "com.tauri.dev",
+  "identifier": "com.byteowlz.ears-gui.dev",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
@@ -12,19 +12,11 @@
   "app": {
     "windows": [
       {
-        "title": "ears-subs",
-        "width": 1440,
-        "height": 70,
+        "title": "ears",
+        "width": 800,
+        "height": 600,
         "resizable": true,
-        "fullscreen": false,
-        "decorations": false,
-        "alwaysOnTop": true,
-        "transparent": true,
-        "skipTaskbar": true,
-        "visible": true,
-        "center": false,
-        "x": 300,
-        "y": 1000
+        "fullscreen": false
       }
     ],
     "security": {
