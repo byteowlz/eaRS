@@ -29,6 +29,11 @@ interface TranscriptionMessage {
   lang?: string
 }
 
+interface SubsStyle {
+  border_radius: number
+  border_thickness: number
+}
+
 function App() {
   const [isConnected, setIsConnected] = useState(false)
   const [isListening, setIsListening] = useState(false)
@@ -38,7 +43,8 @@ function App() {
   const [alwaysOnTop, setAlwaysOnTop] = useState(true)
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([])
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('')
-  
+  const [subsStyle, setSubsStyle] = useState<SubsStyle>({ border_radius: 5, border_thickness: 1 })
+
   const wsRef = useRef<WebSocket | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
   const workletNodeRef = useRef<AudioWorkletNode | null>(null)
@@ -48,11 +54,11 @@ function App() {
   const loadAudioDevices = async () => {
     try {
       await navigator.mediaDevices.getUserMedia({ audio: true })
-      
+
       const devices = await navigator.mediaDevices.enumerateDevices()
       const audioInputs = devices.filter(device => device.kind === 'audioinput')
       setAudioDevices(audioInputs)
-      
+
       if (audioInputs.length > 0 && !selectedDeviceId) {
         setSelectedDeviceId(audioInputs[0].deviceId)
       }
@@ -65,56 +71,56 @@ function App() {
     if (fromRate === toRate) {
       return samples
     }
-    
+
     const ratio = fromRate / toRate
     const newLength = Math.round(samples.length / ratio)
     const result = new Float32Array(newLength)
-    
+
     for (let i = 0; i < newLength; i++) {
       const srcIndex = i * ratio
       const srcIndexFloor = Math.floor(srcIndex)
       const srcIndexCeil = Math.min(srcIndexFloor + 1, samples.length - 1)
       const t = srcIndex - srcIndexFloor
-      
+
       result[i] = samples[srcIndexFloor] * (1 - t) + samples[srcIndexCeil] * t
     }
-    
+
     return result
   }
 
   const startAudio = async () => {
     try {
       const constraints: MediaStreamConstraints = {
-        audio: selectedDeviceId 
+        audio: selectedDeviceId
           ? { deviceId: { exact: selectedDeviceId } }
           : true
       }
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints)
       streamRef.current = stream
-      
+
       const audioContext = new AudioContext()
       audioContextRef.current = audioContext
-      
+
       const source = audioContext.createMediaStreamSource(stream)
       sourceRef.current = source
-      
+
       const processor = audioContext.createScriptProcessor(4096, 1, 1)
-      
+
       processor.onaudioprocess = (e) => {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
           const inputSamples = e.inputBuffer.getChannelData(0)
           const inputSampleRate = audioContext.sampleRate
           const targetSampleRate = 24000
-          
+
           const resampled = resample(inputSamples, inputSampleRate, targetSampleRate)
           wsRef.current.send(resampled.buffer)
         }
       }
-      
+
       source.connect(processor)
       processor.connect(audioContext.destination)
-      
+
       workletNodeRef.current = processor as any
       setIsListening(true)
     } catch (error) {
@@ -125,7 +131,7 @@ function App() {
 
   const stopAudio = () => {
     setIsListening(false)
-    
+
     if (workletNodeRef.current) {
       workletNodeRef.current.disconnect()
       workletNodeRef.current = null
@@ -227,8 +233,18 @@ function App() {
   }
 
   useEffect(() => {
+    const loadConfig = async () => {
+      try {
+        const style = await invoke<SubsStyle>('get_subs_style')
+        setSubsStyle(style)
+      } catch (error) {
+        console.error('Failed to load config:', error)
+      }
+    }
+
+    loadConfig()
     loadAudioDevices()
-    
+
     const timer = setTimeout(() => {
       connect()
     }, 500)
@@ -240,8 +256,15 @@ function App() {
   }, [])
 
   return (
-    <div className="h-screen w-full bg-black/80 backdrop-blur-md flex items-center relative">
-      <div 
+    <div
+      className="h-screen w-full opacity-100 backdrop-blur-md flex items-center relative"
+      style={{
+        borderRadius: `${subsStyle.border_radius}px`,
+        border: subsStyle.border_thickness > 0 ? `${subsStyle.border_thickness}px solid rgba(255, 255, 255, 0.2)` : 'none',
+        overflow: 'hidden',
+      }}
+    >
+      <div
         className="flex-1 h-full flex items-center px-6 cursor-move"
         onMouseDown={handleDragStart}
       >
@@ -286,7 +309,7 @@ function App() {
               Configure your audio source and connection settings
             </DialogDescription>
           </DialogHeader>
-          
+
           <div className="grid grid-cols-2 gap-6 py-4">
             <div className="space-y-4">
               <div className="space-y-2">

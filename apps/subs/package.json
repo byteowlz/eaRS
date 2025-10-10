@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
+    "tauri:mac": "tauri dev --config src-tauri/tauri.macos.conf.json",
     "tauri:build": "tauri build"
   },
   "dependencies": {

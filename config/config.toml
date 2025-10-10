@@ -72,3 +72,7 @@ y_position = 90
 # width and height in percentage relative to the height and width of the screen
 width = 90
 heigth = 10
+# border radius in px
+border_radius = 5
+# border-thickness in px, 0 for no border
+border-thickness = 1

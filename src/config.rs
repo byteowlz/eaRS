@@ -78,6 +78,8 @@ pub struct SubsConfig {
     pub y_position: u32,
     pub width: u32,
     pub heigth: u32,
+    pub border_radius: u32,
+    pub border_thickness: u32,
 }
 
 impl Default for ModelConfig {
@@ -124,6 +126,8 @@ impl Default for SubsConfig {
             y_position: 90,
             width: 90,
             heigth: 10,
+            border_radius: 5,
+            border_thickness: 1,
         }
     }
 }

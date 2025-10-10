@@ -1,5 +1,22 @@
 use tauri::Manager;
 
+#[derive(serde::Serialize)]
+struct SubsStyle {
+    border_radius: u32,
+    border_thickness: u32,
+}
+
+#[tauri::command]
+fn get_subs_style() -> Result<SubsStyle, String> {
+    let config = ears::config::AppConfig::load()
+        .map_err(|e| format!("Failed to load config: {}", e))?;
+    
+    Ok(SubsStyle {
+        border_radius: config.subs.border_radius,
+        border_thickness: config.subs.border_thickness,
+    })
+}
+
 #[tauri::command]
 fn toggle_always_on_top(window: tauri::Window, on_top: bool) -> Result<(), String> {
     window.set_always_on_top(on_top).map_err(|e| e.to_string())
@@ -59,7 +76,8 @@ pub fn run() {
     .invoke_handler(tauri::generate_handler![
       toggle_always_on_top,
       set_window_position,
-      start_drag
+      start_drag,
+      get_subs_style
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
