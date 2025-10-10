@@ -1,0 +1,77 @@
+{
+  "name": "@tauri-apps/tauri-inliner",
+  "version": "1.14.1",
+  "description": "Utility to inline images, CSS and JavaScript for a web page - useful for mobile sites",
+  "homepage": "http://github.com/tauri-apps/tauri-inliner",
+  "main": "lib/index.js",
+  "scripts": {
+    "cover": "tap test/*.test.js --cov --coverage-report=lcov",
+    "tap": "tap test/*.test.js --cov -R spec",
+    "test": "yarn tap",
+    "semantic-release": "semantic-release pre && npm publish && semantic-release post",
+    "lint": "eslint --ext js ./lib/**/*.js ./cli/**/*.js",
+    "lint-fix": "eslint --fix --ext js ./lib/**/*.js ./cli/**/*.js"
+  },
+  "keywords": [
+    "mobile",
+    "inline",
+    "production",
+    "build",
+    "minify"
+  ],
+  "config": {
+    "validate-commit-msg": {
+      "helpMessage": "\n-----------\n\nThere was a small validation problem with your commit message:\n\n> %s\n\nIt's not a huge problem, but a valid commit message will ensure\nwhether your commit triggers a release or not (and sometimes the\ncommit won't need to trigger a release). If you really need to, you\ncan skip the validation using `git commit --no-verify`.\n\nIf your commit is a fix, it might want to be:\n\n> fix: storage bug\n\nOr a feature:\n\n> feat: added new storage process\n\nThere's also `docs`, `test` and `chore` and a few more. To read\nhow the commit message should be formatted, please see this short\npost: https://git.io/vVCIR\n"
+    },
+    "ghooks": {
+      "commit-msg": "validate-commit-msg",
+      "pre-push": "npm test"
+    }
+  },
+  "author": "Remy Sharp",
+  "dependencies": {
+    "ansi-escapes": "^4.3.0",
+    "ansi-styles": "^4.2.1",
+    "chalk": "^3.0.0",
+    "charset": "^1.0.1",
+    "cheerio": "^0.22.0",
+    "debug": "^4.1.1",
+    "es6-promise": "^4.2.8",
+    "iconv-lite": "^0.5.0",
+    "jschardet": "^2.1.1",
+    "lodash": "^4.17.15",
+    "mime": "^2.4.4",
+    "minimist": "^1.2.0",
+    "request": "^2.88.0",
+    "svgo": "^1.3.2",
+    "then-fs": "^2.0.0",
+    "uglify-js": "^3.7.4",
+    "update-notifier": "^4.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tauri-apps/tauri-inliner.git"
+  },
+  "license": "MIT",
+  "bin": {
+    "inliner": "cli/index.js"
+  },
+  "devDependencies": {
+    "eslint": "6.8.0",
+    "eslint-config-standard": "^14.1.0",
+    "eslint-plugin-import": "2.20.0",
+    "eslint-plugin-node": "11.0.0",
+    "eslint-plugin-promise": "4.2.1",
+    "eslint-plugin-security": "1.4.0",
+    "eslint-plugin-standard": "4.0.1",
+    "ghooks": "^2.0.4",
+    "semantic-release": "^15.14.0",
+    "st": "^2.0.0",
+    "tap": "^14.10.5",
+    "tap-only": "0.0.5",
+    "validate-commit-msg": "^2.14.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

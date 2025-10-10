@@ -1,0 +1,47 @@
+{
+	"name": "is-port-reachable",
+	"version": "3.1.0",
+	"description": "Check if a local or remote port is reachable",
+	"license": "MIT",
+	"repository": "sindresorhus/is-port-reachable",
+	"author": {
+		"name": "Sindre Sorhus",
+		"email": "sindresorhus@gmail.com",
+		"url": "sindresorhus.com"
+	},
+	"contributors": [
+		"silverwind <me@silverwind.io> (github.com/silverwind)"
+	],
+	"engines": {
+		"node": ">=8"
+	},
+	"scripts": {
+		"test": "xo && ava && tsd"
+	},
+	"files": [
+		"index.js",
+		"index.d.ts"
+	],
+	"keywords": [
+		"port",
+		"reachable",
+		"local",
+		"remote",
+		"host",
+		"ip",
+		"localhost",
+		"address",
+		"connect",
+		"connectable",
+		"online",
+		"socket",
+		"tcp",
+		"is",
+		"check"
+	],
+	"devDependencies": {
+		"ava": "^2.4.0",
+		"xo": "^0.25.3",
+		"tsd": "^0.17.0"
+	}
+}

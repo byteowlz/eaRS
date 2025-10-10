@@ -1,0 +1,52 @@
+{
+  "name": "imagemin-zopfli",
+  "version": "7.0.0",
+  "description": "Zopfli imagemin plugin",
+  "license": "MIT",
+  "repository": "imagemin/imagemin-zopfli",
+  "author": {
+    "name": "Kevin Mårtensson",
+    "email": "kevinmartensson@gmail.com",
+    "url": "github.com/kevva"
+  },
+  "maintainers": [
+    {
+      "name": "Sindre Sorhus",
+      "email": "sindresorhus@gmail.com",
+      "url": "sindresorhus.com"
+    },
+    {
+      "name": "Shinnosuke Watanabe",
+      "url": "github.com/shinnn"
+    }
+  ],
+  "engines": {
+    "node": ">=10"
+  },
+  "scripts": {
+    "test": "xo && ava"
+  },
+  "files": [
+    "index.js"
+  ],
+  "keywords": [
+    "compress",
+    "image",
+    "imageminplugin",
+    "img",
+    "minify",
+    "optimize",
+    "png",
+    "zopfli",
+    "zopflipng"
+  ],
+  "dependencies": {
+    "exec-buffer": "^3.0.0",
+    "is-png": "^2.0.0",
+    "zopflipng-bin": "^6.0.0"
+  },
+  "devDependencies": {
+    "ava": "^3.8.0",
+    "xo": "^0.30.0"
+  }
+}

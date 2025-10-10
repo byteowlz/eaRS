@@ -1,0 +1,79 @@
+{
+  "name": "png2icons",
+  "description": "Create Apple ICNS and Microsoft ICO files from PNG",
+  "companyname": "idesis GmbH",
+  "copyright": "©2017, 2018, 2019, idesis GmbH",
+  "version": "2.0.1",
+  "identifier": "de.idesis.png2icons",
+  "keywords": [
+    "icns",
+    "ico",
+    "icon",
+    "icons",
+    "png"
+  ],
+  "homepage": "https://github.com/idesis-gmbh/png2icons",
+  "author": {
+    "name": "Michael Nitze",
+    "email": "michael.nitze@idesis.de",
+    "url": "https://www.idesis.de"
+  },
+  "contributors": [
+    "Ivan Kutskir (https://www.photopea.com)",
+    "Guyon Roche (https://github.com/guyonroche)",
+    "Oliver Moran (https://github.com/oliver-moran)",
+    "fiahfy (https://fiahfy.github.io/)",
+    "Reddit user imbcmdth (https://www.reddit.com/user/imbcmdth/)"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/idesis-gmbh/png2icons.git"
+  },
+  "readme": "README.md",
+  "bugs": {
+    "url": "https://github.com/idesis-gmbh/png2icons/issues",
+    "email": "produktion@idesis.de"
+  },
+  "private": false,
+  "license": "MIT",
+  "main": "png2icons.js",
+  "bin": {
+    "png2icons": "./png2icons-cli.js"
+  },
+  "files": [
+    "lib/icns-encoder.d.ts",
+    "lib/icns-encoder.js",
+    "lib/resize2.js",
+    "lib/resize2.d.ts",
+    "lib/resize3.js",
+    "lib/resize3.d.ts",
+    "lib/resize4.js",
+    "lib/resize4.d.ts",
+    "lib/UPNG.js",
+    "lib/UPNG.d.ts",
+    "lib/UZIP.js",
+    "sample/sample.png",
+    "png2icons.js",
+    "png2icons-cli.js",
+    "png2icons.d.ts"
+  ],
+  "types": "png2icons.d.ts",
+  "devDependencies": {
+    "typescript": "3.5.2",
+    "tslint": "5.18.0",
+    "@types/node": "*"
+  },
+  "scripts": {
+    "test": "node png2icons-cli.js sample/sample.png sample/sample -allwe -bc -i",
+    "test_all_bmp": "node png2icons-cli.js sample/sample.png sample/sample -all -bc -i",
+    "test_all_png": "node png2icons-cli.js sample/sample.png sample/sample -allp -bc -i",
+    "test_all_we": "node png2icons-cli.js sample/sample.png sample/sample -allwe -bc -i",
+    "test_icns": "node png2icons-cli.js sample/sample.png sample/sample -icns -bc -i",
+    "test_ico_bmp": "node png2icons-cli.js sample/sample.png sample/sample_bmp -ico -bc -i",
+    "test_ico_png": "node png2icons-cli.js sample/sample.png sample/sample_png -icop -bc -i",
+    "test_ico_we": "node png2icons-cli.js sample/sample.png sample/sample_we -icowe -bc -i",
+    "lint": "tslint --project ./tsconfig.json --config ./tslint.json",
+    "premake": "npm run lint",
+    "make": "tsc -p tsconfig.json && node -e \"require('fs').unlinkSync('png2icons-cli.d.ts')\""
+  }
+}
