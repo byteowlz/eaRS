@@ -27,16 +27,16 @@ path = "src/bin/ears-dictation.rs"
 [dependencies]
 anyhow = "1.0"
 atty = "0.2"
-candle = { version = "0.9.1", package = "candle-core" }
-candle-nn = "0.9.1"
+candle = { version = "0.9", package = "candle-core" }
+candle-nn = "0.9"
 whisper-rs = { version = "0.11", optional = true }
 clap = { version = "4.4.12", features = ["derive"] }
 cpal = "0.15"
 crossbeam-channel = "0.5"
 hf-hub = "0.4.3"
 kaudio = "0.2.1"
-moshi = "0.6.1"
-sentencepiece = "0.11.3"
+moshi = "0.6.4"
+sentencepiece = "0.12"
 serde = { version = "1.0.210", features = ["derive"] }
 serde_json = "1.0.115"
 toml = "0.8"
@@ -52,14 +52,17 @@ enigo = "0.2"
 rdev = "0.5"
 futures-util = "0.3"
 ctrlc = "3.4"
+cudarc = "0.17"
 
 
 [features]
 default = []
 whisper = ["dep:whisper-rs"]
-cuda = ["candle/cuda", "candle-nn/cuda", "whisper-rs/cuda"]
+cuda = ["candle/cuda", "candle-nn/cuda"]
+cuda-whisper = ["cuda", "whisper", "whisper-rs/cuda"]
 cudnn = ["candle/cudnn", "candle-nn/cudnn"]
-metal = ["candle/metal", "candle-nn/metal", "whisper-rs/metal"]
+metal = ["candle/metal", "candle-nn/metal"]
+metal-whisper = ["metal", "whisper", "whisper-rs/metal"]
 
 [profile.release]
 debug = true
@@ -72,3 +75,6 @@ debug = false
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+[patch.crates-io]
+cudarc = { git = "https://github.com/coreylowman/cudarc" }
