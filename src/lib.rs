@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 pub mod config;
+pub use kaudio;
 #[cfg(feature = "whisper")]
 pub mod whisper;
 #[cfg(not(feature = "whisper"))]
@@ -202,6 +203,8 @@ pub struct Model {
     vad_timeout: Option<f64>,
     whisper_model: Option<std::sync::Arc<whisper::WhisperModel>>,
     whisper_enabled: bool,
+    injection_end_time: Option<std::time::Instant>,
+    verbose_injection: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -358,6 +361,7 @@ pub struct TranscriptionOptions {
     pub whisper_quantization: Option<String>,
     pub whisper_languages: Option<Vec<String>>,
     pub whisper_force_lang: Option<String>,
+    pub verbose_injection: bool,
 }
 
 impl Default for TranscriptionOptions {
@@ -372,6 +376,7 @@ impl Default for TranscriptionOptions {
             whisper_quantization: None,
             whisper_languages: None,
             whisper_force_lang: None,
+            verbose_injection: false,
         }
     }
 }
@@ -442,6 +447,8 @@ impl Model {
             vad_timeout: options.vad_timeout,
             whisper_model: whisper_model.map(|m| Arc::new(m)),
             whisper_enabled: options.whisper_enabled,
+            injection_end_time: None,
+            verbose_injection: options.verbose_injection,
         })
     }
 
@@ -453,13 +460,30 @@ impl Model {
             pcm
         };
 
+        let audio_duration_secs = pcm.len() as f64 / 24_000.0;
+        let discard_window_secs = 1.0;
+        
         for chunk in pcm.chunks(1920) {
             let tensor = Tensor::new(chunk, &self.dev)?.reshape((1, 1, chunk.len()))?;
             let _ = self
                 .state
                 .step_pcm(tensor, None, &().into(), |_, _, _| ())?;
         }
+        
+        self.injection_end_time = Some(
+            std::time::Instant::now() + 
+            std::time::Duration::from_secs_f64(audio_duration_secs + discard_window_secs)
+        );
+        
         Ok(())
+    }
+
+    fn is_in_injection_window(&self) -> bool {
+        if let Some(end_time) = self.injection_end_time {
+            std::time::Instant::now() < end_time
+        } else {
+            false
+        }
     }
 
     pub fn transcribe_file<P: AsRef<Path>>(
@@ -488,13 +512,14 @@ impl Model {
         save_audio: Option<&str>,
     ) -> Result<TranscriptionResult> {
         let mut sink = NullSink;
-        self.transcribe_live_with_sink(audio_rx, save_audio, &mut sink)
+        self.transcribe_live_with_sink(audio_rx, save_audio, None, &mut sink)
     }
 
     pub fn transcribe_live_with_sink<S: TranscriptionSink>(
         &mut self,
         audio_rx: Receiver<Vec<f32>>,
         save_audio: Option<&str>,
+        lang_cmd_rx: Option<crossbeam_channel::Receiver<String>>,
         sink: &mut S,
     ) -> Result<TranscriptionResult> {
         use std::io::Write;
@@ -557,11 +582,20 @@ impl Model {
         }
 
         loop {
+            if let Some(ref lang_rx) = lang_cmd_rx {
+                while let Ok(lang) = lang_rx.try_recv() {
+                    eprintln!("Priming model with language: {}", lang);
+                    if let Err(e) = self.prime_with_lang_code(&lang) {
+                        eprintln!("Failed to prime language {}: {}", lang, e);
+                    }
+                }
+            }
+            
             let pcm_chunk = match audio_rx.recv() {
                 Ok(chunk) => chunk,
                 Err(_) => {
-                    eprintln!("Audio receiver channel closed");
-                    return Err(anyhow::anyhow!("Audio receiver disconnected"));
+                    eprintln!("Audio receiver channel closed, finishing transcription");
+                    break;
                 }
             };
             if save_audio.is_some() {
@@ -599,22 +633,29 @@ impl Model {
                             printed_eot = false;
                             has_voice_activity = true;
                             if let Some((word, start_time)) = last_word.take() {
-                                if self.timestamps {
-                                    println!("[{start_time:5.2}-{stop_time:5.2}] {word}");
-                                }
-                                if !self.timestamps && !word_sent {
-                                    sink.handle_message(WebSocketMessage::Word {
-                                        word: word.clone(),
+                                if self.is_in_injection_window() {
+                                    if self.verbose_injection {
+                                        eprintln!("[injection] discarded: {word}");
+                                    }
+                                    word_sent = false;
+                                } else {
+                                    if self.timestamps {
+                                        println!("[{start_time:5.2}-{stop_time:5.2}] {word}");
+                                    }
+                                    if !self.timestamps && !word_sent {
+                                        sink.handle_message(WebSocketMessage::Word {
+                                            word: word.clone(),
+                                            start_time,
+                                            end_time: Some(*stop_time),
+                                        });
+                                    }
+                                    words.push(WordTimestamp {
+                                        word,
                                         start_time,
                                         end_time: Some(*stop_time),
                                     });
+                                    word_sent = false;
                                 }
-                                words.push(WordTimestamp {
-                                    word,
-                                    start_time,
-                                    end_time: Some(*stop_time),
-                                });
-                                word_sent = false;
                             }
                         }
                         moshi::asr::AsrMsg::Word {
@@ -626,6 +667,13 @@ impl Model {
                                 .text_tokenizer
                                 .decode_piece_ids(tokens)
                                 .unwrap_or_else(|_| String::new());
+
+                            if self.is_in_injection_window() {
+                                if self.verbose_injection {
+                                    eprintln!("[injection] discarded: {word}");
+                                }
+                                continue;
+                            }
 
                             current_text.push(' ');
                             current_text.push_str(&word);
@@ -789,10 +837,12 @@ impl Model {
             words,
         };
 
+        eprintln!("Sending Final message with {} words", result.words.len());
         sink.handle_message(WebSocketMessage::Final {
             text: result.text.clone(),
             words: result.words.clone(),
         });
+        eprintln!("Final message sent");
  
         Ok(result)
 
@@ -1085,19 +1135,25 @@ impl Model {
                                         has_voice_activity = true;
                                         if self.timestamps {
                                             if let Some((word, start_time)) = last_word.take() {
-                                                println!("[{start_time:5.2}-{stop_time:5.2}] {word}");
-                                                let word_ts = WordTimestamp {
-                                                    word: word.clone(),
-                                                    start_time,
-                                                    end_time: Some(*stop_time),
-                                                };
-                                                words.push(word_ts.clone());
-                                                let ws_msg = WebSocketMessage::Word {
-                                                    word: word_ts.word,
-                                                    start_time: word_ts.start_time,
-                                                    end_time: word_ts.end_time,
-                                                };
-                                                let _ = ws_tx.send(ws_msg);
+                                                if self.is_in_injection_window() {
+                                                    if self.verbose_injection {
+                                                        eprintln!("[injection] discarded: {word}");
+                                                    }
+                                                } else {
+                                                    println!("[{start_time:5.2}-{stop_time:5.2}] {word}");
+                                                    let word_ts = WordTimestamp {
+                                                        word: word.clone(),
+                                                        start_time,
+                                                        end_time: Some(*stop_time),
+                                                    };
+                                                    words.push(word_ts.clone());
+                                                    let ws_msg = WebSocketMessage::Word {
+                                                        word: word_ts.word,
+                                                        start_time: word_ts.start_time,
+                                                        end_time: word_ts.end_time,
+                                                    };
+                                                    let _ = ws_tx.send(ws_msg);
+                                                }
                                             }
                                         }
                                     }
@@ -1108,8 +1164,28 @@ impl Model {
                                             .decode_piece_ids(tokens)
                                             .unwrap_or_else(|_| String::new());
 
+                                        if self.is_in_injection_window() {
+                                            if self.verbose_injection {
+                                                eprintln!("[injection] discarded: {word}");
+                                            }
+                                            continue;
+                                        }
+
                                         current_text.push(' ');
                                         current_text.push_str(&word);
+
+                                        // Check for sentence boundaries and queue Whisper processing
+                                        if let Some(ref mut detector) = sentence_detector {
+                                            let vad_confidence = if self.vad && printed_eot { Some(0.9) } else { None };
+                                            if let Some(mut sentence) = detector.process_word(&WordTimestamp { word: word.clone(), start_time: *start_time, end_time: None }, vad_confidence) {
+                                                if let Some(ref buffer) = audio_buffer {
+                                                    sentence.audio_samples = buffer.extract_segment(sentence.start_time, sentence.end_time);
+                                                }
+                                                if self.whisper_enabled && self.whisper_model.is_some() {
+                                                    let _ = wh_tx.send(sentence);
+                                                }
+                                            }
+                                        }
 
                                         if !self.timestamps {
                                             print!(" {}", word);
@@ -1137,20 +1213,7 @@ impl Model {
                                                 };
                                                 let _ = ws_tx.send(ws_msg);
                                             }
-                                            last_word = Some((word.clone(), *start_time));
-                                        }
-
-                                        // Check for sentence boundaries and queue Whisper processing
-                                        if let Some(ref mut detector) = sentence_detector {
-                                            let vad_confidence = if self.vad && printed_eot { Some(0.9) } else { None };
-                                            if let Some(mut sentence) = detector.process_word(&WordTimestamp { word: word.clone(), start_time: *start_time, end_time: None }, vad_confidence) {
-                                                if let Some(ref buffer) = audio_buffer {
-                                                    sentence.audio_samples = buffer.extract_segment(sentence.start_time, sentence.end_time);
-                                                }
-                                                if self.whisper_enabled && self.whisper_model.is_some() {
-                                                    let _ = wh_tx.send(sentence);
-                                                }
-                                            }
+                                            last_word = Some((word, *start_time));
                                         }
                                     }
                                 }
@@ -1238,7 +1301,11 @@ pub fn prime_with_lang_code(&mut self, iso_lang: &str) -> Result<()> {
         "es" => "esp",
         "it" => "ita",
         "pt" => "por",
-        other => other,
+        other => {
+            eprintln!("Warning: Unknown language code '{}'. Supported codes: de, ja, es, it, pt", other);
+            eprintln!("Skipping language priming.");
+            return Ok(());
+        }
     };
     let config = config::AppConfig::load()?;
     let path = config.ref_audio_path().join(format!("{}.mp3", ref_code));

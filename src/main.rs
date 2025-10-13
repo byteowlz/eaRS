@@ -83,6 +83,10 @@ struct ClientArgs {
     /// Set language for transcription (e.g., "de", "ja", "it", "es", "pt")
     #[arg(long)]
     lang: Option<String>,
+
+    /// Path to audio file to transcribe (instead of live capture). Use '-' to read from stdin
+    #[arg(long, short = 'f')]
+    file: Option<String>,
 }
 
 #[derive(Args, Clone)]
@@ -373,6 +377,10 @@ async fn run_client(args: ClientArgs) -> Result<()> {
         return audio::list_audio_devices();
     }
 
+    if let Some(file_path) = &args.file {
+        return transcribe_file(file_path, &args).await;
+    }
+
     let config = AppConfig::load()?;
     let server_url = args
         .server
@@ -407,9 +415,13 @@ async fn run_client(args: ClientArgs) -> Result<()> {
             }
         }
 
+        let mut should_close = false;
         while let Some(cmd) = writer_rx.recv().await {
             match cmd {
                 WriterCommand::Audio(bytes) => {
+                    if should_close {
+                        continue;
+                    }
                     if ws_writer.send(Message::Binary(bytes)).await.is_err() {
                         break;
                     }
@@ -418,6 +430,9 @@ async fn run_client(args: ClientArgs) -> Result<()> {
                     let _ = ws_writer
                         .send(Message::Text(json!({ "type": "stop" }).to_string()))
                         .await;
+                    should_close = true;
+                }
+                WriterCommand::Close => {
                     break;
                 }
             }
@@ -442,6 +457,7 @@ async fn run_client(args: ClientArgs) -> Result<()> {
     let vad_timeout = args.vad.map(|seconds| Duration::from_secs_f64(seconds));
     let (silence_tx, mut silence_rx) = mpsc::unbounded_channel::<()>();
     let mut vad_timeout_triggered = false;
+    let mut stop_requested = false;
 
     'client: loop {
         let timeout_future = async {
@@ -451,19 +467,39 @@ async fn run_client(args: ClientArgs) -> Result<()> {
                 std::future::pending().await
             }
         };
+        
+        let final_timeout = if stop_requested {
+            tokio::time::sleep(Duration::from_secs(5))
+        } else {
+            tokio::time::sleep(Duration::from_secs(3600))
+        };
 
         tokio::select! {
+            _ = final_timeout => {
+                if stop_requested {
+                    eprintln!("Timeout waiting for Final message from server");
+                    let _ = writer_tx.send(WriterCommand::Close);
+                    break;
+                }
+            }
             _ = tokio::signal::ctrl_c() => {
+                if stop_requested {
+                    if args.verbose {
+                        eprintln!("Force quit");
+                    }
+                    let _ = writer_tx.send(WriterCommand::Close);
+                    break;
+                }
+                stop_requested = true;
                 let _ = writer_tx.send(WriterCommand::Stop);
-                break;
             }
             _ = timeout_future => {
                 if args.verbose {
                     eprintln!("VAD timeout reached, stopping...");
                 }
                 vad_timeout_triggered = true;
+                stop_requested = true;
                 let _ = writer_tx.send(WriterCommand::Stop);
-                break;
             }
             maybe_msg = ws_reader.next() => {
                 match maybe_msg {
@@ -489,6 +525,7 @@ async fn run_client(args: ClientArgs) -> Result<()> {
                                 }
                                 WebSocketMessage::Final { text, words } => {
                                     final_result = Some((text, words));
+                                    let _ = writer_tx.send(WriterCommand::Close);
                                     break 'client;
                                 }
                                 _ => {}
@@ -499,6 +536,7 @@ async fn run_client(args: ClientArgs) -> Result<()> {
                         if args.verbose {
                             eprintln!("WebSocket connection closed");
                         }
+                        let _ = writer_tx.send(WriterCommand::Close);
                         break 'client;
                     }
                     _ => {}
@@ -539,6 +577,167 @@ async fn run_client(args: ClientArgs) -> Result<()> {
 enum WriterCommand {
     Audio(Vec<u8>),
     Stop,
+    Close,
+}
+
+async fn transcribe_file(file_path: &str, args: &ClientArgs) -> Result<()> {
+    use ears::kaudio;
+    use std::fs::File;
+    use std::io::Read;
+    
+    let (pcm, sample_rate) = if file_path == "-" {
+        eprintln!("Reading audio from stdin...");
+        let mut buffer = Vec::new();
+        io::stdin().read_to_end(&mut buffer)
+            .context("Failed to read from stdin")?;
+        
+        let temp_file = std::env::temp_dir().join("ears_stdin_audio");
+        std::fs::write(&temp_file, &buffer)
+            .context("Failed to write temp file")?;
+        
+        let result = kaudio::pcm_decode(&temp_file)
+            .context("Failed to decode audio from stdin");
+        
+        let _ = std::fs::remove_file(&temp_file);
+        result?
+    } else {
+        eprintln!("Loading audio file: {}", file_path);
+        kaudio::pcm_decode(file_path)
+            .with_context(|| format!("Failed to load audio file: {}", file_path))?
+    };
+    
+    eprintln!("Sample rate: {}, samples: {}, duration: {:.2}s", 
+              sample_rate, pcm.len(), pcm.len() as f64 / sample_rate as f64);
+    
+    let pcm = if sample_rate != 24_000 {
+        eprintln!("Resampling from {}Hz to 24000Hz", sample_rate);
+        kaudio::resample(&pcm, sample_rate as usize, 24_000)?
+    } else {
+        pcm
+    };
+    
+    let config = AppConfig::load()?;
+    let server_url = args
+        .server
+        .clone()
+        .unwrap_or_else(|| format!("ws://127.0.0.1:{}/", config.server.websocket_port));
+    
+    let (ws_stream, _) = connect_async(&server_url)
+        .await
+        .with_context(|| format!("Failed to connect to {}", server_url))?;
+    
+    if args.verbose {
+        eprintln!("Connected to server at {}", server_url);
+    }
+    
+    let (mut ws_writer, mut ws_reader) = ws_stream.split();
+    let (writer_tx, mut writer_rx) = mpsc::unbounded_channel::<WriterCommand>();
+    
+    let lang_to_send = args.lang.clone();
+    let writer_handle = tokio::spawn(async move {
+        if let Some(lang) = lang_to_send {
+            let set_lang_cmd = json!({ "type": "setlanguage", "lang": lang }).to_string();
+            if ws_writer.send(Message::Text(set_lang_cmd)).await.is_err() {
+                eprintln!("Failed to send language change command");
+            }
+        }
+        
+        while let Some(cmd) = writer_rx.recv().await {
+            match cmd {
+                WriterCommand::Audio(bytes) => {
+                    if ws_writer.send(Message::Binary(bytes)).await.is_err() {
+                        break;
+                    }
+                }
+                WriterCommand::Stop => {
+                    let _ = ws_writer.send(Message::Text(json!({ "type": "stop" }).to_string())).await;
+                }
+                WriterCommand::Close => {
+                    break;
+                }
+            }
+        }
+        let _ = ws_writer.close().await;
+    });
+    
+    eprintln!("Streaming audio to server...");
+    let chunk_size = 1920;
+    for chunk in pcm.chunks(chunk_size) {
+        if writer_tx.send(WriterCommand::Audio(encode_chunk(chunk))).is_err() {
+            break;
+        }
+    }
+    
+    let _ = writer_tx.send(WriterCommand::Stop);
+    
+    let mut final_result: Option<(String, Vec<WordTimestamp>)> = None;
+    let timeout_duration = Duration::from_secs(10);
+    
+    let timeout = tokio::time::sleep(timeout_duration);
+    tokio::pin!(timeout);
+    
+    loop {
+        tokio::select! {
+            _ = &mut timeout => {
+                eprintln!("Timeout waiting for transcription result");
+                break;
+            }
+            maybe_msg = ws_reader.next() => {
+                match maybe_msg {
+                    Some(Ok(Message::Text(payload))) => {
+                        if args.verbose {
+                            eprintln!("Received: {}", payload);
+                        }
+                        if let Ok(event) = serde_json::from_str::<WebSocketMessage>(&payload) {
+                            match event {
+                                WebSocketMessage::Word { word, start_time, end_time } => {
+                                    if args.timestamps {
+                                        if let Some(end) = end_time {
+                                            println!("[{:.2}-{:.2}] {}", start_time, end, word);
+                                        } else {
+                                            println!("[{:.2}-     ] {}", start_time, word);
+                                        }
+                                    } else if !args.verbose {
+                                        print!(" {}", word);
+                                        io::stdout().flush().ok();
+                                    }
+                                }
+                                WebSocketMessage::Final { text, words } => {
+                                    final_result = Some((text, words));
+                                    let _ = writer_tx.send(WriterCommand::Close);
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None => {
+                        if args.verbose {
+                            eprintln!("WebSocket closed");
+                        }
+                        let _ = writer_tx.send(WriterCommand::Close);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    
+    let _ = writer_handle.await;
+    
+    if let Some((text, words)) = final_result {
+        if !args.timestamps {
+            println!("\n{}", text);
+        }
+        if args.verbose {
+            eprintln!("Transcription complete: {} words", words.len());
+        }
+    } else {
+        eprintln!("No transcription received from server");
+    }
+    
+    Ok(())
 }
 
 fn encode_chunk(chunk: &[f32]) -> Vec<u8> {

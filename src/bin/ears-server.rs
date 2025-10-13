@@ -29,6 +29,10 @@ struct Args {
     #[cfg(feature = "whisper")]
     #[arg(long, default_value_t = false)]
     whisper: bool,
+
+    /// Log transcriptions from language injection audio (for debugging)
+    #[arg(long, default_value_t = false)]
+    verbose_injection: bool,
 }
 
 #[tokio::main]
@@ -49,6 +53,7 @@ fn build_server_options(args: &Args) -> Result<server::ServerOptions> {
     let mut transcription = TranscriptionOptions::default();
     transcription.timestamps = args.timestamps;
     transcription.vad = args.vad;
+    transcription.verbose_injection = args.verbose_injection;
 
     #[cfg(feature = "whisper")]
     {

@@ -1,0 +1,30 @@
+[package]
+name = "prkt"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+ndarray = "0.15"
+ort = "1.16"
+hf-hub = "0.4"
+clap = { version = "4.4", features = ["derive"] }
+rustfft = "6.2"
+hound = "3.5"
+rubato = "0.15"
+cpal = "0.15"
+crossbeam-channel = "0.5"
+
+[features]
+default = []
+cuda = ["ort/cuda"]
+coreml = ["ort/coreml"]
+directml = ["ort/directml"]
+
+[lib]
+name = "prkt"
+path = "src/lib.rs"
+
+[[bin]]
+name = "prkt"
+path = "src/bin/prkt.rs"

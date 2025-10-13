@@ -52,6 +52,7 @@ Client                          Server
 ### Connecting and Streaming Audio
 
 The server expects:
+
 1. **Binary audio data**: Raw PCM audio as f32 samples (little-endian, 4 bytes per sample)
 2. **Audio format**: 24kHz sample rate, mono channel
 3. **Text commands**: JSON control messages (optional)
@@ -97,6 +98,7 @@ ws.onclose = () => {
 The server accepts two types of WebSocket messages:
 
 #### 1. Binary Audio Data (Primary)
+
 Send raw PCM audio samples as **binary WebSocket frames**:
 
 | Property | Value |
@@ -110,6 +112,7 @@ Send raw PCM audio samples as **binary WebSocket frames**:
 **Binary Encoding Examples:**
 
 JavaScript (Web Audio API):
+
 ```javascript
 // From AudioBuffer
 const samples = audioBuffer.getChannelData(0);  // Float32Array
@@ -117,6 +120,7 @@ websocket.send(samples.buffer);  // Send as ArrayBuffer
 ```
 
 Python (struct):
+
 ```python
 import struct
 samples = [0.1, -0.2, 0.3, ...]  # Your audio samples
@@ -125,6 +129,7 @@ await websocket.send(audio_bytes)
 ```
 
 Python (numpy):
+
 ```python
 import numpy as np
 samples = np.array([0.1, -0.2, 0.3], dtype=np.float32)
@@ -132,6 +137,7 @@ await websocket.send(samples.tobytes())
 ```
 
 Rust:
+
 ```rust
 let samples: Vec<f32> = vec![0.1, -0.2, 0.3];
 let bytes: Vec<u8> = samples.iter()
@@ -143,26 +149,48 @@ websocket.send(Message::Binary(bytes)).await?;
 **Important**: Each f32 sample is exactly 4 bytes. For 1000 samples, send exactly 4000 bytes.
 
 #### 2. Control Commands (Text, Optional)
+
 Send JSON commands as **text WebSocket frames**:
 
 **Stop transcription:**
+
 ```json
 { "type": "stop" }
 ```
 
 Or the legacy plain text format:
+
 ```
 "stop"
 ```
 
 Both formats are accepted. The server will close the connection after processing the stop command.
 
+**Change language:**
+
+```json
+{ "type": "setlanguage", "lang": "en" }
+```
+
+Dynamically switches the transcription language during an active session. Common language codes:
+- `en` - English
+- `fr` - French
+- `de` - German
+- `es` - Spanish
+- `it` - Italian
+- `pt` - Portuguese
+- `ja` - Japanese
+
+The language change takes effect immediately for subsequent audio.
+
 ### Server → Client Messages
 
 All messages are JSON with a `type` field:
 
 #### word
+
 Sent for each transcribed word:
+
 ```json
 {
   "type": "word",
@@ -171,10 +199,13 @@ Sent for each transcribed word:
   "end_time": 1.567
 }
 ```
+
 `end_time` may be `null` for words still being processed.
 
 #### final
+
 Sent when transcription completes:
+
 ```json
 {
   "type": "final",
@@ -187,7 +218,9 @@ Sent when transcription completes:
 ```
 
 #### error
+
 Sent when an error occurs:
+
 ```json
 {
   "type": "error",
@@ -196,10 +229,13 @@ Sent when an error occurs:
 ```
 
 Common errors:
+
 - `"server busy"` - Another client is already streaming audio
 
 #### whisper_processing (optional)
+
 Sent when Whisper enhancement starts processing a sentence (requires `--whisper` flag):
+
 ```json
 {
   "type": "whisper_processing",
@@ -211,7 +247,9 @@ Sent when Whisper enhancement starts processing a sentence (requires `--whisper`
 ```
 
 #### whisper_complete (optional)
+
 Sent when Whisper enhancement completes:
+
 ```json
 {
   "type": "whisper_complete",
@@ -306,6 +344,12 @@ class EarsClient {
     }
   }
 
+  setLanguage(lang) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: "setlanguage", lang }));
+    }
+  }
+
   stop() {
     if (this.ws) {
       this.ws.send(JSON.stringify({ type: "stop" }));
@@ -330,6 +374,11 @@ class EarsClient {
 const client = new EarsClient('ws://localhost:8765/');
 await client.connect();
 await client.startAudio();
+
+// Change language during transcription:
+// client.setLanguage('fr');  // Switch to French
+// client.setLanguage('es');  // Switch to Spanish
+
 // When done:
 // client.stop();
 ```
@@ -390,6 +439,10 @@ class EarsClient:
         elif msg_type == 'whisper_complete' and msg.get('changed'):
             print(f"Whisper: '{msg['original_text']}' → '{msg['corrected_text']}'")
     
+    async def set_language(self, lang):
+        if self.websocket:
+            await self.websocket.send(json.dumps({'type': 'setlanguage', 'lang': lang}))
+    
     async def stop(self):
         if self.stream:
             self.stream.stop()
@@ -402,6 +455,10 @@ async def main():
     client = EarsClient('ws://localhost:8765/')
     await client.connect()
     await client.stream_audio()
+    
+    # Change language during transcription:
+    # await client.set_language('fr')  # Switch to French
+    # await client.set_language('ja')  # Switch to Japanese
     
     try:
         await client.listen_for_messages()
@@ -503,6 +560,7 @@ ears server start [OPTIONS]
 ```
 
 Options:
+
 - `--bind <addr>`: Bind address (default: `0.0.0.0:<config-port>`)
 - `--hf-repo <repo>`: Hugging Face model repository (default: `kyutai/stt-1b-en_fr-candle`)
 - `--cpu`: Force CPU execution (otherwise uses CUDA/Metal when available)
@@ -511,16 +569,19 @@ Options:
 - `--whisper`: Enable Whisper post-processing (requires `--features whisper` at build time)
 
 Example:
+
 ```bash
 ears server start --bind 0.0.0.0:8765 --timestamps --vad
 ```
 
 Check server status:
+
 ```bash
 ears server status
 ```
 
 Stop the server:
+
 ```bash
 ears server stop
 ```
@@ -544,17 +605,20 @@ The server expects raw PCM audio with these exact specifications:
 If your audio source uses a different sample rate, you must resample to 24kHz before sending. Most audio libraries provide resampling functions:
 
 **JavaScript (Web Audio API)**:
+
 ```javascript
 const audioContext = new AudioContext({ sampleRate: 24000 });
 ```
 
 **Python (librosa)**:
+
 ```python
 import librosa
 audio = librosa.resample(audio, orig_sr=48000, target_sr=24000)
 ```
 
 **FFmpeg**:
+
 ```bash
 ffmpeg -i input.wav -ar 24000 -ac 1 -f f32le output.raw
 ```
@@ -625,27 +689,35 @@ class RobustEarsClient {
 ## Performance Considerations
 
 ### Single Client Design
+
 The server is designed for **one active audio streaming client** at a time. While multiple clients can connect to monitor transcription results, only one should send audio data. Attempting to stream from multiple clients simultaneously will result in mixed audio and poor transcription quality.
 
 ### Message Frequency
+
 Word messages are sent in real-time as recognition occurs. For UI applications, consider:
+
 - Throttling display updates to reduce rendering overhead
 - Using `requestAnimationFrame` for smooth visual updates
 - Buffering words before appending to the DOM
 
 ### Audio Chunking
+
 Send audio in reasonable chunk sizes:
+
 - **Too small** (< 1KB): High overhead from many WebSocket frames
 - **Too large** (> 64KB): Increased latency before server receives data
 - **Recommended**: 4-16KB chunks (about 1000-4000 samples at f32)
 
 ### Network Considerations
+
 - Use low-latency networks for best results
 - On high-latency connections, expect delayed transcription
 - Consider local server deployment for real-time applications
 
 ### Resource Usage
+
 The server performs inference on each audio chunk:
+
 - GPU acceleration significantly reduces latency
 - CPU-only mode may introduce delays
 - Each connection requires ~2-4GB RAM depending on the model
@@ -653,6 +725,7 @@ The server performs inference on each audio chunk:
 ## Testing Your Client
 
 ### Test with the Built-in Client
+
 The eaRS CLI includes a reference client you can use to verify the server is working:
 
 ```bash
@@ -661,6 +734,7 @@ ears  # In another terminal - streams audio and prints results
 ```
 
 ### Simple Test Script
+
 Test the WebSocket connection without audio:
 
 ```bash
@@ -673,6 +747,7 @@ wscat -c ws://localhost:8765/
 ```
 
 ### Audio Format Validation
+
 Verify your audio encoding is correct:
 
 ```python
@@ -690,11 +765,13 @@ Expected output: 8 bytes per 2 samples (4 bytes per f32)
 ### Connection Issues
 
 **"Connection refused"**
+
 - Ensure server is running: `ears server status`
 - Check the configured port in `~/.config/ears/config.toml`
 - Verify firewall settings if connecting remotely
 
 **"Server busy"**
+
 - Another client is already streaming audio
 - Only one client can stream at a time
 - Stop the other client or wait for the session to end
@@ -702,18 +779,21 @@ Expected output: 8 bytes per 2 samples (4 bytes per f32)
 ### Audio Issues
 
 **No transcription output**
+
 - Verify audio format: 24kHz, mono, f32 little-endian
 - Check audio is being sent as binary WebSocket frames
 - Ensure samples are in range [-1.0, 1.0]
 - Test with: `ears` (built-in client) to verify server works
 
 **Poor transcription quality**
+
 - Verify sample rate is exactly 24,000 Hz
 - Check for audio clipping (samples outside [-1.0, 1.0])
 - Ensure mono conversion is done correctly for stereo sources
 - Use a quality microphone with minimal background noise
 
 **High latency**
+
 - Use GPU acceleration (CUDA/Metal) instead of CPU
 - Reduce network latency (run server and client on same machine)
 - Check system load - high CPU usage degrades performance
@@ -721,11 +801,13 @@ Expected output: 8 bytes per 2 samples (4 bytes per f32)
 ### Message Format Issues
 
 **"Message parsing error"**
+
 - Ensure JSON uses lowercase `type` field: `{"type":"word",...}`
 - Don't use old PascalCase format: `{"Word":{...}}`
 - Validate JSON syntax with a linter
 
 **Unexpected message types**
+
 - Check if Whisper is enabled (`--whisper` flag)
 - Whisper adds `whisper_processing` and `whisper_complete` messages
 - These are optional and can be ignored if not using Whisper
@@ -733,11 +815,13 @@ Expected output: 8 bytes per 2 samples (4 bytes per f32)
 ### Debug Mode
 
 Enable verbose logging:
+
 ```bash
 RUST_LOG=debug ears server start
 ```
 
 View server logs:
+
 ```bash
 journalctl -u ears-server -f  # If using systemd
 # or check stderr output when running manually
@@ -746,6 +830,7 @@ journalctl -u ears-server -f  # If using systemd
 ### Getting Help
 
 If issues persist:
+
 1. Verify your audio format with the validation script above
 2. Test with the built-in `ears` client to isolate client vs. server issues
 3. Check the repository documentation and examples
@@ -754,6 +839,7 @@ If issues persist:
 ## Quick Reference
 
 ### Audio Format
+
 ```
 Format:       f32 (IEEE 754 32-bit float, little-endian)
 Sample Rate:  24,000 Hz
@@ -763,6 +849,7 @@ Frame Type:   Binary WebSocket message
 ```
 
 ### Server Message Types
+
 | Type | Description | Fields |
 |------|-------------|--------|
 | `word` | Real-time word recognition | `word`, `start_time`, `end_time` |
@@ -772,11 +859,14 @@ Frame Type:   Binary WebSocket message
 | `whisper_complete` | Whisper enhancement finished | `sentence_id`, `original_text`, `corrected_text`, `confidence`, `changed` |
 
 ### Client Commands
+
 | Command | Format | Description |
 |---------|--------|-------------|
 | Stop | `"stop"` or `{"type":"stop"}` | End transcription session |
+| Set Language | `{"type":"setlanguage","lang":"en"}` | Change transcription language |
 
 ### Server Commands
+
 ```bash
 ears server start                 # Start server with config defaults
 ears server start --bind 0.0.0.0:8765  # Start on specific port
@@ -786,6 +876,7 @@ ears server status                # Check server status
 ```
 
 ### Example URLs
+
 ```
 Local:     ws://localhost:8765/
 LAN:       ws://192.168.1.100:8765/
@@ -793,3 +884,4 @@ Remote:    ws://example.com:8765/
 ```
 
 Remember: Only one client can stream audio at a time!
+
