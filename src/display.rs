@@ -2,14 +2,14 @@ use colored::*;
 use std::collections::HashMap;
 use std::io::{self, Write};
 
-use crate::whisper::{WhisperMessage, WhisperStatus};
 use crate::WordTimestamp;
+use crate::whisper::{WhisperMessage, WhisperStatus};
 
 #[derive(Debug, Clone)]
 pub struct DisplayManager {
     current_lines: Vec<String>,
-    whisper_status: HashMap<String, WhisperStatus>,  // sentence_id -> status
-    sentence_map: HashMap<usize, String>,  // line_index -> sentence_id
+    whisper_status: HashMap<String, WhisperStatus>, // sentence_id -> status
+    sentence_map: HashMap<usize, String>,           // line_index -> sentence_id
     current_line: usize,
     live_text: String,
 }
@@ -39,7 +39,8 @@ impl DisplayManager {
             let line_index = self.current_lines.len();
             self.current_lines.push(text.clone());
             self.sentence_map.insert(line_index, sentence_id.clone());
-            self.whisper_status.insert(sentence_id, WhisperStatus::Pending);
+            self.whisper_status
+                .insert(sentence_id, WhisperStatus::Pending);
             self.live_text.clear();
             self.current_line += 1;
             self.redraw();
@@ -49,17 +50,21 @@ impl DisplayManager {
     pub fn handle_whisper_message(&mut self, message: WhisperMessage) {
         match message {
             WhisperMessage::Processing { sentence_id, .. } => {
-                self.whisper_status.insert(sentence_id, WhisperStatus::Processing);
+                self.whisper_status
+                    .insert(sentence_id, WhisperStatus::Processing);
                 self.redraw();
             }
-            WhisperMessage::Complete { 
-                sentence_id, 
-                corrected_text, 
-                changed, 
-                .. 
+            WhisperMessage::Complete {
+                sentence_id,
+                corrected_text,
+                changed,
+                ..
             } => {
                 if changed {
-                    self.whisper_status.insert(sentence_id.clone(), WhisperStatus::Corrected(corrected_text.clone()));
+                    self.whisper_status.insert(
+                        sentence_id.clone(),
+                        WhisperStatus::Corrected(corrected_text.clone()),
+                    );
                     // Update the line with corrected text
                     for (&line_index, line_sentence_id) in &self.sentence_map {
                         if line_sentence_id == &sentence_id {
@@ -70,7 +75,8 @@ impl DisplayManager {
                         }
                     }
                 } else {
-                    self.whisper_status.insert(sentence_id, WhisperStatus::Confirmed);
+                    self.whisper_status
+                        .insert(sentence_id, WhisperStatus::Confirmed);
                 }
                 self.redraw();
             }
@@ -127,7 +133,7 @@ impl DisplayManager {
             println!("\n{}", self.live_text);
             self.live_text.clear();
         }
-        
+
         // Final display of all lines with their final status
         for (i, line) in self.current_lines.iter().enumerate() {
             let sentence_id = self.sentence_map.get(&i);
@@ -158,7 +164,10 @@ impl DisplayManager {
             };
 
             if let Some(end_time) = word.end_time {
-                println!("[{:5.2}-{:5.2}] {}", word.start_time, end_time, colored_word);
+                println!(
+                    "[{:5.2}-{:5.2}] {}",
+                    word.start_time, end_time, colored_word
+                );
             } else {
                 println!("[{:5.2}-     ] {}", word.start_time, colored_word);
             }
@@ -174,8 +183,14 @@ impl DisplayManager {
 
     pub fn show_whisper_loading(&self, model: &str) {
         if atty::is(atty::Stream::Stdout) {
-            println!("{}", format!("Loading Whisper model ({})...", model).yellow());
-            println!("{}", "Whisper enhancement will be available shortly.".cyan());
+            println!(
+                "{}",
+                format!("Loading Whisper model ({})...", model).yellow()
+            );
+            println!(
+                "{}",
+                "Whisper enhancement will be available shortly.".cyan()
+            );
             println!("{}", "-".repeat(50).bright_black());
         }
     }
@@ -183,7 +198,10 @@ impl DisplayManager {
     pub fn show_whisper_ready(&self, languages: &[String]) {
         if atty::is(atty::Stream::Stdout) {
             println!("{}", "Whisper enhancement enabled".green());
-            println!("{}", format!("Enhanced languages: {}", languages.join(", ")).cyan());
+            println!(
+                "{}",
+                format!("Enhanced languages: {}", languages.join(", ")).cyan()
+            );
             println!("{}", "-".repeat(50).bright_black());
         }
     }
@@ -198,23 +216,39 @@ impl Default for DisplayManager {
 // Helper functions for non-interactive display
 pub fn print_whisper_status(message: &WhisperMessage) {
     match message {
-        WhisperMessage::Processing { sentence_id, original_text, .. } => {
+        WhisperMessage::Processing {
+            sentence_id,
+            original_text,
+            ..
+        } => {
             if !atty::is(atty::Stream::Stdout) {
-                eprintln!("Processing sentence {}: {}", 
+                eprintln!(
+                    "Processing sentence {}: {}",
                     sentence_id.chars().take(8).collect::<String>(),
                     original_text
                 );
             }
         }
-        WhisperMessage::Complete { sentence_id, original_text, corrected_text, changed, confidence, .. } => {
+        WhisperMessage::Complete {
+            sentence_id,
+            original_text,
+            corrected_text,
+            changed,
+            confidence,
+            ..
+        } => {
             if !atty::is(atty::Stream::Stdout) {
                 let id_short = sentence_id.chars().take(8).collect::<String>();
                 if *changed {
-                    eprintln!("Corrected {}: {} -> {} (confidence: {:.2})", 
-                        id_short, original_text, corrected_text, confidence);
+                    eprintln!(
+                        "Corrected {}: {} -> {} (confidence: {:.2})",
+                        id_short, original_text, corrected_text, confidence
+                    );
                 } else {
-                    eprintln!("Confirmed {}: {} (confidence: {:.2})", 
-                        id_short, original_text, confidence);
+                    eprintln!(
+                        "Confirmed {}: {} (confidence: {:.2})",
+                        id_short, original_text, confidence
+                    );
                 }
             }
         }
@@ -237,7 +271,7 @@ mod tests {
         let mut dm = DisplayManager::new();
         dm.add_live_word("hello");
         assert_eq!(dm.live_text, "hello");
-        
+
         dm.add_live_word("world");
         assert_eq!(dm.live_text, "hello world");
     }

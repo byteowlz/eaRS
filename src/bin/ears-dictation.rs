@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
 use crossbeam_channel::{bounded, select, unbounded};
-use ears::config::AppConfig;
 use ears::audio;
+use ears::config::AppConfig;
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 use futures_util::{SinkExt, StreamExt};
-use rdev::{listen, EventType};
+use rdev::{EventType, listen};
 use serde_json::Value;
 use std::fs;
 use std::sync::{Arc, Mutex};
@@ -72,7 +72,10 @@ async fn main() -> Result<()> {
         thread::spawn(move || {
             let toggle_combo = hotkey_config.toggle.to_lowercase();
             let (t_ctrl, t_shift, t_alt, t_key) = parse_combo(&toggle_combo);
-            eprintln!("Parsed combo - ctrl:{} shift:{} alt:{} key:{:?}", t_ctrl, t_shift, t_alt, t_key);
+            eprintln!(
+                "Parsed combo - ctrl:{} shift:{} alt:{} key:{:?}",
+                t_ctrl, t_shift, t_alt, t_key
+            );
 
             if let Err(e) = listen(move |event| -> () {
                 static mut CTRL: bool = false;
@@ -96,11 +99,9 @@ async fn main() -> Result<()> {
                     | EventType::KeyRelease(rdev::Key::ShiftRight) => unsafe {
                         SHIFT = false;
                     },
-                    EventType::KeyPress(rdev::Key::Alt) | EventType::KeyPress(rdev::Key::AltGr) => {
-                        unsafe {
-                            ALT = true;
-                        }
-                    }
+                    EventType::KeyPress(rdev::Key::Alt) | EventType::KeyPress(rdev::Key::AltGr) => unsafe {
+                        ALT = true;
+                    },
                     EventType::KeyRelease(rdev::Key::Alt)
                     | EventType::KeyRelease(rdev::Key::AltGr) => unsafe {
                         ALT = false;
@@ -134,10 +135,7 @@ async fn main() -> Result<()> {
 
     eprintln!("ears-dictation started");
     eprintln!("Connecting to {}...", url);
-    eprintln!(
-        "Hotkey: {} to toggle pause/resume",
-        config.hotkeys.toggle
-    );
+    eprintln!("Hotkey: {} to toggle pause/resume", config.hotkeys.toggle);
     eprintln!("Press Ctrl+C to stop\n");
 
     loop {

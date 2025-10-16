@@ -1,9 +1,12 @@
 use anyhow::Result;
 use clap::Parser;
-use ears::{config::AppConfig, server, TranscriptionOptions};
+use ears::{TranscriptionOptions, config::AppConfig, server};
 
 #[derive(Debug, Parser)]
-#[command(name = "ears-server", about = "Standalone transcription server for eaRS")]
+#[command(
+    name = "ears-server",
+    about = "Standalone transcription server for eaRS"
+)]
 struct Args {
     /// Address to bind the transcription server to (default: <config host>:<config port>)
     #[arg(long)]

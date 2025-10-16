@@ -5,14 +5,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use uuid::Uuid;
-use whisper_rs::{WhisperContext, WhisperContextParameters, FullParams, SamplingStrategy};
-use std::sync::{Arc, Mutex};
+use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 // unix-only stderr redirection helpers
 
-use crate::config::{WhisperConfig, SentenceDetectionConfig};
 use crate::WordTimestamp;
+use crate::config::{SentenceDetectionConfig, WhisperConfig};
 
 #[derive(Clone)]
 pub struct WhisperModel {
@@ -86,18 +86,16 @@ impl WhisperModel {
     ) -> Result<Self> {
         let model_name = model_override.unwrap_or(&config.default_model);
         let quantization = quantization_override.unwrap_or(&config.quantization);
-        
+
         let model_path = Self::download_model(model_name, quantization, config).await?;
-        
+
         // Load the model using whisper-rs
         let ctx_params = WhisperContextParameters::default();
         let context = with_stderr_silenced(|| {
-            WhisperContext::new_with_params(
-                model_path.to_str().unwrap(),
-                ctx_params
-            )
-        }).map_err(|e| anyhow::anyhow!("Failed to load Whisper model: {}", e))?;
-        
+            WhisperContext::new_with_params(model_path.to_str().unwrap(), ctx_params)
+        })
+        .map_err(|e| anyhow::anyhow!("Failed to load Whisper model: {}", e))?;
+
         Ok(Self {
             context: Arc::new(Mutex::new(context)),
             config: config.clone(),
@@ -159,7 +157,7 @@ impl WhisperModel {
         }
 
         // Download the model with progress bar
-        
+
         let api = hf_hub::api::sync::Api::new()?;
         let repo = api.model(repo_name.clone());
 
@@ -167,15 +165,17 @@ impl WhisperModel {
         let pb = ProgressBar::new(0);
         pb.set_style(
             ProgressStyle::default_bar()
-                .template("[{elapsed_precise}] {bar:40.cyan/blue} {bytes:>7}/{total_bytes:7} {msg}")?
-                .progress_chars("##-")
+                .template(
+                    "[{elapsed_precise}] {bar:40.cyan/blue} {bytes:>7}/{total_bytes:7} {msg}",
+                )?
+                .progress_chars("##-"),
         );
 
         // Download model
         pb.set_message(format!("Downloading {}", filename));
         let downloaded_path = repo.get(&filename)?;
         std::fs::copy(&downloaded_path, &model_file_path)?;
-        
+
         pb.finish_with_message("Download complete");
 
         Ok(model_file_path)
@@ -187,12 +187,12 @@ impl WhisperModel {
             let ratio = 16000.0 / 24000.0;
             let new_len = (audio_samples.len() as f32 * ratio) as usize;
             let mut resampled = Vec::with_capacity(new_len);
-            
+
             for i in 0..new_len {
                 let pos = i as f32 / ratio;
                 let idx = pos as usize;
                 let frac = pos - idx as f32;
-                
+
                 if idx + 1 < audio_samples.len() {
                     let sample = audio_samples[idx] * (1.0 - frac) + audio_samples[idx + 1] * frac;
                     resampled.push(sample);
@@ -207,12 +207,13 @@ impl WhisperModel {
 
         // Lock the context and create a new state for this transcription
         let context = self.context.lock().unwrap();
-        let mut state = context.create_state()
+        let mut state = context
+            .create_state()
             .map_err(|e| anyhow::anyhow!("Failed to create Whisper state: {}", e))?;
 
         // Set up parameters with all output suppressed
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-        
+
         // Configure parameters
         if let Some(lang) = &self.forced_lang {
             params.set_language(Some(lang));
@@ -227,18 +228,20 @@ impl WhisperModel {
         params.set_print_realtime(false);
         params.set_suppress_blank(true);
         params.set_suppress_non_speech_tokens(true);
-        
+
         // Process the audio (whisper-rs expects f32 samples)
         with_stderr_silenced(|| state.full(params, &resampled))
             .map_err(|e| anyhow::anyhow!("Whisper processing failed: {}", e))?;
 
         // Get the transcribed text
-        let num_segments = state.full_n_segments()
+        let num_segments = state
+            .full_n_segments()
             .map_err(|e| anyhow::anyhow!("Failed to get segments: {}", e))?;
-        
+
         let mut text = String::new();
         for i in 0..num_segments {
-            let segment_text = state.full_get_segment_text(i)
+            let segment_text = state
+                .full_get_segment_text(i)
                 .map_err(|e| anyhow::anyhow!("Failed to get segment text: {}", e))?;
             if !text.is_empty() {
                 text.push(' ');
@@ -258,7 +261,7 @@ where
 {
     #[cfg(unix)]
     {
-        use libc::{close, dup, dup2, fflush, open, STDERR_FILENO, O_WRONLY};
+        use libc::{O_WRONLY, STDERR_FILENO, close, dup, dup2, fflush, open};
         unsafe {
             // Flush stderr and redirect to /dev/null
             fflush(std::ptr::null_mut());
@@ -298,7 +301,8 @@ impl AudioBuffer {
         let sample_duration = 1.0 / self.sample_rate as f64;
         for (i, &sample) in samples.iter().enumerate() {
             self.samples.push_back(sample);
-            self.timestamps.push_back(timestamp + (i as f64 * sample_duration));
+            self.timestamps
+                .push_back(timestamp + (i as f64 * sample_duration));
         }
 
         // Remove old samples that exceed max_duration
@@ -315,10 +319,10 @@ impl AudioBuffer {
 
     pub fn extract_segment(&self, start_time: f64, end_time: f64) -> Vec<f32> {
         let mut segment = Vec::new();
-        
+
         // Add a small tolerance for timestamp matching
         let tolerance = 0.01; // 10ms tolerance
-        
+
         for (i, &timestamp) in self.timestamps.iter().enumerate() {
             if timestamp >= (start_time - tolerance) && timestamp <= (end_time + tolerance) {
                 if let Some(&sample) = self.samples.get(i) {
@@ -326,13 +330,13 @@ impl AudioBuffer {
                 }
             }
         }
-        
+
         // Ensure we have at least some samples
         if segment.is_empty() && !self.samples.is_empty() {
             // Fallback: try to get samples around the expected time
             let start_idx = ((start_time * 24000.0) as usize).min(self.samples.len());
             let end_idx = ((end_time * 24000.0) as usize).min(self.samples.len());
-            
+
             if start_idx < end_idx {
                 for i in start_idx..end_idx {
                     if let Some(&sample) = self.samples.get(i) {
@@ -341,7 +345,7 @@ impl AudioBuffer {
                 }
             }
         }
-        
+
         segment
     }
 }
@@ -358,7 +362,11 @@ impl SentenceDetector {
         }
     }
 
-    pub fn process_word(&mut self, word: &WordTimestamp, vad_confidence: Option<f32>) -> Option<SentenceBuffer> {
+    pub fn process_word(
+        &mut self,
+        word: &WordTimestamp,
+        vad_confidence: Option<f32>,
+    ) -> Option<SentenceBuffer> {
         // Add word to current accumulation
         if !self.accumulated_text.is_empty() {
             self.accumulated_text.push(' ');
@@ -367,9 +375,12 @@ impl SentenceDetector {
         self.accumulated_words.push(word.clone());
 
         // Check for sentence boundary conditions
-        let has_punctuation = self.config.punctuation_markers.iter()
+        let has_punctuation = self
+            .config
+            .punctuation_markers
+            .iter()
             .any(|marker| word.word.ends_with(marker));
-        
+
         let silence_duration = if let Some(end_time) = word.end_time {
             end_time - self.last_word_time
         } else {
@@ -377,7 +388,8 @@ impl SentenceDetector {
         };
 
         let has_long_pause = silence_duration > self.config.silence_duration;
-        let has_vad_pause = vad_confidence.map_or(false, |conf| conf > self.config.vad_pause_threshold);
+        let has_vad_pause =
+            vad_confidence.map_or(false, |conf| conf > self.config.vad_pause_threshold);
 
         let sentence_duration = if let Some(first_word) = self.accumulated_words.first() {
             word.start_time - first_word.start_time
@@ -385,11 +397,14 @@ impl SentenceDetector {
             0.0
         };
 
-        let is_min_duration = sentence_duration >= self.config.min_duration || self.accumulated_words.len() >= 3;
+        let is_min_duration =
+            sentence_duration >= self.config.min_duration || self.accumulated_words.len() >= 3;
         let is_max_duration = sentence_duration >= self.config.max_duration;
 
         // Determine if we should complete the sentence
-        let should_complete = is_min_duration && (has_punctuation || has_long_pause || has_vad_pause) || is_max_duration;
+        let should_complete = is_min_duration
+            && (has_punctuation || has_long_pause || has_vad_pause)
+            || is_max_duration;
 
         if should_complete && !self.accumulated_words.is_empty() {
             let sentence = SentenceBuffer {
@@ -421,10 +436,16 @@ pub struct WhisperProcessor {
 }
 
 impl WhisperProcessor {
-    pub fn new(model: WhisperModel) -> (Self, mpsc::UnboundedReceiver<SentenceBuffer>, mpsc::UnboundedSender<WhisperMessage>) {
+    pub fn new(
+        model: WhisperModel,
+    ) -> (
+        Self,
+        mpsc::UnboundedReceiver<SentenceBuffer>,
+        mpsc::UnboundedSender<WhisperMessage>,
+    ) {
         let (sentence_tx, sentence_rx) = mpsc::unbounded_channel();
         let (result_tx, result_rx) = mpsc::unbounded_channel();
-        
+
         let processor = Self {
             model: Arc::new(model),
             sentence_tx,

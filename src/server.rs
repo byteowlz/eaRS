@@ -1,16 +1,16 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use futures::{SinkExt, StreamExt};
+#[cfg(unix)]
+use libc::{EPERM, ESRCH, kill};
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 use std::{fs, io, path::PathBuf};
 use tokio::net::TcpListener;
-#[cfg(unix)]
-use libc::{kill, EPERM, ESRCH};
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{Semaphore, mpsc};
 use tokio::task;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 
-use crate::config::{ensure_ref_audio, AppConfig};
+use crate::config::{AppConfig, ensure_ref_audio};
 use crate::{Model, TranscriptionOptions, TranscriptionSink, WebSocketMessage};
 
 #[derive(Debug, Clone)]
@@ -25,6 +25,8 @@ pub async fn run(options: ServerOptions) -> Result<()> {
     let _pid_guard = create_pid_guard()?;
     let config = AppConfig::load()?;
     ensure_ref_audio(&config).await?;
+
+    let prime_languages = Arc::new(config.model.prime_languages.clone());
 
     let model_dir = if config.storage.model_dir == "default" {
         None
@@ -50,7 +52,7 @@ pub async fn run(options: ServerOptions) -> Result<()> {
         .await?
     };
 
-    for lang in &config.model.prime_languages {
+    for lang in prime_languages.iter() {
         eprintln!("Priming model with language: {}", lang);
         if let Err(e) = model.prime_with_lang_code(lang) {
             eprintln!("Failed to prime language {}: {}", lang, e);
@@ -61,7 +63,10 @@ pub async fn run(options: ServerOptions) -> Result<()> {
     let listener = TcpListener::bind(&options.bind_addr).await?;
     let session_limit = Arc::new(Semaphore::new(5));
 
-    eprintln!("Server listening on {} (max 5 concurrent sessions)", options.bind_addr);
+    eprintln!(
+        "Server listening on {} (max 5 concurrent sessions)",
+        options.bind_addr
+    );
 
     loop {
         let (stream, addr) = listener.accept().await?;
@@ -69,7 +74,10 @@ pub async fn run(options: ServerOptions) -> Result<()> {
         let permit = match session_limit.clone().try_acquire_owned() {
             Ok(permit) => permit,
             Err(_) => {
-                eprintln!("[ears-server] rejecting connection from {} (server busy)", addr);
+                eprintln!(
+                    "[ears-server] rejecting connection from {} (server busy)",
+                    addr
+                );
                 tokio::spawn(async move {
                     if let Ok(mut ws) = accept_async(stream).await {
                         let _ = ws
@@ -85,9 +93,10 @@ pub async fn run(options: ServerOptions) -> Result<()> {
         };
 
         let model = model.clone();
+        let prime_languages = prime_languages.clone();
         tokio::spawn(async move {
             eprintln!("[ears-server] handling connection from {}", addr);
-            if let Err(err) = handle_connection(stream, model, permit).await {
+            if let Err(err) = handle_connection(stream, model, permit, prime_languages).await {
                 eprintln!("[ears-server] connection {} error: {}", addr, err);
             }
             eprintln!("[ears-server] connection from {} closed", addr);
@@ -99,10 +108,11 @@ async fn handle_connection(
     stream: tokio::net::TcpStream,
     model: Arc<Mutex<Model>>,
     permit: tokio::sync::OwnedSemaphorePermit,
+    prime_languages: Arc<Vec<String>>,
 ) -> Result<()> {
     // Set TCP keepalive to detect dead connections
     let _ = stream.set_nodelay(true);
-    
+
     let ws_stream = accept_async(stream).await?;
     let (mut ws_writer, mut ws_reader) = ws_stream.split();
 
@@ -142,12 +152,15 @@ async fn handle_connection(
                         eprintln!("[ears-server] stop command received, breaking reader");
                         break;
                     }
-                    
+
                     if let Ok(cmd) = serde_json::from_str::<serde_json::Value>(&text) {
                         if let Some(cmd_type) = cmd.get("type").and_then(|v| v.as_str()) {
                             if cmd_type == "setlanguage" {
                                 if let Some(lang) = cmd.get("lang").and_then(|v| v.as_str()) {
-                                    eprintln!("[ears-server] received language change command: {}", lang);
+                                    eprintln!(
+                                        "[ears-server] received language change command: {}",
+                                        lang
+                                    );
                                     let _ = lang_sender.send(lang.to_string());
                                 }
                             }
@@ -170,13 +183,30 @@ async fn handle_connection(
 
     let msg_tx_clone = msg_tx.clone();
     let model_clone = model.clone();
+    let prime_languages_clone = prime_languages.clone();
     let transcription = task::spawn_blocking(move || {
         eprintln!("[ears-server] transcription task started");
         let mut model = match model_clone.lock() {
             Ok(guard) => guard,
             Err(poison) => poison.into_inner(),
         };
-        
+
+        if let Err(e) = model.reset_stream_state() {
+            eprintln!("[ears-server] failed to reset model state: {}", e);
+            return Err(e);
+        }
+
+        if !prime_languages_clone.is_empty() {
+            for lang in prime_languages_clone.iter() {
+                eprintln!("[ears-server] re-priming model with language: {}", lang);
+                if let Err(e) = model.prime_with_lang_code(lang) {
+                    eprintln!("[ears-server] failed to prime language {}: {}", lang, e);
+                } else {
+                    eprintln!("[ears-server] language priming complete: {}", lang);
+                }
+            }
+        }
+
         while let Ok(lang) = lang_cmd_rx.try_recv() {
             eprintln!("[ears-server] priming model with language: {}", lang);
             if let Err(e) = model.prime_with_lang_code(&lang) {
@@ -185,11 +215,14 @@ async fn handle_connection(
                 eprintln!("[ears-server] language priming complete: {}", lang);
             }
         }
-        
+
         eprintln!("[ears-server] starting transcription loop");
         let mut sink = SessionSink::new(msg_tx_clone);
         let result = model.transcribe_live_with_sink(audio_rx, None, Some(lang_cmd_rx), &mut sink);
-        eprintln!("[ears-server] transcription loop finished: {:?}", result.as_ref().map(|_| "Ok").map_err(|e| e.to_string()));
+        eprintln!(
+            "[ears-server] transcription loop finished: {:?}",
+            result.as_ref().map(|_| "Ok").map_err(|e| e.to_string())
+        );
         result
     });
 
@@ -255,7 +288,12 @@ fn should_stop(text: &str) -> bool {
 
     serde_json::from_str::<serde_json::Value>(text)
         .ok()
-        .and_then(|value| value.get("type").and_then(|v| v.as_str()).map(|s| s.eq_ignore_ascii_case("stop")))
+        .and_then(|value| {
+            value
+                .get("type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.eq_ignore_ascii_case("stop"))
+        })
         .unwrap_or(false)
 }
 
@@ -268,7 +306,10 @@ fn create_pid_guard() -> Result<PidFileGuard> {
     if path.exists() {
         if let Some(existing_pid) = read_pid_file()? {
             if is_process_alive(existing_pid) {
-                return Err(anyhow!("ears server already running (pid {})", existing_pid));
+                return Err(anyhow!(
+                    "ears server already running (pid {})",
+                    existing_pid
+                ));
             }
         }
         let _ = fs::remove_file(&path);
@@ -298,7 +339,10 @@ pub fn read_pid_file() -> Result<Option<i32>> {
         return Ok(None);
     }
     let contents = fs::read_to_string(&path)?;
-    let pid = contents.trim().parse::<i32>().map_err(|e| anyhow!("invalid pid file: {e}"))?;
+    let pid = contents
+        .trim()
+        .parse::<i32>()
+        .map_err(|e| anyhow!("invalid pid file: {e}"))?;
     Ok(Some(pid))
 }
 

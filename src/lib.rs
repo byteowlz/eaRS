@@ -2,8 +2,8 @@ use anyhow::Result;
 use candle::{Device, Tensor};
 use crossbeam_channel::Receiver;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub mod config;
 pub use kaudio;
@@ -301,12 +301,16 @@ pub enum WebSocketMessage {
         start_time: f64,
         end_time: Option<f64>,
     },
-    Pause { timestamp: f64 },
+    Pause {
+        timestamp: f64,
+    },
     Final {
         text: String,
         words: Vec<WordTimestamp>,
     },
-    LanguageChanged { lang: String },
+    LanguageChanged {
+        lang: String,
+    },
     Status {
         paused: bool,
         vad: bool,
@@ -382,7 +386,12 @@ impl Default for TranscriptionOptions {
 }
 
 impl Model {
-    pub async fn load_from_hf(hf_repo: &str, cpu: bool, options: TranscriptionOptions, model_dir: Option<&std::path::Path>) -> Result<Self> {
+    pub async fn load_from_hf(
+        hf_repo: &str,
+        cpu: bool,
+        options: TranscriptionOptions,
+        model_dir: Option<&std::path::Path>,
+    ) -> Result<Self> {
         let device = create_device(cpu)?;
         let dtype = device.bf16_default_to_f32();
 
@@ -422,10 +431,15 @@ impl Model {
                     options.whisper_model.as_deref(),
                     options.whisper_quantization.as_deref(),
                     device.clone(),
-                ).await {
+                )
+                .await
+                {
                     Ok(model) => Some(model),
                     Err(e) => {
-                        eprintln!("Failed to load Whisper model: {}. Continuing without Whisper enhancement.", e);
+                        eprintln!(
+                            "Failed to load Whisper model: {}. Continuing without Whisper enhancement.",
+                            e
+                        );
                         None
                     }
                 }
@@ -462,19 +476,25 @@ impl Model {
 
         let audio_duration_secs = pcm.len() as f64 / 24_000.0;
         let discard_window_secs = 1.0;
-        
+
         for chunk in pcm.chunks(1920) {
             let tensor = Tensor::new(chunk, &self.dev)?.reshape((1, 1, chunk.len()))?;
             let _ = self
                 .state
                 .step_pcm(tensor, None, &().into(), |_, _, _| ())?;
         }
-        
+
         self.injection_end_time = Some(
-            std::time::Instant::now() + 
-            std::time::Duration::from_secs_f64(audio_duration_secs + discard_window_secs)
+            std::time::Instant::now()
+                + std::time::Duration::from_secs_f64(audio_duration_secs + discard_window_secs),
         );
-        
+
+        Ok(())
+    }
+
+    pub fn reset_stream_state(&mut self) -> Result<()> {
+        self.state.reset()?;
+        self.injection_end_time = None;
         Ok(())
     }
 
@@ -532,21 +552,28 @@ impl Model {
         let mut word_sent = false;
         let mut printed_eot = false;
         let mut last_voice_activity: Option<Instant> = None;
-        
+
         // Initialize Whisper components if enabled
         let mut sentence_detector = if self.whisper_enabled {
-            let config = config::AppConfig::load().ok()
+            let config = config::AppConfig::load()
+                .ok()
                 .and_then(|c| Some(c.whisper.sentence_detection));
             config.map(|c| whisper::SentenceDetector::new(c))
-        } else { None };
+        } else {
+            None
+        };
 
         let mut audio_buffer = if self.whisper_enabled {
             Some(whisper::AudioBuffer::new(30.0, 24000))
-        } else { None };
+        } else {
+            None
+        };
 
         let mut display_manager = if self.whisper_enabled && !self.timestamps {
             Some(display::DisplayManager::new())
-        } else { None };
+        } else {
+            None
+        };
 
         // Background Whisper worker (non-blocking) if model is available
         let (wh_tx, wh_rx) = crossbeam_channel::unbounded::<whisper::SentenceBuffer>();
@@ -581,6 +608,9 @@ impl Model {
             }
         }
 
+        // Buffer to accumulate samples across small incoming chunks
+        let mut sample_buffer: Vec<f32> = Vec::new();
+
         loop {
             if let Some(ref lang_rx) = lang_cmd_rx {
                 while let Ok(lang) = lang_rx.try_recv() {
@@ -590,7 +620,7 @@ impl Model {
                     }
                 }
             }
-            
+
             let pcm_chunk = match audio_rx.recv() {
                 Ok(chunk) => chunk,
                 Err(_) => {
@@ -603,17 +633,22 @@ impl Model {
             }
 
             let mut has_voice_activity = false;
-            
-            // Store audio in buffer for Whisper if enabled
+
+            // Accumulate samples so we always process in 1920-sample frames (~80ms @ 24kHz)
+            sample_buffer.extend_from_slice(&pcm_chunk);
+
+            // Store audio in buffer for Whisper if enabled (based on absolute time)
             if let Some(ref mut buffer) = audio_buffer {
-                // Use cumulative time, not chunk-relative time
-                let sample_offset = all_audio.len().saturating_sub(pcm_chunk.len());
+                let sample_offset = all_audio.len().saturating_sub(sample_buffer.len());
                 let chunk_start_time = sample_offset as f64 / 24000.0;
                 buffer.push_samples(&pcm_chunk, chunk_start_time);
             }
 
-            for pcm in pcm_chunk.chunks(1920) {
-                let pcm_tensor = Tensor::new(pcm, &self.dev)?.reshape((1, 1, ()))?;
+            // Process in fixed-size frames, keep the remainder in sample_buffer
+            let mut consumed = 0usize;
+            while consumed + 1920 <= sample_buffer.len() {
+                let frame = &sample_buffer[consumed..consumed + 1920];
+                let pcm_tensor = Tensor::new(frame, &self.dev)?.reshape((1, 1, ()))?;
                 let asr_msgs = self
                     .state
                     .step_pcm(pcm_tensor, None, &().into(), |_, _, _| ())?;
@@ -677,33 +712,39 @@ impl Model {
 
                             current_text.push(' ');
                             current_text.push_str(&word);
-                             
+
                             // Create WordTimestamp for sentence detection
                             let word_ts = WordTimestamp {
                                 word: word.clone(),
                                 start_time: *start_time,
                                 end_time: None,
                             };
-                             
+
                             // Check for sentence boundaries if Whisper is enabled
                             if let Some(ref mut detector) = sentence_detector {
                                 // Get VAD confidence from previous Step message
-                                let vad_confidence = if self.vad && printed_eot { Some(0.9) } else { None };
-                                 
-                                if let Some(mut sentence) = detector.process_word(&word_ts, vad_confidence) {
+                                let vad_confidence = if self.vad && printed_eot {
+                                    Some(0.9)
+                                } else {
+                                    None
+                                };
+
+                                if let Some(mut sentence) =
+                                    detector.process_word(&word_ts, vad_confidence)
+                                {
                                     // Extract audio for the sentence
                                     if let Some(ref buffer) = audio_buffer {
                                         sentence.audio_samples = buffer.extract_segment(
-                                            sentence.start_time, 
-                                            sentence.end_time
+                                            sentence.start_time,
+                                            sentence.end_time,
                                         );
                                     }
-                                     
+
                                     // Queue sentence for background Whisper processing
                                     if self.whisper_enabled && self.whisper_model.is_some() {
                                         let _ = wh_tx.send(sentence.clone());
                                     }
-                                     
+
                                     // Update display if using display manager
                                     if let Some(ref mut dm) = display_manager {
                                         dm.complete_sentence(sentence.id, sentence.kyutai_text);
@@ -718,7 +759,7 @@ impl Model {
                                     end_time: None,
                                 });
                                 word_sent = true;
-                                
+
                                 // Only show live transcription if we're in an interactive terminal
                                 if atty::is(atty::Stream::Stdout) {
                                     if let Some(ref mut dm) = display_manager {
@@ -749,9 +790,14 @@ impl Model {
 
                             last_word = Some((word, *start_time));
                         }
-
                     }
                 }
+                consumed += 1920;
+            }
+
+            // Drop the processed prefix, retain any tail < 1920 for the next loop
+            if consumed > 0 {
+                sample_buffer.drain(0..consumed);
             }
 
             // Update voice activity timestamp if we detected voice
@@ -831,7 +877,7 @@ impl Model {
         if let Some(save_path) = save_audio {
             self.save_audio_wav(&all_audio, 24000, save_path)?;
         }
- 
+
         let result = TranscriptionResult {
             text: current_text.trim().to_string(),
             words,
@@ -843,9 +889,8 @@ impl Model {
             words: result.words.clone(),
         });
         eprintln!("Final message sent");
- 
-        Ok(result)
 
+        Ok(result)
     }
 
     pub async fn transcribe_live_ws(
@@ -908,7 +953,8 @@ impl Model {
                             match msg {
                                 Ok(Message::Close(_)) => break,
                                 Ok(Message::Text(text)) => {
-                                    if let Ok(cmd) = serde_json::from_str::<WebSocketCommand>(&text) {
+                                    if let Ok(cmd) = serde_json::from_str::<WebSocketCommand>(&text)
+                                    {
                                         match cmd {
                                             WebSocketCommand::Restart => {
                                                 let _ = restart_tx.send(());
@@ -923,7 +969,10 @@ impl Model {
                                             }
                                             WebSocketCommand::SetLanguage { lang } => {
                                                 let _ = lang_tx.send(Some(lang.clone()));
-                                                let _ = ws_tx.send(WebSocketMessage::LanguageChanged { lang });
+                                                let _ =
+                                                    ws_tx.send(WebSocketMessage::LanguageChanged {
+                                                        lang,
+                                                    });
                                             }
                                             WebSocketCommand::GetStatus => {
                                                 // Broadcast current status
@@ -991,7 +1040,7 @@ impl Model {
         // Subscribe to language changes
         let mut lang_rx = lang_rx_watch.clone();
         let mut current_lang: Option<String> = None;
-        
+
         // Whisper async worker for WS mode
         let (wh_tx, mut wh_rx) = tokio::sync::mpsc::unbounded_channel::<whisper::SentenceBuffer>();
         if self.whisper_enabled {
@@ -1009,7 +1058,8 @@ impl Model {
                         let sentence_cl = sentence.clone();
                         let res = tokio::task::spawn_blocking(move || {
                             wm_cl.transcribe_audio(&sentence_cl.audio_samples)
-                        }).await;
+                        })
+                        .await;
                         let corrected_text = match res {
                             Ok(Ok(t)) => t,
                             _ => sentence.kyutai_text.clone(),
@@ -1052,10 +1102,18 @@ impl Model {
 
             // Initialize Whisper sentence detection for WS
             let mut sentence_detector = if self.whisper_enabled {
-                let cfg = config::AppConfig::load().ok().map(|c| c.whisper.sentence_detection);
+                let cfg = config::AppConfig::load()
+                    .ok()
+                    .map(|c| c.whisper.sentence_detection);
                 cfg.map(|c| whisper::SentenceDetector::new(c))
-            } else { None };
-            let mut audio_buffer = if self.whisper_enabled { Some(whisper::AudioBuffer::new(30.0, 24000)) } else { None };
+            } else {
+                None
+            };
+            let mut audio_buffer = if self.whisper_enabled {
+                Some(whisper::AudioBuffer::new(30.0, 24000))
+            } else {
+                None
+            };
 
             loop {
                 tokio::select! {
@@ -1099,7 +1157,7 @@ impl Model {
                         }
 
                         let mut has_voice_activity = false;
-                        
+
                         // Store audio in buffer for Whisper if enabled
                         if let Some(ref mut buffer) = audio_buffer {
                             let sample_offset = all_audio.len().saturating_sub(pcm_chunk.len());
@@ -1292,25 +1350,26 @@ impl Model {
         })
     }
 
-    
-
-pub fn prime_with_lang_code(&mut self, iso_lang: &str) -> Result<()> {
-    let ref_code = match iso_lang {
-        "de" => "ger",
-        "ja" => "jap",
-        "es" => "esp",
-        "it" => "ita",
-        "pt" => "por",
-        other => {
-            eprintln!("Warning: Unknown language code '{}'. Supported codes: de, ja, es, it, pt", other);
-            eprintln!("Skipping language priming.");
-            return Ok(());
-        }
-    };
-    let config = config::AppConfig::load()?;
-    let path = config.ref_audio_path().join(format!("{}.mp3", ref_code));
-    self.prime_with_audio(path)
-}
+    pub fn prime_with_lang_code(&mut self, iso_lang: &str) -> Result<()> {
+        let ref_code = match iso_lang {
+            "de" => "ger",
+            "ja" => "jap",
+            "es" => "esp",
+            "it" => "ita",
+            "pt" => "por",
+            other => {
+                eprintln!(
+                    "Warning: Unknown language code '{}'. Supported codes: de, ja, es, it, pt",
+                    other
+                );
+                eprintln!("Skipping language priming.");
+                return Ok(());
+            }
+        };
+        let config = config::AppConfig::load()?;
+        let path = config.ref_audio_path().join(format!("{}.mp3", ref_code));
+        self.prime_with_audio(path)
+    }
 
     fn transcribe_pcm(&mut self, mut pcm: Vec<f32>) -> Result<TranscriptionResult> {
         if self.config.stt_config.audio_silence_prefix_seconds > 0.0 {
@@ -1519,11 +1578,13 @@ pub mod audio {
                     move |data: &[f32], _: &cpal::InputCallbackInfo| {
                         // Convert stereo to mono by averaging channels
                         let mono_data = if config.channels == 2 {
-                            data.chunks(2).map(|chunk| (chunk[0] + chunk[1]) / 2.0).collect()
+                            data.chunks(2)
+                                .map(|chunk| (chunk[0] + chunk[1]) / 2.0)
+                                .collect()
                         } else {
                             data.to_vec()
                         };
-                        
+
                         let resampled = if sample_rate != 24000 {
                             let ratio = 24000.0 / sample_rate as f32;
                             let new_len = (mono_data.len() as f32 * ratio) as usize;
@@ -1535,7 +1596,8 @@ pub mod audio {
                                 let frac = pos - idx as f32;
 
                                 if idx + 1 < mono_data.len() {
-                                    let sample = mono_data[idx] * (1.0 - frac) + mono_data[idx + 1] * frac;
+                                    let sample =
+                                        mono_data[idx] * (1.0 - frac) + mono_data[idx + 1] * frac;
                                     resampled.push(sample);
                                 } else if idx < mono_data.len() {
                                     resampled.push(mono_data[idx]);
@@ -1564,15 +1626,19 @@ pub mod audio {
                     &config,
                     move |data: &[i16], _: &cpal::InputCallbackInfo| {
                         // Convert I16 to F32
-                        let f32_data: Vec<f32> = data.iter().map(|&sample| sample as f32 / 32768.0).collect();
-                        
+                        let f32_data: Vec<f32> =
+                            data.iter().map(|&sample| sample as f32 / 32768.0).collect();
+
                         // Convert stereo to mono by averaging channels
                         let mono_data = if config.channels == 2 {
-                            f32_data.chunks(2).map(|chunk| (chunk[0] + chunk[1]) / 2.0).collect()
+                            f32_data
+                                .chunks(2)
+                                .map(|chunk| (chunk[0] + chunk[1]) / 2.0)
+                                .collect()
                         } else {
                             f32_data
                         };
-                        
+
                         let resampled = if sample_rate != 24000 {
                             let ratio = 24000.0 / sample_rate as f32;
                             let new_len = (mono_data.len() as f32 * ratio) as usize;
@@ -1584,7 +1650,8 @@ pub mod audio {
                                 let frac = pos - idx as f32;
 
                                 if idx + 1 < mono_data.len() {
-                                    let sample = mono_data[idx] * (1.0 - frac) + mono_data[idx + 1] * frac;
+                                    let sample =
+                                        mono_data[idx] * (1.0 - frac) + mono_data[idx + 1] * frac;
                                     resampled.push(sample);
                                 } else if idx < mono_data.len() {
                                     resampled.push(mono_data[idx]);
@@ -1613,15 +1680,21 @@ pub mod audio {
                     &config,
                     move |data: &[u16], _: &cpal::InputCallbackInfo| {
                         // Convert U16 to F32
-                        let f32_data: Vec<f32> = data.iter().map(|&sample| (sample as f32 - 32768.0) / 32768.0).collect();
-                        
+                        let f32_data: Vec<f32> = data
+                            .iter()
+                            .map(|&sample| (sample as f32 - 32768.0) / 32768.0)
+                            .collect();
+
                         // Convert stereo to mono by averaging channels
                         let mono_data = if config.channels == 2 {
-                            f32_data.chunks(2).map(|chunk| (chunk[0] + chunk[1]) / 2.0).collect()
+                            f32_data
+                                .chunks(2)
+                                .map(|chunk| (chunk[0] + chunk[1]) / 2.0)
+                                .collect()
                         } else {
                             f32_data
                         };
-                        
+
                         let resampled = if sample_rate != 24000 {
                             let ratio = 24000.0 / sample_rate as f32;
                             let new_len = (mono_data.len() as f32 * ratio) as usize;
@@ -1633,7 +1706,8 @@ pub mod audio {
                                 let frac = pos - idx as f32;
 
                                 if idx + 1 < mono_data.len() {
-                                    let sample = mono_data[idx] * (1.0 - frac) + mono_data[idx + 1] * frac;
+                                    let sample =
+                                        mono_data[idx] * (1.0 - frac) + mono_data[idx + 1] * frac;
                                     resampled.push(sample);
                                 } else if idx < mono_data.len() {
                                     resampled.push(mono_data[idx]);
@@ -1658,7 +1732,8 @@ pub mod audio {
             }
             format => {
                 return Err(anyhow::anyhow!(
-                    "Unsupported sample format: {:?}. Supported formats: F32, I16, U16", format
+                    "Unsupported sample format: {:?}. Supported formats: F32, I16, U16",
+                    format
                 ));
             }
         };

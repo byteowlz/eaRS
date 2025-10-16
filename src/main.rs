@@ -289,19 +289,22 @@ fn stop_server() -> Result<()> {
 
     if let Some(dictation_pid) = read_dictation_pid()? {
         if server::is_process_alive(dictation_pid) {
-            println!("stopping associated dictation process (pid {})...", dictation_pid);
+            println!(
+                "stopping associated dictation process (pid {})...",
+                dictation_pid
+            );
             #[cfg(unix)]
             unsafe {
                 let _ = kill(dictation_pid, SIGTERM);
             }
-            
+
             for _ in 0..50 {
                 if !server::is_process_alive(dictation_pid) {
                     break;
                 }
                 thread::sleep(Duration::from_millis(100));
             }
-            
+
             let _ = std::fs::remove_file(get_dictation_pid_file());
             println!("ears dictation stopped.");
         }
@@ -467,7 +470,7 @@ async fn run_client(args: ClientArgs) -> Result<()> {
                 std::future::pending().await
             }
         };
-        
+
         let final_timeout = if stop_requested {
             tokio::time::sleep(Duration::from_secs(5))
         } else {
@@ -584,20 +587,19 @@ async fn transcribe_file(file_path: &str, args: &ClientArgs) -> Result<()> {
     use ears::kaudio;
     use std::fs::File;
     use std::io::Read;
-    
+
     let (pcm, sample_rate) = if file_path == "-" {
         eprintln!("Reading audio from stdin...");
         let mut buffer = Vec::new();
-        io::stdin().read_to_end(&mut buffer)
+        io::stdin()
+            .read_to_end(&mut buffer)
             .context("Failed to read from stdin")?;
-        
+
         let temp_file = std::env::temp_dir().join("ears_stdin_audio");
-        std::fs::write(&temp_file, &buffer)
-            .context("Failed to write temp file")?;
-        
-        let result = kaudio::pcm_decode(&temp_file)
-            .context("Failed to decode audio from stdin");
-        
+        std::fs::write(&temp_file, &buffer).context("Failed to write temp file")?;
+
+        let result = kaudio::pcm_decode(&temp_file).context("Failed to decode audio from stdin");
+
         let _ = std::fs::remove_file(&temp_file);
         result?
     } else {
@@ -605,34 +607,38 @@ async fn transcribe_file(file_path: &str, args: &ClientArgs) -> Result<()> {
         kaudio::pcm_decode(file_path)
             .with_context(|| format!("Failed to load audio file: {}", file_path))?
     };
-    
-    eprintln!("Sample rate: {}, samples: {}, duration: {:.2}s", 
-              sample_rate, pcm.len(), pcm.len() as f64 / sample_rate as f64);
-    
+
+    eprintln!(
+        "Sample rate: {}, samples: {}, duration: {:.2}s",
+        sample_rate,
+        pcm.len(),
+        pcm.len() as f64 / sample_rate as f64
+    );
+
     let pcm = if sample_rate != 24_000 {
         eprintln!("Resampling from {}Hz to 24000Hz", sample_rate);
         kaudio::resample(&pcm, sample_rate as usize, 24_000)?
     } else {
         pcm
     };
-    
+
     let config = AppConfig::load()?;
     let server_url = args
         .server
         .clone()
         .unwrap_or_else(|| format!("ws://127.0.0.1:{}/", config.server.websocket_port));
-    
+
     let (ws_stream, _) = connect_async(&server_url)
         .await
         .with_context(|| format!("Failed to connect to {}", server_url))?;
-    
+
     if args.verbose {
         eprintln!("Connected to server at {}", server_url);
     }
-    
+
     let (mut ws_writer, mut ws_reader) = ws_stream.split();
     let (writer_tx, mut writer_rx) = mpsc::unbounded_channel::<WriterCommand>();
-    
+
     let lang_to_send = args.lang.clone();
     let writer_handle = tokio::spawn(async move {
         if let Some(lang) = lang_to_send {
@@ -641,7 +647,7 @@ async fn transcribe_file(file_path: &str, args: &ClientArgs) -> Result<()> {
                 eprintln!("Failed to send language change command");
             }
         }
-        
+
         while let Some(cmd) = writer_rx.recv().await {
             match cmd {
                 WriterCommand::Audio(bytes) => {
@@ -650,7 +656,9 @@ async fn transcribe_file(file_path: &str, args: &ClientArgs) -> Result<()> {
                     }
                 }
                 WriterCommand::Stop => {
-                    let _ = ws_writer.send(Message::Text(json!({ "type": "stop" }).to_string())).await;
+                    let _ = ws_writer
+                        .send(Message::Text(json!({ "type": "stop" }).to_string()))
+                        .await;
                 }
                 WriterCommand::Close => {
                     break;
@@ -659,23 +667,26 @@ async fn transcribe_file(file_path: &str, args: &ClientArgs) -> Result<()> {
         }
         let _ = ws_writer.close().await;
     });
-    
+
     eprintln!("Streaming audio to server...");
     let chunk_size = 1920;
     for chunk in pcm.chunks(chunk_size) {
-        if writer_tx.send(WriterCommand::Audio(encode_chunk(chunk))).is_err() {
+        if writer_tx
+            .send(WriterCommand::Audio(encode_chunk(chunk)))
+            .is_err()
+        {
             break;
         }
     }
-    
+
     let _ = writer_tx.send(WriterCommand::Stop);
-    
+
     let mut final_result: Option<(String, Vec<WordTimestamp>)> = None;
     let timeout_duration = Duration::from_secs(10);
-    
+
     let timeout = tokio::time::sleep(timeout_duration);
     tokio::pin!(timeout);
-    
+
     loop {
         tokio::select! {
             _ = &mut timeout => {
@@ -723,9 +734,9 @@ async fn transcribe_file(file_path: &str, args: &ClientArgs) -> Result<()> {
             }
         }
     }
-    
+
     let _ = writer_handle.await;
-    
+
     if let Some((text, words)) = final_result {
         if !args.timestamps {
             println!("\n{}", text);
@@ -736,7 +747,7 @@ async fn transcribe_file(file_path: &str, args: &ClientArgs) -> Result<()> {
     } else {
         eprintln!("No transcription received from server");
     }
-    
+
     Ok(())
 }
 
@@ -789,7 +800,9 @@ fn start_dictation() -> Result<()> {
     cmd.stdout(Stdio::null());
     cmd.stderr(Stdio::null());
 
-    let child = cmd.spawn().context("failed to spawn ears-dictation process")?;
+    let child = cmd
+        .spawn()
+        .context("failed to spawn ears-dictation process")?;
     let pid = child.id();
 
     println!("ears dictation started (pid {})", pid);
