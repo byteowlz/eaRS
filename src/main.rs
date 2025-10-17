@@ -111,6 +111,10 @@ struct ServerStartArgs {
     #[arg(long, default_value_t = false)]
     vad: bool,
 
+    /// Maximum number of concurrent streaming sessions handled in parallel
+    #[arg(long, default_value_t = 8)]
+    max_sessions: usize,
+
     /// Force-enable Whisper enhancements (requires --features whisper)
     #[cfg(feature = "whisper")]
     #[arg(long, default_value_t = false)]
@@ -331,6 +335,7 @@ fn append_server_args(cmd: &mut ProcessCommand, args: &ServerStartArgs) {
     if args.vad {
         cmd.arg("--vad");
     }
+    cmd.arg("--max-sessions").arg(args.max_sessions.to_string());
     if args.hf_repo != "kyutai/stt-1b-en_fr-candle" {
         cmd.arg("--hf-repo").arg(&args.hf_repo);
     }
@@ -372,6 +377,7 @@ fn build_server_options(args: &ServerStartArgs) -> Result<server::ServerOptions>
         hf_repo: args.hf_repo.clone(),
         cpu: args.cpu,
         transcription,
+        max_parallel_sessions: args.max_sessions.max(1),
     })
 }
 
@@ -585,7 +591,6 @@ enum WriterCommand {
 
 async fn transcribe_file(file_path: &str, args: &ClientArgs) -> Result<()> {
     use ears::kaudio;
-    use std::fs::File;
     use std::io::Read;
 
     let (pcm, sample_rate) = if file_path == "-" {

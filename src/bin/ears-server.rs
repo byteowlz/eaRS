@@ -28,6 +28,10 @@ struct Args {
     #[arg(long, default_value_t = false)]
     vad: bool,
 
+    /// Maximum number of concurrent streaming sessions handled in parallel
+    #[arg(long, default_value_t = 8)]
+    max_sessions: usize,
+
     /// Force Whisper enhancement, overriding config defaults (requires `--features whisper`)
     #[cfg(feature = "whisper")]
     #[arg(long, default_value_t = false)]
@@ -78,5 +82,6 @@ fn build_server_options(args: &Args) -> Result<server::ServerOptions> {
         hf_repo: args.hf_repo.clone(),
         cpu: args.cpu,
         transcription,
+        max_parallel_sessions: args.max_sessions.max(1),
     })
 }

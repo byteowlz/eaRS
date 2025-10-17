@@ -3,15 +3,15 @@ use futures::{SinkExt, StreamExt};
 #[cfg(unix)]
 use libc::{EPERM, ESRCH, kill};
 use serde_json::json;
-use std::sync::{Arc, Mutex};
 use std::{fs, io, path::PathBuf};
 use tokio::net::TcpListener;
-use tokio::sync::{Semaphore, mpsc};
-use tokio::task;
+use tokio::sync::mpsc;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 
 use crate::config::{AppConfig, ensure_ref_audio};
 use crate::{Model, TranscriptionOptions, TranscriptionSink, WebSocketMessage};
+
+mod parallel;
 
 #[derive(Debug, Clone)]
 pub struct ServerOptions {
@@ -19,6 +19,7 @@ pub struct ServerOptions {
     pub hf_repo: String,
     pub cpu: bool,
     pub transcription: TranscriptionOptions,
+    pub max_parallel_sessions: usize,
 }
 
 pub async fn run(options: ServerOptions) -> Result<()> {
@@ -26,77 +27,50 @@ pub async fn run(options: ServerOptions) -> Result<()> {
     let config = AppConfig::load()?;
     ensure_ref_audio(&config).await?;
 
-    let prime_languages = Arc::new(config.model.prime_languages.clone());
-
     let model_dir = if config.storage.model_dir == "default" {
         None
     } else {
         Some(config.model_dir_path())
     };
 
-    let mut model = if let Some(dir) = model_dir.as_ref() {
-        Model::load_from_hf(
+    let batch_size = options.max_parallel_sessions.max(1);
+    let model = if let Some(dir) = model_dir.as_ref() {
+        Model::load_from_hf_with_batch(
             &options.hf_repo,
             options.cpu,
             options.transcription.clone(),
             Some(dir),
+            batch_size,
         )
         .await?
     } else {
-        Model::load_from_hf(
+        Model::load_from_hf_with_batch(
             &options.hf_repo,
             options.cpu,
             options.transcription.clone(),
             None,
+            batch_size,
         )
         .await?
     };
 
-    for lang in prime_languages.iter() {
-        eprintln!("Priming model with language: {}", lang);
-        if let Err(e) = model.prime_with_lang_code(lang) {
-            eprintln!("Failed to prime language {}: {}", lang, e);
-        }
-    }
-
-    let model = Arc::new(Mutex::new(model));
+    let prime_languages = config.model.prime_languages.clone();
+    let engine = parallel::spawn_parallel_engine(model, prime_languages);
     let listener = TcpListener::bind(&options.bind_addr).await?;
-    let session_limit = Arc::new(Semaphore::new(5));
 
     eprintln!(
-        "Server listening on {} (max 5 concurrent sessions)",
-        options.bind_addr
+        "Server listening on {} (max {} concurrent sessions)",
+        options.bind_addr,
+        engine.capacity()
     );
 
     loop {
         let (stream, addr) = listener.accept().await?;
         eprintln!("[ears-server] new connection from {}", addr);
-        let permit = match session_limit.clone().try_acquire_owned() {
-            Ok(permit) => permit,
-            Err(_) => {
-                eprintln!(
-                    "[ears-server] rejecting connection from {} (server busy)",
-                    addr
-                );
-                tokio::spawn(async move {
-                    if let Ok(mut ws) = accept_async(stream).await {
-                        let _ = ws
-                            .send(Message::Text(
-                                json!({ "type": "error", "message": "server busy - maximum concurrent sessions reached" }).to_string(),
-                            ))
-                            .await;
-                        let _ = ws.close(None).await;
-                    }
-                });
-                continue;
-            }
-        };
-
-        let model = model.clone();
-        let prime_languages = prime_languages.clone();
+        let engine_clone = engine.clone();
         tokio::spawn(async move {
             eprintln!("[ears-server] handling connection from {}", addr);
-            if let Err(err) = handle_connection(stream, model, permit, prime_languages).await {
+            if let Err(err) = handle_connection(stream, engine_clone).await {
                 eprintln!("[ears-server] connection {} error: {}", addr, err);
             }
             eprintln!("[ears-server] connection from {} closed", addr);
@@ -106,9 +80,7 @@ pub async fn run(options: ServerOptions) -> Result<()> {
 
 async fn handle_connection(
     stream: tokio::net::TcpStream,
-    model: Arc<Mutex<Model>>,
-    permit: tokio::sync::OwnedSemaphorePermit,
-    prime_languages: Arc<Vec<String>>,
+    engine: parallel::ParallelEngine,
 ) -> Result<()> {
     // Set TCP keepalive to detect dead connections
     let _ = stream.set_nodelay(true);
@@ -117,8 +89,35 @@ async fn handle_connection(
     let (mut ws_writer, mut ws_reader) = ws_stream.split();
 
     let (msg_tx, mut msg_rx) = mpsc::unbounded_channel::<Message>();
-    let (audio_tx, audio_rx) = crossbeam_channel::unbounded::<Vec<f32>>();
-    let (lang_cmd_tx, lang_cmd_rx) = crossbeam_channel::unbounded::<String>();
+    let sink = SessionSink::new(msg_tx.clone());
+    let session = match engine.allocate_session(sink) {
+        Ok(Some(handle)) => handle,
+        Ok(None) => {
+            let _ = msg_tx.send(Message::Text(
+                json!({
+                    "type": "error",
+                    "message": "server busy - maximum concurrent sessions reached"
+                })
+                .to_string(),
+            ));
+            let _ = msg_tx.send(Message::Close(None));
+            while let Some(msg) = msg_rx.recv().await {
+                let _ = ws_writer.send(msg).await;
+            }
+            return Ok(());
+        }
+        Err(err) => {
+            eprintln!("[ears-server] failed to allocate session: {err}");
+            let _ = msg_tx.send(Message::Text(
+                json!({ "type": "error", "message": "internal server error" }).to_string(),
+            ));
+            let _ = msg_tx.send(Message::Close(None));
+            while let Some(msg) = msg_rx.recv().await {
+                let _ = ws_writer.send(msg).await;
+            }
+            return Ok(());
+        }
+    };
 
     let writer = tokio::spawn(async move {
         while let Some(msg) = msg_rx.recv().await {
@@ -128,9 +127,9 @@ async fn handle_connection(
         }
     });
 
-    let audio_sender = audio_tx.clone();
-    let lang_sender = lang_cmd_tx.clone();
+    let session_reader = session.clone();
     let reader = tokio::spawn(async move {
+        let session = session_reader;
         eprintln!("[ears-server] reader task started");
         while let Some(msg) = ws_reader.next().await {
             match msg {
@@ -142,7 +141,7 @@ async fn handle_connection(
                     if chunk.is_empty() {
                         continue;
                     }
-                    if audio_sender.send(chunk).is_err() {
+                    if session.send_audio(chunk).is_err() {
                         eprintln!("[ears-server] audio send failed, breaking reader");
                         break;
                     }
@@ -150,6 +149,7 @@ async fn handle_connection(
                 Ok(Message::Text(text)) => {
                     if should_stop(&text) {
                         eprintln!("[ears-server] stop command received, breaking reader");
+                        session.request_stop();
                         break;
                     }
 
@@ -161,7 +161,11 @@ async fn handle_connection(
                                         "[ears-server] received language change command: {}",
                                         lang
                                     );
-                                    let _ = lang_sender.send(lang.to_string());
+                                    if let Err(err) = session.set_language(lang.to_string()) {
+                                        eprintln!(
+                                            "[ears-server] failed to forward language change: {err}"
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -169,10 +173,12 @@ async fn handle_connection(
                 }
                 Ok(Message::Close(_)) => {
                     eprintln!("[ears-server] WebSocket close received, breaking reader");
+                    session.request_stop();
                     break;
                 }
                 Err(e) => {
                     eprintln!("[ears-server] WebSocket error: {}, breaking reader", e);
+                    session.request_stop();
                     break;
                 }
                 _ => {}
@@ -181,93 +187,34 @@ async fn handle_connection(
         eprintln!("[ears-server] reader task finished");
     });
 
-    let msg_tx_clone = msg_tx.clone();
-    let model_clone = model.clone();
-    let prime_languages_clone = prime_languages.clone();
-    let transcription = task::spawn_blocking(move || {
-        eprintln!("[ears-server] transcription task started");
-        let mut model = match model_clone.lock() {
-            Ok(guard) => guard,
-            Err(poison) => poison.into_inner(),
-        };
-
-        if let Err(e) = model.reset_stream_state() {
-            eprintln!("[ears-server] failed to reset model state: {}", e);
-            return Err(e);
-        }
-
-        if !prime_languages_clone.is_empty() {
-            for lang in prime_languages_clone.iter() {
-                eprintln!("[ears-server] re-priming model with language: {}", lang);
-                if let Err(e) = model.prime_with_lang_code(lang) {
-                    eprintln!("[ears-server] failed to prime language {}: {}", lang, e);
-                } else {
-                    eprintln!("[ears-server] language priming complete: {}", lang);
-                }
-            }
-        }
-
-        while let Ok(lang) = lang_cmd_rx.try_recv() {
-            eprintln!("[ears-server] priming model with language: {}", lang);
-            if let Err(e) = model.prime_with_lang_code(&lang) {
-                eprintln!("[ears-server] failed to prime language {}: {}", lang, e);
-            } else {
-                eprintln!("[ears-server] language priming complete: {}", lang);
-            }
-        }
-
-        eprintln!("[ears-server] starting transcription loop");
-        let mut sink = SessionSink::new(msg_tx_clone);
-        let result = model.transcribe_live_with_sink(audio_rx, None, Some(lang_cmd_rx), &mut sink);
-        eprintln!(
-            "[ears-server] transcription loop finished: {:?}",
-            result.as_ref().map(|_| "Ok").map_err(|e| e.to_string())
-        );
-        result
-    });
-
     let _ = reader.await;
-    eprintln!("[ears-server] reader finished, closing audio channel");
-    drop(audio_tx);
+    drop(session);
 
-    eprintln!("[ears-server] waiting for transcription to complete");
-    match transcription.await? {
-        Ok(_) => {
-            eprintln!("[ears-server] transcription completed successfully");
-        }
-        Err(err) => {
-            eprintln!("[ears-server] transcription error: {}", err);
-            let _ = msg_tx.send(Message::Text(
-                json!({ "type": "error", "message": err.to_string() }).to_string(),
-            ));
-        }
-    }
-
-    // Release the session permit now that transcription is done
-    // This allows new connections while we finish cleanup
-    eprintln!("[ears-server] releasing session permit");
-    drop(permit);
-
-    let _ = msg_tx.send(Message::Close(None));
     let _ = writer.await;
 
     Ok(())
 }
 
-struct SessionSink {
+pub(crate) struct SessionSink {
     sender: mpsc::UnboundedSender<Message>,
 }
 
 impl SessionSink {
-    fn new(sender: mpsc::UnboundedSender<Message>) -> Self {
+    pub(crate) fn new(sender: mpsc::UnboundedSender<Message>) -> Self {
         Self { sender }
+    }
+
+    pub(crate) fn close(&self) {
+        let _ = self.sender.send(Message::Close(None));
     }
 }
 
 impl TranscriptionSink for SessionSink {
     fn handle_message(&mut self, message: WebSocketMessage) {
         if let Ok(json) = serde_json::to_string(&message) {
-            let _ = self.sender.send(Message::Text(json));
+            if self.sender.send(Message::Text(json)).is_err() {
+                eprintln!("[ears-server] failed to forward message to websocket writer");
+            }
         }
     }
 }

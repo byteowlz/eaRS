@@ -386,11 +386,64 @@ impl Default for TranscriptionOptions {
 }
 
 impl Model {
+    pub(crate) fn batch_size(&self) -> usize {
+        self.state.batch_size()
+    }
+
+    pub(crate) fn device(&self) -> &Device {
+        &self.dev
+    }
+
+    pub(crate) fn timestamps_enabled(&self) -> bool {
+        self.timestamps
+    }
+
+    pub(crate) fn vad_enabled(&self) -> bool {
+        self.vad
+    }
+
+    pub(crate) fn vad_timeout_seconds(&self) -> Option<f64> {
+        self.vad_timeout
+    }
+
+    pub(crate) fn audio_delay_samples(&self) -> usize {
+        (self.config.stt_config.audio_delay_seconds * 24_000.0) as usize
+    }
+
+    pub(crate) fn decode_tokens(&self, tokens: &[u32]) -> Result<String> {
+        Ok(self
+            .text_tokenizer
+            .decode_piece_ids(tokens)
+            .unwrap_or_else(|_| String::new()))
+    }
+
+    pub(crate) fn step_pcm_with_mask(
+        &mut self,
+        pcm: Tensor,
+        mask: &moshi::StreamMask,
+    ) -> Result<Vec<moshi::asr::AsrMsg>> {
+        Ok(self.state.step_pcm(pcm, None, mask, |_, _, _| ())?)
+    }
+
+    pub(crate) fn reset_batch_slot(&mut self, batch_idx: usize) -> Result<()> {
+        Ok(self.state.reset_batch_idx(batch_idx)?)
+    }
+
     pub async fn load_from_hf(
         hf_repo: &str,
         cpu: bool,
         options: TranscriptionOptions,
         model_dir: Option<&std::path::Path>,
+    ) -> Result<Self> {
+        Self::load_from_hf_with_batch(hf_repo, cpu, options, model_dir, 1).await
+    }
+
+    pub async fn load_from_hf_with_batch(
+        hf_repo: &str,
+        cpu: bool,
+        options: TranscriptionOptions,
+        model_dir: Option<&std::path::Path>,
+        batch_size: usize,
     ) -> Result<Self> {
         let device = create_device(cpu)?;
         let dtype = device.bf16_default_to_f32();
@@ -419,7 +472,13 @@ impl Model {
             moshi::nn::MaybeQuantizedVarBuilder::Real(vb_lm),
         )?;
         let asr_delay_in_tokens = (config.stt_config.audio_delay_seconds * 12.5) as usize;
-        let state = moshi::asr::State::new(1, asr_delay_in_tokens, 0., audio_tokenizer, lm)?;
+        let state = moshi::asr::State::new(
+            batch_size.max(1),
+            asr_delay_in_tokens,
+            0.,
+            audio_tokenizer,
+            lm,
+        )?;
 
         // Initialize Whisper model if enabled
         let whisper_model = if options.whisper_enabled {
@@ -467,6 +526,14 @@ impl Model {
     }
 
     pub fn prime_with_audio<P: AsRef<Path>>(&mut self, file_path: P) -> Result<()> {
+        self.prime_with_audio_for_slot(file_path, 0)
+    }
+
+    pub fn prime_with_audio_for_slot<P: AsRef<Path>>(
+        &mut self,
+        file_path: P,
+        batch_idx: usize,
+    ) -> Result<()> {
         let (pcm, sample_rate) = kaudio::pcm_decode(file_path.as_ref())?;
         let pcm = if sample_rate != 24_000 {
             kaudio::resample(&pcm, sample_rate as usize, 24_000)?
@@ -476,12 +543,21 @@ impl Model {
 
         let audio_duration_secs = pcm.len() as f64 / 24_000.0;
         let discard_window_secs = 1.0;
+        if batch_idx >= self.state.batch_size() {
+            anyhow::bail!(
+                "batch index {} out of range (max {})",
+                batch_idx,
+                self.state.batch_size()
+            );
+        }
+        let mut mask_vec = vec![false; self.state.batch_size()];
+        mask_vec[batch_idx] = true;
+        let mask = moshi::StreamMask::new(mask_vec, &self.dev)?;
 
         for chunk in pcm.chunks(1920) {
             let tensor = Tensor::new(chunk, &self.dev)?.reshape((1, 1, chunk.len()))?;
-            let _ = self
-                .state
-                .step_pcm(tensor, None, &().into(), |_, _, _| ())?;
+            let tensor = tensor.broadcast_as((self.state.batch_size(), 1, chunk.len()))?;
+            let _ = self.state.step_pcm(tensor, None, &mask, |_, _, _| ())?;
         }
 
         self.injection_end_time = Some(
@@ -1368,7 +1444,32 @@ impl Model {
         };
         let config = config::AppConfig::load()?;
         let path = config.ref_audio_path().join(format!("{}.mp3", ref_code));
-        self.prime_with_audio(path)
+        self.prime_with_audio_for_slot(path, 0)
+    }
+
+    pub fn prime_with_lang_code_for_slot(
+        &mut self,
+        iso_lang: &str,
+        batch_idx: usize,
+    ) -> Result<()> {
+        let ref_code = match iso_lang {
+            "de" => "ger",
+            "ja" => "jap",
+            "es" => "esp",
+            "it" => "ita",
+            "pt" => "por",
+            other => {
+                eprintln!(
+                    "Warning: Unknown language code '{}'. Supported codes: de, ja, es, it, pt",
+                    other
+                );
+                eprintln!("Skipping language priming.");
+                return Ok(());
+            }
+        };
+        let config = config::AppConfig::load()?;
+        let path = config.ref_audio_path().join(format!("{}.mp3", ref_code));
+        self.prime_with_audio_for_slot(path, batch_idx)
     }
 
     fn transcribe_pcm(&mut self, mut pcm: Vec<f32>) -> Result<TranscriptionResult> {

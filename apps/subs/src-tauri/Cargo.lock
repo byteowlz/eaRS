@@ -1084,15 +1084,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cudarc"
-version = "0.17.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72ba848ae5c6f3cb36e71eab5f268763e3fabcabe3f7bc683e16f7fa3d46281e"
-dependencies = [
- "libloading 0.8.9",
-]
-
-[[package]]
 name = "darling"
 version = "0.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1350,7 +1341,6 @@ dependencies = [
  "cpal",
  "crossbeam-channel",
  "ctrlc",
- "cudarc",
  "dirs 5.0.1",
  "enigo",
  "futures",
