@@ -189,14 +189,14 @@ impl SessionState {
                 self.current_text.push(' ');
                 self.current_text.push_str(&word);
 
-                if !self.timestamps {
+                if !self.timestamps && !self.word_sent {
                     self.sink.handle_message(WebSocketMessage::Word {
                         word: word.clone(),
                         start_time,
                         end_time: None,
                     });
+                    self.word_sent = true;
                 }
-                self.word_sent = true;
 
                 self.last_word = Some((word, start_time));
             }

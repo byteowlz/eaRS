@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use clap::Parser;
 use crossbeam_channel::{bounded, select, unbounded};
 use ears::audio;
 use ears::config::AppConfig;
@@ -13,6 +14,13 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 const PID_FILE_NAME: &str = "dictation.pid";
+
+#[derive(Debug, Parser)]
+#[command(name = "ears-dictation", about = "Dictation client for eaRS")]
+struct Args {
+    #[arg(long, help = "Set the transcription language (e.g., 'en', 'de', 'es', 'fr', 'ja')")]
+    lang: Option<String>,
+}
 
 fn get_pid_file() -> std::path::PathBuf {
     let state_dir = if let Ok(xdg_state) = std::env::var("XDG_STATE_HOME") {
@@ -45,6 +53,7 @@ fn remove_pid_file() {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args = Args::parse();
     let config = AppConfig::load().unwrap_or_default();
     let port = config.server.websocket_port;
     let url = format!("ws://127.0.0.1:{}", port);
@@ -153,6 +162,18 @@ async fn main() -> Result<()> {
 
                 let (writer_tx, mut writer_rx) = mpsc::unbounded_channel::<WriterCommand>();
 
+                if let Some(ref lang) = args.lang {
+                    eprintln!("Setting language to: {}", lang);
+                    let lang_cmd = serde_json::json!({
+                        "type": "setlanguage",
+                        "lang": lang
+                    })
+                    .to_string();
+                    if let Err(e) = writer_tx.send(WriterCommand::Text(lang_cmd)) {
+                        eprintln!("Failed to send language command: {}", e);
+                    }
+                }
+
                 let audio_writer = writer_tx.clone();
                 let audio_rx_clone = audio_rx.clone();
                 let audio_capturing = capturing.clone();
@@ -174,6 +195,11 @@ async fn main() -> Result<()> {
                         match cmd {
                             WriterCommand::Audio(bytes) => {
                                 if write.send(Message::Binary(bytes)).await.is_err() {
+                                    break;
+                                }
+                            }
+                            WriterCommand::Text(text) => {
+                                if write.send(Message::Text(text)).await.is_err() {
                                     break;
                                 }
                             }
@@ -324,6 +350,7 @@ fn parse_combo(s: &str) -> (bool, bool, bool, rdev::Key) {
 
 enum WriterCommand {
     Audio(Vec<u8>),
+    Text(String),
     Stop,
 }
 
