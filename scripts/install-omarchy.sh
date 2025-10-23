@@ -25,21 +25,10 @@ if ! command -v yay &>/dev/null; then
 fi
 
 echo -e "${GREEN}Step 1: Installing system dependencies...${NC}"
-# Install CUDA if not present
-if ! command -v nvcc &>/dev/null; then
-  echo "Installing CUDA toolkit..."
-  sudo pacman -S --needed cuda
-else
-  echo "CUDA toolkit already installed"
-fi
+# Install required system packages
+sudo pacman -S --needed cuda cmake alsa-lib opus xdotool
 
-# Install cmake if not present
-if ! command -v cmake &>/dev/null; then
-  echo "Installing cmake..."
-  sudo pacman -S --needed cmake
-else
-  echo "cmake already installed"
-fi
+echo "System dependencies installed"
 
 # Install sentencepiece from AUR
 echo -e "${GREEN}Step 2: Installing sentencepiece from AUR...${NC}"
@@ -92,7 +81,7 @@ fi
 
 # Build with CUDA support
 echo -e "${GREEN}Step 5: Building eaRS with CUDA support...${NC}"
-cargo build --release --features cuda
+cargo install path . --features cuda
 
 # Check if build was successful
 if [ $? -eq 0 ]; then

@@ -1,0 +1,23 @@
+[changelog]
+path = "CHANGELOG.md"
+template = "remote"
+remote = "github.com"
+repository = "eaRS"
+owner = "tommyfalkowski"
+
+[bump_profiles.default]
+pre_bump_hooks = []
+post_bump_hooks = []
+
+[commit_types]
+feat = { changelog_title = "Features" }
+fix = { changelog_title = "Bug Fixes" }
+docs = { changelog_title = "Documentation" }
+style = { changelog_title = "Styling", omit_from_changelog = true }
+refactor = { changelog_title = "Refactoring", omit_from_changelog = true }
+perf = { changelog_title = "Performance" }
+test = { changelog_title = "Tests", omit_from_changelog = true }
+build = { changelog_title = "Build System", omit_from_changelog = true }
+ci = { changelog_title = "CI/CD", omit_from_changelog = true }
+chore = { changelog_title = "Chores", omit_from_changelog = true }
+revert = { changelog_title = "Reverts" }

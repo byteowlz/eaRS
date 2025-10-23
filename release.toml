@@ -1,0 +1,8 @@
+publish = false
+push = true
+tag = true
+tag-name = "v{{version}}"
+pre-release-commit-message = "chore(release): {{version}}"
+consolidate-commits = false
+enable-features = []
+enable-all-features = false
