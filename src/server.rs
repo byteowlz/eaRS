@@ -11,6 +11,7 @@ use tokio_tungstenite::{accept_async, tungstenite::Message};
 use crate::config::{AppConfig, ensure_ref_audio};
 use crate::{Model, TranscriptionOptions, TranscriptionSink, WebSocketMessage};
 
+pub mod listener;
 mod parallel;
 
 #[derive(Debug, Clone)]
@@ -20,6 +21,8 @@ pub struct ServerOptions {
     pub cpu: bool,
     pub transcription: TranscriptionOptions,
     pub max_parallel_sessions: usize,
+    pub enable_listener_mode: bool,
+    pub listener_tokens: Vec<String>,
 }
 
 pub async fn run(options: ServerOptions) -> Result<()> {
@@ -58,19 +61,44 @@ pub async fn run(options: ServerOptions) -> Result<()> {
     let engine = parallel::spawn_parallel_engine(model, prime_languages);
     let listener = TcpListener::bind(&options.bind_addr).await?;
 
+    let stream_registry = if options.enable_listener_mode {
+        Some(listener::StreamRegistry::new())
+    } else {
+        None
+    };
+
+    let token_validator = if options.enable_listener_mode {
+        Some(listener::TokenValidator::new(
+            options.listener_tokens.clone(),
+        ))
+    } else {
+        None
+    };
+
     eprintln!(
         "Server listening on {} (max {} concurrent sessions)",
         options.bind_addr,
         engine.capacity()
     );
 
+    if options.enable_listener_mode {
+        eprintln!(
+            "[ears-server] Listener mode enabled with {} authorized token(s)",
+            options.listener_tokens.len()
+        );
+    }
+
     loop {
         let (stream, addr) = listener.accept().await?;
         eprintln!("[ears-server] new connection from {}", addr);
         let engine_clone = engine.clone();
+        let registry_clone = stream_registry.clone();
+        let validator_clone = token_validator.clone();
         tokio::spawn(async move {
             eprintln!("[ears-server] handling connection from {}", addr);
-            if let Err(err) = handle_connection(stream, engine_clone).await {
+            if let Err(err) =
+                handle_connection(stream, engine_clone, registry_clone, validator_clone).await
+            {
                 eprintln!("[ears-server] connection {} error: {}", addr, err);
             }
             eprintln!("[ears-server] connection from {} closed", addr);
@@ -81,6 +109,8 @@ pub async fn run(options: ServerOptions) -> Result<()> {
 async fn handle_connection(
     stream: tokio::net::TcpStream,
     engine: parallel::ParallelEngine,
+    registry: Option<listener::StreamRegistry>,
+    validator: Option<listener::TokenValidator>,
 ) -> Result<()> {
     // Set TCP keepalive to detect dead connections
     let _ = stream.set_nodelay(true);
@@ -89,11 +119,42 @@ async fn handle_connection(
     let (mut ws_writer, mut ws_reader) = ws_stream.split();
 
     let (msg_tx, mut msg_rx) = mpsc::unbounded_channel::<Message>();
-    let sink = SessionSink::new(msg_tx.clone());
+
+    // Wait for first message to determine connection type
+    let first_msg = match ws_reader.next().await {
+        Some(Ok(Message::Text(text))) => {
+            if let Ok(cmd) = serde_json::from_str::<listener::ListenerCommand>(&text) {
+                // This is a listener connection
+                return handle_listener_connection(
+                    ws_writer, ws_reader, msg_tx, msg_rx, cmd, registry, validator,
+                )
+                .await;
+            } else {
+                // Not a listener command, treat as normal connection
+                Some(Message::Text(text))
+            }
+        }
+        Some(Ok(msg)) => Some(msg),
+        Some(Err(e)) => return Err(e.into()),
+        None => return Ok(()),
+    };
+
+    // Regular active transcription connection
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SESSION_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+    let session_id = SESSION_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
+
+    let sink = if let Some(ref reg) = registry {
+        reg.register_stream(session_id)?;
+        SessionSink::with_broadcast(msg_tx.clone(), session_id, reg.clone())
+    } else {
+        SessionSink::new(msg_tx.clone())
+    };
+
     let session = match engine.allocate_session(sink) {
         Ok(Some(handle)) => handle,
         Ok(None) => {
-            let _ = msg_tx.send(Message::Text(
+            let _ = msg_tx.send(Message::text(
                 json!({
                     "type": "error",
                     "message": "server busy - maximum concurrent sessions reached"
@@ -108,7 +169,7 @@ async fn handle_connection(
         }
         Err(err) => {
             eprintln!("[ears-server] failed to allocate session: {err}");
-            let _ = msg_tx.send(Message::Text(
+            let _ = msg_tx.send(Message::text(
                 json!({ "type": "error", "message": "internal server error" }).to_string(),
             ));
             let _ = msg_tx.send(Message::Close(None));
@@ -131,6 +192,37 @@ async fn handle_connection(
     let reader = tokio::spawn(async move {
         let session = session_reader;
         eprintln!("[ears-server] reader task started");
+
+        // Process the first message if it was captured
+        if let Some(msg) = first_msg {
+            match msg {
+                Message::Binary(data) => {
+                    if !data.is_empty() {
+                        let chunk = decode_audio_chunk(&data);
+                        if !chunk.is_empty() {
+                            let _ = session.send_audio(chunk);
+                        }
+                    }
+                }
+                Message::Text(text) => {
+                    if should_stop(&text) {
+                        session.request_stop();
+                        return;
+                    }
+                    if let Ok(cmd) = serde_json::from_str::<serde_json::Value>(&text) {
+                        if let Some(cmd_type) = cmd.get("type").and_then(|v| v.as_str()) {
+                            if cmd_type == "setlanguage" {
+                                if let Some(lang) = cmd.get("lang").and_then(|v| v.as_str()) {
+                                    let _ = session.set_language(lang.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
         while let Some(msg) = ws_reader.next().await {
             match msg {
                 Ok(Message::Binary(data)) => {
@@ -192,16 +284,264 @@ async fn handle_connection(
 
     let _ = writer.await;
 
+    if let Some(ref reg) = registry {
+        reg.unregister_stream(session_id);
+    }
+
+    Ok(())
+}
+
+async fn handle_listener_connection(
+    mut ws_writer: futures::stream::SplitSink<
+        tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+        Message,
+    >,
+    mut ws_reader: futures::stream::SplitStream<
+        tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    >,
+    msg_tx: mpsc::UnboundedSender<Message>,
+    mut msg_rx: mpsc::UnboundedReceiver<Message>,
+    first_cmd: listener::ListenerCommand,
+    registry: Option<listener::StreamRegistry>,
+    validator: Option<listener::TokenValidator>,
+) -> Result<()> {
+    use futures::{SinkExt, StreamExt};
+
+    let registry = registry.ok_or_else(|| anyhow!("Listener mode not enabled"))?;
+    let validator = validator.ok_or_else(|| anyhow!("Listener mode not configured"))?;
+
+    eprintln!("[ears-server] handling listener connection");
+
+    let mut authenticated = false;
+    let mut _subscribed_stream: Option<u64> = None;
+
+    // Process first command
+    let response = match first_cmd {
+        listener::ListenerCommand::Authenticate { token } => {
+            if validator.validate(&token) {
+                authenticated = true;
+                eprintln!("[ears-server] listener authenticated (auth={authenticated})");
+                Some(Message::text(
+                    json!({
+                        "type": "authenticated",
+                        "success": true
+                    })
+                    .to_string(),
+                ))
+            } else {
+                eprintln!("[ears-server] listener authentication failed");
+                Some(Message::text(
+                    json!({
+                        "type": "error",
+                        "message": "invalid token"
+                    })
+                    .to_string(),
+                ))
+            }
+        }
+        listener::ListenerCommand::ListStreams => {
+            if !authenticated {
+                Some(Message::text(
+                    json!({
+                        "type": "error",
+                        "message": "not authenticated"
+                    })
+                    .to_string(),
+                ))
+            } else {
+                let streams = registry.list_active_streams();
+                Some(Message::text(
+                    json!({
+                        "type": "streams",
+                        "stream_ids": streams
+                    })
+                    .to_string(),
+                ))
+            }
+        }
+        listener::ListenerCommand::Subscribe { stream_id } => {
+            if !authenticated {
+                Some(Message::text(
+                    json!({
+                        "type": "error",
+                        "message": "not authenticated"
+                    })
+                    .to_string(),
+                ))
+            } else {
+                match registry.add_listener(stream_id, msg_tx.clone()) {
+                    Ok(_) => {
+                        _subscribed_stream = Some(stream_id);
+                        eprintln!("[ears-server] listener subscribed to stream {}", stream_id);
+                        Some(Message::text(
+                            json!({
+                                "type": "subscribed",
+                                "stream_id": stream_id
+                            })
+                            .to_string(),
+                        ))
+                    }
+                    Err(e) => Some(Message::text(
+                        json!({
+                            "type": "error",
+                            "message": format!("subscription failed: {}", e)
+                        })
+                        .to_string(),
+                    )),
+                }
+            }
+        }
+    };
+
+    if let Some(response) = response {
+        ws_writer.send(response).await?;
+    }
+
+    let writer = tokio::spawn(async move {
+        while let Some(msg) = msg_rx.recv().await {
+            if ws_writer.send(msg).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    let registry_clone = registry.clone();
+    let validator_clone = validator.clone();
+    let msg_tx_clone = msg_tx.clone();
+
+    let reader = tokio::spawn(async move {
+        let mut auth = false;
+        let mut _sub: Option<u64> = None;
+
+        while let Some(msg) = ws_reader.next().await {
+            match msg {
+                Ok(Message::Text(text)) => {
+                    if let Ok(cmd) = serde_json::from_str::<listener::ListenerCommand>(&text) {
+                        let response = match cmd {
+                            listener::ListenerCommand::Authenticate { token } => {
+                                if validator_clone.validate(&token) {
+                                    auth = true;
+                                    eprintln!("[ears-server] listener authenticated");
+                                    Some(Message::text(
+                                        json!({
+                                            "type": "authenticated",
+                                            "success": true
+                                        })
+                                        .to_string(),
+                                    ))
+                                } else {
+                                    eprintln!("[ears-server] listener authentication failed");
+                                    Some(Message::text(
+                                        json!({
+                                            "type": "error",
+                                            "message": "invalid token"
+                                        })
+                                        .to_string(),
+                                    ))
+                                }
+                            }
+                            listener::ListenerCommand::ListStreams => {
+                                if !auth {
+                                    Some(Message::text(
+                                        json!({
+                                            "type": "error",
+                                            "message": "not authenticated"
+                                        })
+                                        .to_string(),
+                                    ))
+                                } else {
+                                    let streams = registry_clone.list_active_streams();
+                                    Some(Message::text(
+                                        json!({
+                                            "type": "streams",
+                                            "stream_ids": streams
+                                        })
+                                        .to_string(),
+                                    ))
+                                }
+                            }
+                            listener::ListenerCommand::Subscribe { stream_id } => {
+                                if !auth {
+                                    Some(Message::text(
+                                        json!({
+                                            "type": "error",
+                                            "message": "not authenticated"
+                                        })
+                                        .to_string(),
+                                    ))
+                                } else {
+                                    match registry_clone
+                                        .add_listener(stream_id, msg_tx_clone.clone())
+                                    {
+                                        Ok(_) => {
+                                            _sub = Some(stream_id);
+                                            eprintln!(
+                                                "[ears-server] listener subscribed to stream {}",
+                                                stream_id
+                                            );
+                                            Some(Message::text(
+                                                json!({
+                                                    "type": "subscribed",
+                                                    "stream_id": stream_id
+                                                })
+                                                .to_string(),
+                                            ))
+                                        }
+                                        Err(e) => Some(Message::text(
+                                            json!({
+                                                "type": "error",
+                                                "message": format!("subscription failed: {}", e)
+                                            })
+                                            .to_string(),
+                                        )),
+                                    }
+                                }
+                            }
+                        };
+
+                        if let Some(resp) = response {
+                            let _ = msg_tx_clone.send(resp);
+                        }
+                    }
+                }
+                Ok(Message::Close(_)) => break,
+                Err(_) => break,
+                _ => {}
+            }
+        }
+    });
+
+    let _ = tokio::join!(writer, reader);
+
+    eprintln!("[ears-server] listener connection closed");
     Ok(())
 }
 
 pub(crate) struct SessionSink {
     sender: mpsc::UnboundedSender<Message>,
+    session_id: Option<u64>,
+    registry: Option<listener::StreamRegistry>,
 }
 
 impl SessionSink {
     pub(crate) fn new(sender: mpsc::UnboundedSender<Message>) -> Self {
-        Self { sender }
+        Self {
+            sender,
+            session_id: None,
+            registry: None,
+        }
+    }
+
+    pub(crate) fn with_broadcast(
+        sender: mpsc::UnboundedSender<Message>,
+        session_id: u64,
+        registry: listener::StreamRegistry,
+    ) -> Self {
+        Self {
+            sender,
+            session_id: Some(session_id),
+            registry: Some(registry),
+        }
     }
 
     pub(crate) fn close(&self) {
@@ -212,9 +552,13 @@ impl SessionSink {
 impl TranscriptionSink for SessionSink {
     fn handle_message(&mut self, message: WebSocketMessage) {
         if let Ok(json) = serde_json::to_string(&message) {
-            if self.sender.send(Message::Text(json)).is_err() {
+            if self.sender.send(Message::text(json.clone())).is_err() {
                 eprintln!("[ears-server] failed to forward message to websocket writer");
             }
+        }
+
+        if let (Some(session_id), Some(registry)) = (self.session_id, &self.registry) {
+            let _ = registry.broadcast_message(session_id, &message);
         }
     }
 }

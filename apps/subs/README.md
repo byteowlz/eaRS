@@ -11,6 +11,7 @@ An always-on-top floating subtitle bar for live transcription from eaRS. Display
 - Minimal, distraction-free interface
 - Settings panel for configuration
 - System audio source support (via eaRS backend)
+- **Listener Mode**: Monitor transcriptions from other clients without sending audio
 
 ## Prerequisites
 
@@ -48,6 +49,8 @@ bun run tauri build
 
 ### 3. Using LiveSubs
 
+#### Active Mode (Default)
+
 1. The application auto-connects to the eaRS WebSocket server on startup
 2. Position the subtitle bar anywhere on your screen by clicking and dragging
 3. Click the microphone icon to start/stop audio capture
@@ -58,11 +61,29 @@ bun run tauri build
    - Check connection status
 5. Subtitles appear in real-time as audio is transcribed
 
+#### Listener Mode
+
+To monitor transcriptions from another client without sending audio:
+
+1. Click the settings icon to open configuration
+2. Enable "Listener Mode" checkbox
+3. Enter your authentication token (provided by server administrator)
+4. Save and reconnect
+5. Once authenticated, available streams will be listed
+6. Select a stream to monitor
+7. Transcriptions from the selected stream will appear in your subtitle bar
+
+Note: Listener mode must be enabled on the eaRS server with valid tokens configured.
+
 ## Configuration
 
 Click the settings icon (⚙️) in the top-right corner to access:
 
-- **Audio Input**: Select microphone or system audio device for capture
+- **Connection Mode**: Toggle between Active (send audio) and Listener (receive only) modes
+- **Listener Mode Settings** (when enabled):
+  - Authentication token for secure access
+  - Stream selection (choose which active stream to monitor)
+- **Audio Input** (Active mode only): Select microphone or system audio device for capture
 - **WebSocket Port**: Configure the eaRS server port (default: 8765)
 - **Always on Top**: Toggle whether the window stays above other applications
 - **Connection Status**: View real-time connection and capture status

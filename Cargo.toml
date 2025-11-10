@@ -31,7 +31,7 @@ candle = { version = "0.9", package = "candle-core" }
 candle-nn = "0.9"
 whisper-rs = { version = "0.11", optional = true }
 clap = { version = "4.4.12", features = ["derive"] }
-cpal = "0.15"
+cpal = "0.16"
 crossbeam-channel = "0.5"
 hf-hub = "0.4.3"
 kaudio = "0.2.1"
@@ -39,20 +39,21 @@ moshi = "0.6.4"
 sentencepiece = "0.12"
 serde = { version = "1.0.210", features = ["derive"] }
 serde_json = "1.0.115"
-toml = "0.8"
-dirs = "5.0"
+toml = "0.9"
+dirs = "6.0"
 tokio = { version = "1.0", features = ["full"] }
-tokio-tungstenite = "0.20"
+tokio-tungstenite = "0.28"
 futures = "0.3"
-indicatif = "0.17"
+indicatif = "0.18"
 uuid = { version = "1.0", features = ["v4"] }
-colored = "2.0"
+colored = "3.0"
 libc = "0.2"
-enigo = "0.2"
+enigo = "0.6"
 rdev = "0.5"
 futures-util = "0.3"
-ctrlc = "3.4"
+ctrlc = { version = "3.4", features = ["termination"] }
 cudarc = { version = "0.17", optional = true }
+notifica = "3.0.2"
 
 
 [features]
@@ -63,6 +64,7 @@ cuda-whisper = ["cuda", "whisper", "whisper-rs/cuda"]
 cudnn = ["candle/cudnn", "candle-nn/cudnn"]
 metal = ["candle/metal", "candle-nn/metal"]
 metal-whisper = ["metal", "whisper", "whisper-rs/metal"]
+hooks = []
 
 [profile.release]
 debug = true

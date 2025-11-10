@@ -56,12 +56,21 @@ pub struct SentenceDetectionConfig {
 pub struct ServerConfig {
     pub websocket_port: u16,
     pub host: String,
+    #[serde(default)]
+    pub listener_tokens: Vec<String>,
+    #[serde(default)]
+    pub enable_listener_mode: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DictationConfig {
     pub enabled: bool,
     pub type_live_words: bool,
+    #[serde(default)]
+    pub notifications: DictationNotificationConfig,
+    #[cfg(feature = "hooks")]
+    #[serde(default)]
+    pub hooks: DictationHooksConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +89,46 @@ pub struct SubsConfig {
     pub heigth: u32,
     pub border_radius: u32,
     pub border_thickness: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DictationNotificationConfig {
+    pub enabled: bool,
+    pub start_message: String,
+    pub pause_message: String,
+    pub stop_message: String,
+}
+
+impl Default for DictationNotificationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            start_message: "Dictation enabled".to_string(),
+            pause_message: "Dictation paused".to_string(),
+            stop_message: "Dictation disabled".to_string(),
+        }
+    }
+}
+
+#[cfg(feature = "hooks")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DictationHooksConfig {
+    pub start_command: Option<String>,
+    pub pause_command: Option<String>,
+    pub stop_command: Option<String>,
+}
+
+#[cfg(feature = "hooks")]
+impl Default for DictationHooksConfig {
+    fn default() -> Self {
+        Self {
+            start_command: None,
+            pause_command: None,
+            stop_command: None,
+        }
+    }
 }
 
 impl Default for ModelConfig {
@@ -105,6 +154,8 @@ impl Default for ServerConfig {
         Self {
             websocket_port: 8765,
             host: "localhost".to_string(),
+            listener_tokens: vec![],
+            enable_listener_mode: false,
         }
     }
 }
@@ -114,6 +165,9 @@ impl Default for DictationConfig {
         Self {
             enabled: false,
             type_live_words: true,
+            notifications: DictationNotificationConfig::default(),
+            #[cfg(feature = "hooks")]
+            hooks: DictationHooksConfig::default(),
         }
     }
 }

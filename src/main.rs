@@ -378,6 +378,8 @@ fn build_server_options(args: &ServerStartArgs) -> Result<server::ServerOptions>
         cpu: args.cpu,
         transcription,
         max_parallel_sessions: args.max_sessions.max(1),
+        enable_listener_mode: config.server.enable_listener_mode,
+        listener_tokens: config.server.listener_tokens.clone(),
     })
 }
 
@@ -419,7 +421,7 @@ async fn run_client(args: ClientArgs) -> Result<()> {
     let writer_handle = tokio::spawn(async move {
         if let Some(lang) = lang_to_send {
             let set_lang_cmd = json!({ "type": "setlanguage", "lang": lang }).to_string();
-            if ws_writer.send(Message::Text(set_lang_cmd)).await.is_err() {
+            if ws_writer.send(Message::text(set_lang_cmd)).await.is_err() {
                 eprintln!("Failed to send language change command");
             }
         }
@@ -431,13 +433,13 @@ async fn run_client(args: ClientArgs) -> Result<()> {
                     if should_close {
                         continue;
                     }
-                    if ws_writer.send(Message::Binary(bytes)).await.is_err() {
+                    if ws_writer.send(Message::binary(bytes)).await.is_err() {
                         break;
                     }
                 }
                 WriterCommand::Stop => {
                     let _ = ws_writer
-                        .send(Message::Text(json!({ "type": "stop" }).to_string()))
+                        .send(Message::text(json!({ "type": "stop" }).to_string()))
                         .await;
                     should_close = true;
                 }
@@ -648,7 +650,7 @@ async fn transcribe_file(file_path: &str, args: &ClientArgs) -> Result<()> {
     let writer_handle = tokio::spawn(async move {
         if let Some(lang) = lang_to_send {
             let set_lang_cmd = json!({ "type": "setlanguage", "lang": lang }).to_string();
-            if ws_writer.send(Message::Text(set_lang_cmd)).await.is_err() {
+            if ws_writer.send(Message::text(set_lang_cmd)).await.is_err() {
                 eprintln!("Failed to send language change command");
             }
         }
@@ -656,13 +658,13 @@ async fn transcribe_file(file_path: &str, args: &ClientArgs) -> Result<()> {
         while let Some(cmd) = writer_rx.recv().await {
             match cmd {
                 WriterCommand::Audio(bytes) => {
-                    if ws_writer.send(Message::Binary(bytes)).await.is_err() {
+                    if ws_writer.send(Message::binary(bytes)).await.is_err() {
                         break;
                     }
                 }
                 WriterCommand::Stop => {
                     let _ = ws_writer
-                        .send(Message::Text(json!({ "type": "stop" }).to_string()))
+                        .send(Message::text(json!({ "type": "stop" }).to_string()))
                         .await;
                 }
                 WriterCommand::Close => {

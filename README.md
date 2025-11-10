@@ -93,6 +93,9 @@ Key sections:
 - `[storage]`: Override model cache directories and reference audio location.
 - `[whisper]`: Configure optional Whisper enhancement defaults (model, quantization, languages, sentence detection thresholds).
 - `[server]`: Default WebSocket port used by `ears server start` and the capture client.
+- `[dictation]`: Enable live typing and configure in-app hotkeys.
+- `[dictation.notifications]`: Toggle desktop popups and customise start/pause/stop messages shown for dictation state changes.
+- `[dictation.hooks]` (requires `cargo build --features hooks`): Run shell commands on start, pause, or stop transitions (e.g., change colours in status bars).
 
 If the file does not exist, it is created on first run together with the reference audio bundle.
 

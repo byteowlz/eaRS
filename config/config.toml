@@ -44,6 +44,16 @@ punctuation_markers = [".", "!", "?", "。", "！", "？"]
 host = "127.0.0.1"
 # WebSocket server port for streaming transcription
 websocket_port = 8765
+# Enable listener mode to allow read-only clients to monitor transcription streams
+enable_listener_mode = false
+# Authentication tokens for listener clients (keep these secure!)
+# Generate tokens with: openssl rand -hex 32
+listener_tokens = []
+# Example with tokens:
+# listener_tokens = [
+#     "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6",
+#     "secure-token-for-client-2",
+# ]
 # Note: VAD timeout is set per-command-line invocation (--vad-timeout <sec>).
 # ears-auto does not use VAD timeout by default (runs indefinitely until manually stopped).
 
@@ -52,6 +62,25 @@ websocket_port = 8765
 enabled = false
 # Type words immediately as they arrive (true) or only when final transcription is ready (false)
 type_live_words = true
+
+[dictation.notifications]
+# Show desktop notification when dictation is toggled on/off
+enabled = true
+# Message shown when dictation resumes typing input
+start_message = "Dictation enabled"
+# Message shown when dictation pauses typing input
+pause_message = "Dictation paused"
+# Message shown when dictation stops completely
+stop_message = "Dictation disabled"
+
+# Dictation hooks require compiling with `--features hooks`
+[dictation.hooks]
+# Command executed when dictation resumes typing input (leave blank to disable)
+start_command = ""
+# Command executed when dictation pauses typing input (leave blank to disable)
+pause_command = ""
+# Command executed when dictation stops completely (leave blank to disable)
+stop_command = ""
 
 [hotkeys]
 # Enable internal global hotkeys for dictation control (disable if using WM binds like Hyprland)

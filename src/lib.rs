@@ -1087,7 +1087,7 @@ impl Model {
                     let send_task = tokio::spawn(async move {
                         while let Ok(ws_msg) = ws_rx.recv().await {
                             let json_msg = serde_json::to_string(&ws_msg).unwrap_or_default();
-                            if ws_sender.send(Message::Text(json_msg)).await.is_err() {
+                            if ws_sender.send(Message::text(json_msg)).await.is_err() {
                                 break;
                             }
                         }

@@ -83,5 +83,7 @@ fn build_server_options(args: &Args) -> Result<server::ServerOptions> {
         cpu: args.cpu,
         transcription,
         max_parallel_sessions: args.max_sessions.max(1),
+        enable_listener_mode: config.server.enable_listener_mode,
+        listener_tokens: config.server.listener_tokens.clone(),
     })
 }

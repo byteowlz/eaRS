@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { Settings, Mic, MicOff, RefreshCw } from 'lucide-react'
+import { Settings, Mic, MicOff, RefreshCw, Headphones } from 'lucide-react'
 import { Button } from './components/ui/button'
 import {
   Dialog,
@@ -17,6 +17,7 @@ import {
   SelectValue,
 } from './components/ui/select'
 import { Label } from './components/ui/label'
+import { Checkbox } from './components/ui/checkbox'
 
 interface TranscriptionMessage {
   type: string
@@ -44,6 +45,13 @@ function App() {
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([])
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('')
   const [subsStyle, setSubsStyle] = useState<SubsStyle>({ border_radius: 5, border_thickness: 1 })
+  
+  // Listener mode settings
+  const [listenerMode, setListenerMode] = useState(false)
+  const [listenerToken, setListenerToken] = useState('')
+  const [listenerStreamId, setListenerStreamId] = useState<number | null>(null)
+  const [availableStreams, setAvailableStreams] = useState<number[]>([])
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
 
   const wsRef = useRef<WebSocket | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
@@ -159,20 +167,62 @@ function App() {
 
       ws.onopen = () => {
         setIsConnected(true)
+        
+        // If listener mode is enabled, authenticate immediately
+        if (listenerMode && listenerToken) {
+          ws.send(JSON.stringify({
+            type: 'authenticate',
+            token: listenerToken
+          }))
+        }
       }
 
       ws.onclose = () => {
         setIsConnected(false)
+        setIsAuthenticated(false)
+        setAvailableStreams([])
         stopAudio()
       }
 
       ws.onerror = () => {
         setIsConnected(false)
+        setIsAuthenticated(false)
       }
 
       ws.onmessage = (event) => {
         const message: TranscriptionMessage = JSON.parse(event.data)
 
+        // Handle listener mode messages
+        if (listenerMode) {
+          switch (message.type) {
+            case 'authenticated':
+              setIsAuthenticated(true)
+              // Request list of available streams
+              ws.send(JSON.stringify({ type: 'liststreams' }))
+              break
+            case 'streams':
+              const streams = (message as any).stream_ids || []
+              setAvailableStreams(streams)
+              // Auto-subscribe to first stream if available and not already subscribed
+              if (streams.length > 0 && !listenerStreamId) {
+                const firstStream = streams[0]
+                setListenerStreamId(firstStream)
+                ws.send(JSON.stringify({
+                  type: 'subscribe',
+                  stream_id: firstStream
+                }))
+              }
+              break
+            case 'subscribed':
+              console.log('Subscribed to stream:', (message as any).stream_id)
+              break
+            case 'error':
+              console.error('Listener error:', (message as any).message)
+              break
+          }
+        }
+
+        // Handle transcription messages (for both modes)
         switch (message.type) {
           case 'word':
             setCurrentText(prev => prev + (message.word || '') + ' ')
@@ -203,6 +253,12 @@ function App() {
   }
 
   const toggleListening = async () => {
+    // Don't allow audio capture in listener mode
+    if (listenerMode) {
+      console.warn('Cannot start audio capture in listener mode')
+      return
+    }
+    
     if (isListening) {
       stopAudio()
     } else {
@@ -229,6 +285,22 @@ function App() {
       setAlwaysOnTop(newValue)
     } catch (error) {
       console.error('Failed to toggle always on top:', error)
+    }
+  }
+
+  const subscribeToStream = (streamId: number) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN && isAuthenticated) {
+      setListenerStreamId(streamId)
+      wsRef.current.send(JSON.stringify({
+        type: 'subscribe',
+        stream_id: streamId
+      }))
+    }
+  }
+
+  const refreshStreams = () => {
+    if (wsRef.current?.readyState === WebSocket.OPEN && isAuthenticated) {
+      wsRef.current.send(JSON.stringify({ type: 'liststreams' }))
     }
   }
 
@@ -275,22 +347,44 @@ function App() {
             </p>
           ) : (
             <p className="text-white/50 text-lg text-center italic">
-              {isConnected ? (isListening ? 'Listening...' : 'Click mic to start') : 'Connecting...'}
+              {isConnected
+                ? listenerMode
+                  ? isAuthenticated
+                    ? listenerStreamId
+                      ? `Listening to stream ${listenerStreamId}...`
+                      : 'No stream selected'
+                    : 'Authenticating...'
+                  : isListening
+                    ? 'Listening...'
+                    : 'Click mic to start'
+                : 'Connecting...'}
             </p>
           )}
         </div>
       </div>
 
       <div className="absolute top-2 right-2 flex gap-2">
-        <Button
-          size="sm"
-          variant="ghost"
-          className={`h-6 w-6 p-0 ${isListening ? 'text-green-500' : 'text-white/70'} hover:text-white hover:bg-white/10`}
-          onClick={toggleListening}
-          disabled={!isConnected}
-        >
-          {isListening ? <Mic className="h-4 w-4" /> : <MicOff className="h-4 w-4" />}
-        </Button>
+        {!listenerMode && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className={`h-6 w-6 p-0 ${isListening ? 'text-green-500' : 'text-white/70'} hover:text-white hover:bg-white/10`}
+            onClick={toggleListening}
+            disabled={!isConnected}
+          >
+            {isListening ? <Mic className="h-4 w-4" /> : <MicOff className="h-4 w-4" />}
+          </Button>
+        )}
+        {listenerMode && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className={`h-6 w-6 p-0 ${isAuthenticated ? 'text-blue-500' : 'text-white/70'} hover:text-white hover:bg-white/10`}
+            disabled
+          >
+            <Headphones className="h-4 w-4" />
+          </Button>
+        )}
         <Button
           size="sm"
           variant="ghost"
@@ -313,7 +407,97 @@ function App() {
           <div className="grid grid-cols-2 gap-6 py-4">
             <div className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="audio-device">Audio Input Device</Label>
+                <Label>Connection Mode</Label>
+                <div className="flex items-center space-x-2 rounded-md border border-white/20 bg-white/5 p-3">
+                  <Checkbox
+                    id="listener-mode"
+                    checked={listenerMode}
+                    onCheckedChange={(checked) => {
+                      setListenerMode(checked as boolean)
+                      if (checked) {
+                        stopAudio()
+                      }
+                    }}
+                    disabled={isConnected}
+                  />
+                  <div className="flex-1">
+                    <label
+                      htmlFor="listener-mode"
+                      className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Headphones className="h-4 w-4" />
+                        Listener Mode
+                      </div>
+                    </label>
+                    <p className="text-xs text-white/50 mt-1">
+                      Listen to another client's transcription without sending audio
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {listenerMode && (
+                <>
+                  <div className="space-y-2">
+                    <Label htmlFor="listener-token">Authentication Token</Label>
+                    <input
+                      id="listener-token"
+                      type="password"
+                      value={listenerToken}
+                      onChange={(e) => setListenerToken(e.target.value)}
+                      placeholder="Enter listener token"
+                      className="flex h-10 w-full rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm text-white placeholder:text-white/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={isConnected}
+                    />
+                    <p className="text-xs text-white/50">
+                      Required for listener mode authentication
+                    </p>
+                  </div>
+
+                  {isAuthenticated && (
+                    <div className="space-y-2">
+                      <Label htmlFor="stream-select">Active Stream</Label>
+                      <div className="flex gap-2">
+                        <Select
+                          value={listenerStreamId?.toString() || ''}
+                          onValueChange={(value) => subscribeToStream(parseInt(value))}
+                          disabled={!isAuthenticated || availableStreams.length === 0}
+                        >
+                          <SelectTrigger id="stream-select" className="bg-white/10 border-white/20">
+                            <SelectValue placeholder="Select stream" />
+                          </SelectTrigger>
+                          <SelectContent className="bg-black/95 border-white/20">
+                            {availableStreams.map((streamId) => (
+                              <SelectItem key={streamId} value={streamId.toString()}>
+                                Stream {streamId}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Button
+                          size="icon"
+                          variant="outline"
+                          onClick={refreshStreams}
+                          className="shrink-0 border-white/20 hover:bg-white/10"
+                          disabled={!isAuthenticated}
+                        >
+                          <RefreshCw className="h-4 w-4" />
+                        </Button>
+                      </div>
+                      <p className="text-xs text-white/50">
+                        {availableStreams.length === 0
+                          ? 'No active streams available'
+                          : `${availableStreams.length} stream(s) available`}
+                      </p>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {!listenerMode && (
+                <div className="space-y-2">
+                  <Label htmlFor="audio-device">Audio Input Device</Label>
                 <div className="flex gap-2">
                   <Select
                     value={selectedDeviceId}
@@ -341,10 +525,11 @@ function App() {
                     <RefreshCw className="h-4 w-4" />
                   </Button>
                 </div>
-                <p className="text-xs text-white/50">
-                  Select your microphone or system audio loopback device
-                </p>
-              </div>
+                  <p className="text-xs text-white/50">
+                    Select your microphone or system audio loopback device
+                  </p>
+                </div>
+              )}
 
               <div className="space-y-2">
                 <Label htmlFor="ws-port">WebSocket Port</Label>
@@ -399,15 +584,35 @@ function App() {
                     )}
                   </div>
 
-                  <div className="flex items-center justify-between rounded-md border border-white/20 bg-white/5 p-3">
-                    <div className="flex items-center gap-2">
-                      <div className={`h-2 w-2 rounded-full ${isListening ? 'bg-green-500' : 'bg-gray-500'}`} />
-                      <div>
-                        <div className="text-sm font-medium">Audio Capture</div>
-                        <div className="text-xs text-white/50">{isListening ? 'Active' : 'Stopped'}</div>
+                  {!listenerMode && (
+                    <div className="flex items-center justify-between rounded-md border border-white/20 bg-white/5 p-3">
+                      <div className="flex items-center gap-2">
+                        <div className={`h-2 w-2 rounded-full ${isListening ? 'bg-green-500' : 'bg-gray-500'}`} />
+                        <div>
+                          <div className="text-sm font-medium">Audio Capture</div>
+                          <div className="text-xs text-white/50">{isListening ? 'Active' : 'Stopped'}</div>
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  )}
+
+                  {listenerMode && (
+                    <div className="flex items-center justify-between rounded-md border border-white/20 bg-white/5 p-3">
+                      <div className="flex items-center gap-2">
+                        <div className={`h-2 w-2 rounded-full ${isAuthenticated ? 'bg-green-500' : 'bg-yellow-500'}`} />
+                        <div>
+                          <div className="text-sm font-medium">Listener Status</div>
+                          <div className="text-xs text-white/50">
+                            {isAuthenticated
+                              ? listenerStreamId
+                                ? `Subscribed to Stream ${listenerStreamId}`
+                                : 'Authenticated'
+                              : 'Not authenticated'}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

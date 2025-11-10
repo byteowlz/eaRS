@@ -6,6 +6,13 @@ This guide explains how to integrate eaRS's real-time speech-to-text WebSocket s
 
 The eaRS WebSocket server accepts audio streams and returns real-time transcription results. External clients can connect to stream audio and receive word-by-word transcription with optional timestamps and voice activity detection.
 
+The server supports two modes of operation:
+
+1. **Active Mode** - Clients send audio data and receive transcriptions
+2. **Listener Mode** - Clients authenticate with a token and receive transcriptions from other active streams without sending audio
+
+For detailed information about listener mode, see [LISTENER_MODE.md](LISTENER_MODE.md).
+
 **Important**: The server is designed for single-client audio streaming. While multiple clients can connect for monitoring, only one client should send audio data at a time.
 
 ## Quick Start

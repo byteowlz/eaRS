@@ -2,12 +2,17 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use crossbeam_channel::{bounded, select, unbounded};
 use ears::audio;
-use ears::config::AppConfig;
+#[cfg(feature = "hooks")]
+use ears::config::DictationHooksConfig;
+use ears::config::{AppConfig, DictationNotificationConfig};
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 use futures_util::{SinkExt, StreamExt};
+use notifica::notify;
 use rdev::{EventType, listen};
 use serde_json::Value;
 use std::fs;
+#[cfg(feature = "hooks")]
+use std::process::Command as ProcessCommand;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use tokio::sync::mpsc;
@@ -15,10 +20,27 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 const PID_FILE_NAME: &str = "dictation.pid";
 
+#[derive(Clone, Copy, Debug)]
+enum DictationEvent {
+    Started,
+    Paused,
+    Stopped,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DictationState {
+    Listening,
+    Suspended,
+    Inactive,
+}
+
 #[derive(Debug, Parser)]
 #[command(name = "ears-dictation", about = "Dictation client for eaRS")]
 struct Args {
-    #[arg(long, help = "Set the transcription language (e.g., 'en', 'de', 'es', 'fr', 'ja')")]
+    #[arg(
+        long,
+        help = "Set the transcription language (e.g., 'en', 'de', 'es', 'fr', 'ja')"
+    )]
     lang: Option<String>,
 }
 
@@ -62,6 +84,7 @@ async fn main() -> Result<()> {
 
     let running = Arc::new(Mutex::new(true));
     let capturing = Arc::new(Mutex::new(true));
+    let dictation_state = Arc::new(Mutex::new(DictationState::Inactive));
 
     let (stop_tx, stop_rx) = bounded::<()>(1);
     let running_clone = running.clone();
@@ -75,9 +98,16 @@ async fn main() -> Result<()> {
     let hotkey_running = running.clone();
     let hotkey_capturing = capturing.clone();
     let hotkey_config = config.hotkeys.clone();
+    let notification_config = config.dictation.notifications.clone();
+    #[cfg(feature = "hooks")]
+    let hook_config = config.dictation.hooks.clone();
 
     if hotkey_config.enable_internal {
         eprintln!("Initializing hotkey listener for: {}", hotkey_config.toggle);
+        let dictation_state_thread = dictation_state.clone();
+        #[cfg(feature = "hooks")]
+        let hook_config_thread = hook_config.clone();
+        let notification_config_thread = notification_config.clone();
         thread::spawn(move || {
             let toggle_combo = hotkey_config.toggle.to_lowercase();
             let (t_ctrl, t_shift, t_alt, t_key) = parse_combo(&toggle_combo);
@@ -122,7 +152,30 @@ async fn main() -> Result<()> {
                         if CTRL == t_ctrl && SHIFT == t_shift && ALT == t_alt && k == t_key {
                             let mut c = hotkey_capturing.lock().unwrap();
                             *c = !*c;
-                            eprintln!("Audio capture {}", if *c { "started" } else { "stopped" });
+                            let is_active = *c;
+                            eprintln!(
+                                "Audio capture {}",
+                                if is_active { "started" } else { "stopped" }
+                            );
+                            drop(c);
+                            let event = if is_active {
+                                DictationState::Listening
+                            } else {
+                                DictationState::Suspended
+                            };
+                            #[cfg(feature = "hooks")]
+                            apply_state_change(
+                                &dictation_state_thread,
+                                event,
+                                &notification_config_thread,
+                                &hook_config_thread,
+                            );
+                            #[cfg(not(feature = "hooks"))]
+                            apply_state_change(
+                                &dictation_state_thread,
+                                event,
+                                &notification_config_thread,
+                            );
                         }
                     },
                     _ => {}
@@ -132,6 +185,20 @@ async fn main() -> Result<()> {
             }
         });
     }
+
+    #[cfg(feature = "hooks")]
+    apply_state_change(
+        &dictation_state,
+        DictationState::Listening,
+        &notification_config,
+        &hook_config,
+    );
+    #[cfg(not(feature = "hooks"))]
+    apply_state_change(
+        &dictation_state,
+        DictationState::Listening,
+        &notification_config,
+    );
 
     let (audio_tx, audio_rx) = unbounded();
     let device_index = None;
@@ -194,12 +261,12 @@ async fn main() -> Result<()> {
                     while let Some(cmd) = writer_rx.recv().await {
                         match cmd {
                             WriterCommand::Audio(bytes) => {
-                                if write.send(Message::Binary(bytes)).await.is_err() {
+                                if write.send(Message::binary(bytes)).await.is_err() {
                                     break;
                                 }
                             }
                             WriterCommand::Text(text) => {
-                                if write.send(Message::Text(text)).await.is_err() {
+                                if write.send(Message::text(text)).await.is_err() {
                                     break;
                                 }
                             }
@@ -265,6 +332,19 @@ async fn main() -> Result<()> {
     }
 
     remove_pid_file();
+    #[cfg(feature = "hooks")]
+    apply_state_change(
+        &dictation_state,
+        DictationState::Inactive,
+        &notification_config,
+        &hook_config,
+    );
+    #[cfg(not(feature = "hooks"))]
+    apply_state_change(
+        &dictation_state,
+        DictationState::Inactive,
+        &notification_config,
+    );
     eprintln!("ears-dictation stopped");
     Ok(())
 }
@@ -295,6 +375,122 @@ fn handle_message(json: &Value, enigo: &mut Enigo, capturing: &Arc<Mutex<bool>>)
             _ => {}
         }
     }
+    Ok(())
+}
+
+#[cfg(not(feature = "hooks"))]
+fn apply_state_change(
+    state: &Arc<Mutex<DictationState>>,
+    new_state: DictationState,
+    notifications: &DictationNotificationConfig,
+) {
+    let event = match new_state {
+        DictationState::Listening => DictationEvent::Started,
+        DictationState::Suspended => DictationEvent::Paused,
+        DictationState::Inactive => DictationEvent::Stopped,
+    };
+
+    let mut guard = state.lock().unwrap();
+    if *guard == new_state {
+        return;
+    }
+    *guard = new_state;
+    drop(guard);
+
+    handle_toggle_side_effects(event, notifications);
+}
+
+#[cfg(feature = "hooks")]
+fn apply_state_change(
+    state: &Arc<Mutex<DictationState>>,
+    new_state: DictationState,
+    notifications: &DictationNotificationConfig,
+    hooks: &DictationHooksConfig,
+) {
+    let event = match new_state {
+        DictationState::Listening => DictationEvent::Started,
+        DictationState::Suspended => DictationEvent::Paused,
+        DictationState::Inactive => DictationEvent::Stopped,
+    };
+
+    let mut guard = state.lock().unwrap();
+    if *guard == new_state {
+        return;
+    }
+    *guard = new_state;
+    drop(guard);
+
+    handle_toggle_side_effects(event, notifications, hooks);
+}
+
+fn send_toggle_notification(event: DictationEvent, notifications: &DictationNotificationConfig) {
+    if !notifications.enabled {
+        return;
+    }
+
+    let message = match event {
+        DictationEvent::Started => notifications.start_message.as_str(),
+        DictationEvent::Paused => notifications.pause_message.as_str(),
+        DictationEvent::Stopped => notifications.stop_message.as_str(),
+    };
+
+    if message.trim().is_empty() {
+        return;
+    }
+
+    if let Err(err) = notify("eaRS Dictation", message) {
+        eprintln!("Failed to send dictation notification: {}", err);
+    }
+}
+
+#[cfg(not(feature = "hooks"))]
+fn handle_toggle_side_effects(event: DictationEvent, notifications: &DictationNotificationConfig) {
+    send_toggle_notification(event, notifications);
+}
+
+#[cfg(feature = "hooks")]
+fn handle_toggle_side_effects(
+    event: DictationEvent,
+    notifications: &DictationNotificationConfig,
+    hooks: &DictationHooksConfig,
+) {
+    send_toggle_notification(event, notifications);
+    if let Err(err) = run_hook_command(event, hooks) {
+        eprintln!("Failed to run dictation hook command: {}", err);
+    }
+}
+
+#[cfg(feature = "hooks")]
+fn run_hook_command(event: DictationEvent, hooks: &DictationHooksConfig) -> Result<()> {
+    let command = match event {
+        DictationEvent::Started => hooks.start_command.as_deref(),
+        DictationEvent::Paused => hooks.pause_command.as_deref(),
+        DictationEvent::Stopped => hooks.stop_command.as_deref(),
+    };
+
+    let command = match command {
+        Some(cmd) if !cmd.trim().is_empty() => cmd.trim(),
+        _ => return Ok(()),
+    };
+
+    #[cfg(target_os = "windows")]
+    {
+        ProcessCommand::new("cmd")
+            .arg("/C")
+            .arg(command)
+            .spawn()
+            .with_context(|| format!("failed to spawn hook command '{}'", command))?;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        ProcessCommand::new("sh")
+            .arg("-c")
+            .arg(command)
+            .spawn()
+            .with_context(|| format!("failed to spawn hook command '{}'", command))?;
+    }
+
     Ok(())
 }
 

@@ -12,7 +12,7 @@ clap = { version = "4.4", features = ["derive"] }
 rustfft = "6.2"
 hound = "3.5"
 rubato = "0.15"
-cpal = "0.15"
+cpal = "0.16"
 crossbeam-channel = "0.5"
 
 [features]
