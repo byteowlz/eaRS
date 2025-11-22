@@ -15,6 +15,8 @@ enum DeviceArg {
     Coreml,
     #[cfg(feature = "directml")]
     Directml,
+    #[cfg(feature = "rocm")]
+    Rocm,
 }
 
 impl From<DeviceArg> for Device {
@@ -27,6 +29,8 @@ impl From<DeviceArg> for Device {
             DeviceArg::Coreml => Device::CoreML,
             #[cfg(feature = "directml")]
             DeviceArg::Directml => Device::DirectML,
+            #[cfg(feature = "rocm")]
+            DeviceArg::Rocm => Device::ROCm,
         }
     }
 }
@@ -121,19 +125,25 @@ fn get_default_device() -> Device {
         return Device::Cuda;
     }
 
-    #[cfg(all(feature = "coreml", not(feature = "cuda")))]
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    {
+        eprintln!("No device specified, defaulting to ROCm (AMD GPU)");
+        return Device::ROCm;
+    }
+
+    #[cfg(all(feature = "coreml", not(feature = "cuda"), not(feature = "rocm")))]
     {
         eprintln!("No device specified, defaulting to CoreML");
         return Device::CoreML;
     }
 
-    #[cfg(all(feature = "directml", not(feature = "cuda"), not(feature = "coreml")))]
+    #[cfg(all(feature = "directml", not(feature = "cuda"), not(feature = "rocm"), not(feature = "coreml")))]
     {
         eprintln!("No device specified, defaulting to DirectML");
         return Device::DirectML;
     }
 
-    #[cfg(not(any(feature = "cuda", feature = "coreml", feature = "directml")))]
+    #[cfg(not(any(feature = "cuda", feature = "rocm", feature = "coreml", feature = "directml")))]
     {
         eprintln!("No device specified, defaulting to CPU");
         Device::Cpu

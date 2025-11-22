@@ -1,11 +1,19 @@
 use anyhow::{anyhow, Result};
-use ndarray::{s, Array1, Array2, Array3, CowArray};
-use ort::{Environment, ExecutionProvider, GraphOptimizationLevel, Session, SessionBuilder, Value};
+use ndarray::{s, Array1, Array2, Array3, ArrayViewD};
+use ort::session::{Session, builder::{SessionBuilder, GraphOptimizationLevel}};
+use ort::value::Tensor;
+#[cfg(feature = "cuda")]
+use ort::execution_providers::CUDAExecutionProvider;
+#[cfg(feature = "coreml")]
+use ort::execution_providers::CoreMLExecutionProvider;
+#[cfg(feature = "directml")]
+use ort::execution_providers::DirectMLExecutionProvider;
+#[cfg(feature = "rocm")]
+use ort::execution_providers::ROCmExecutionProvider;
 use rustfft::{num_complex::Complex, FftPlanner};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Device {
@@ -16,6 +24,8 @@ pub enum Device {
     CoreML,
     #[cfg(feature = "directml")]
     DirectML,
+    #[cfg(feature = "rocm")]
+    ROCm,
 }
 
 const SAMPLE_RATE: usize = 16000;
@@ -54,43 +64,53 @@ impl ParakeetModel {
 
         eprintln!("Loading ONNX models with device: {:?}", device);
         
-        let mut env_builder = Environment::builder().with_name("Parakeet");
-        
-        env_builder = match device {
+        // Initialize the environment with execution providers based on device
+        match device {
             Device::Cpu => {
                 eprintln!("Using CPU execution");
-                env_builder
+                ort::init().commit()?;
             }
             #[cfg(feature = "cuda")]
             Device::Cuda => {
                 eprintln!("Using CUDA execution");
-                env_builder.with_execution_providers([ExecutionProvider::CUDA(Default::default())])
+                ort::init()
+                    .with_execution_providers([CUDAExecutionProvider::default().build()])
+                    .commit()?;
             }
             #[cfg(feature = "coreml")]
             Device::CoreML => {
                 eprintln!("Using CoreML execution");
-                env_builder.with_execution_providers([ExecutionProvider::CoreML(Default::default())])
+                ort::init()
+                    .with_execution_providers([CoreMLExecutionProvider::default().build()])
+                    .commit()?;
             }
             #[cfg(feature = "directml")]
             Device::DirectML => {
                 eprintln!("Using DirectML execution");
-                env_builder.with_execution_providers([ExecutionProvider::DirectML(Default::default())])
+                ort::init()
+                    .with_execution_providers([DirectMLExecutionProvider::default().build()])
+                    .commit()?;
             }
-        };
-        
-        let environment = Arc::new(env_builder.build()?);
+            #[cfg(feature = "rocm")]
+            Device::ROCm => {
+                eprintln!("Using ROCm execution for AMD GPU");
+                ort::init()
+                    .with_execution_providers([ROCmExecutionProvider::default().build()])
+                    .commit()?;
+            }
+        }
 
-        let preprocessor = SessionBuilder::new(&environment)?
+        let preprocessor = SessionBuilder::new()?
             .with_optimization_level(GraphOptimizationLevel::Level3)?
-            .with_model_from_file(&preprocessor_path)?;
+            .commit_from_file(&preprocessor_path)?;
 
-        let encoder = SessionBuilder::new(&environment)?
+        let encoder = SessionBuilder::new()?
             .with_optimization_level(GraphOptimizationLevel::Level3)?
-            .with_model_from_file(&encoder_path)?;
+            .commit_from_file(&encoder_path)?;
 
-        let decoder_joint = SessionBuilder::new(&environment)?
+        let decoder_joint = SessionBuilder::new()?
             .with_optimization_level(GraphOptimizationLevel::Level3)?
-            .with_model_from_file(&decoder_joint_path)?;
+            .commit_from_file(&decoder_joint_path)?;
 
         eprintln!("Loading vocabulary...");
         let vocab = Self::load_vocab(&vocab_path)?;
@@ -143,31 +163,31 @@ impl ParakeetModel {
         let waveforms = Array2::from_shape_vec((1, waveform.len()), waveform.to_vec())?;
         let waveforms_len = Array1::from_vec(vec![waveform.len() as i64]);
         
-        let waveforms_cow = CowArray::from(waveforms.into_dyn());
-        let waveforms_len_cow = CowArray::from(waveforms_len.clone().into_dyn());
+        let outputs = self.preprocessor.run(ort::inputs![
+            Tensor::from_array(waveforms)?,
+            Tensor::from_array(waveforms_len)?
+        ])?;
         
-        let waveforms_val = Value::from_array(self.preprocessor.allocator(), &waveforms_cow)?;
-        let waveforms_len_val = Value::from_array(self.preprocessor.allocator(), &waveforms_len_cow)?;
+        let features: ArrayViewD<f32> = outputs[0].try_extract_array()?;
+        let features_lens: ArrayViewD<i64> = outputs[1].try_extract_array()?;
         
-        let outputs = self.preprocessor.run(vec![waveforms_val, waveforms_len_val])?;
-        
-        let features = outputs[0].try_extract::<f32>()?.view().to_owned().into_dimensionality()?;
-        let features_lens = outputs[1].try_extract::<i64>()?.view().to_owned().into_dimensionality()?;
+        let features = features.to_owned().into_dimensionality()?;
+        let features_lens = features_lens.to_owned().into_dimensionality()?;
         
         Ok((features, features_lens))
     }
 
     fn decode_greedy(&mut self, features: &Array3<f32>, features_lens: &Array1<i64>) -> Result<String> {
-        let features_cow = CowArray::from(features.clone().into_dyn());
-        let lens_cow = CowArray::from(features_lens.clone().into_dyn());
+        let encoder_outputs = self.encoder.run(ort::inputs![
+            Tensor::from_array(features.clone())?,
+            Tensor::from_array(features_lens.clone())?
+        ])?;
 
-        let features_value = Value::from_array(self.encoder.allocator(), &features_cow)?;
-        let lens_value = Value::from_array(self.encoder.allocator(), &lens_cow)?;
-
-        let encoder_outputs = self.encoder.run(vec![features_value, lens_value])?;
-
-        let encoder_output_dyn = encoder_outputs[0].try_extract::<f32>()?.view().to_owned();
-        let encoded_len_i64 = encoder_outputs[1].try_extract::<i64>()?.view().to_owned();
+        let encoder_output_dyn: ArrayViewD<f32> = encoder_outputs[0].try_extract_array()?;
+        let encoded_len_i64: ArrayViewD<i64> = encoder_outputs[1].try_extract_array()?;
+        
+        let encoder_output_dyn = encoder_output_dyn.to_owned();
+        let encoded_len_i64 = encoded_len_i64.to_owned();
         let encoded_frames = encoded_len_i64[[0]] as usize;
         
         if encoder_output_dyn.shape().len() != 3 {
@@ -192,38 +212,27 @@ impl ParakeetModel {
             let encoder_step_1d = encoder_2d.slice(s![t, ..]).to_owned();
             let encoder_step = encoder_step_1d
                 .insert_axis(ndarray::Axis(0))
-                .insert_axis(ndarray::Axis(2))
-                .into_dyn();
+                .insert_axis(ndarray::Axis(2));
             
             let target_token = tokens.last().copied().unwrap_or(self.blank_id as i32);
-            let targets = Array2::from_shape_vec((1, 1), vec![target_token])?.into_dyn();
-            let target_length = Array1::from_vec(vec![1i32]).into_dyn();
+            let targets = Array2::from_shape_vec((1, 1), vec![target_token])?;
+            let target_length = Array1::from_vec(vec![1i32]);
             
-            let enc_cow = CowArray::from(encoder_step);
-            let targets_cow = CowArray::from(targets);
-            let target_len_cow = CowArray::from(target_length);
-            let state1_cow = CowArray::from(state_1.clone().into_dyn());
-            let state2_cow = CowArray::from(state_2.clone().into_dyn());
-            
-            let enc_val = Value::from_array(self.decoder_joint.allocator(), &enc_cow)?;
-            let tgt_val = Value::from_array(self.decoder_joint.allocator(), &targets_cow)?;
-            let tgt_len_val = Value::from_array(self.decoder_joint.allocator(), &target_len_cow)?;
-            let state1_val = Value::from_array(self.decoder_joint.allocator(), &state1_cow)?;
-            let state2_val = Value::from_array(self.decoder_joint.allocator(), &state2_cow)?;
-            
-            let outputs = self.decoder_joint.run(vec![
-                enc_val,
-                tgt_val,
-                tgt_len_val,
-                state1_val,
-                state2_val,
+            let outputs = self.decoder_joint.run(ort::inputs![
+                Tensor::from_array(encoder_step)?,
+                Tensor::from_array(targets)?,
+                Tensor::from_array(target_length)?,
+                Tensor::from_array(state_1.clone())?,
+                Tensor::from_array(state_2.clone())?
             ])?;
             
-            let logits_tensor = outputs[0].try_extract::<f32>()?;
-            let logits = logits_tensor.view();
+            let logits: ArrayViewD<f32> = outputs[0].try_extract_array()?;
             
-            let new_state_1 = outputs[2].try_extract::<f32>()?.view().to_owned().into_dimensionality()?;
-            let new_state_2 = outputs[3].try_extract::<f32>()?.view().to_owned().into_dimensionality()?;
+            let new_state_1: ArrayViewD<f32> = outputs[2].try_extract_array()?;
+            let new_state_2: ArrayViewD<f32> = outputs[3].try_extract_array()?;
+            
+            let new_state_1 = new_state_1.to_owned().into_dimensionality()?;
+            let new_state_2 = new_state_2.to_owned().into_dimensionality()?;
             
             let logit_slice = logits.as_slice().ok_or_else(|| {
                 anyhow!("Failed to convert logits to slice")
@@ -260,6 +269,9 @@ impl ParakeetModel {
                 emitted_tokens = 0;
             }
         }
+        
+        // Drop encoder_outputs to release the mutable borrow
+        drop(encoder_outputs);
 
         let text = self.tokens_to_text(&tokens);
         Ok(text)

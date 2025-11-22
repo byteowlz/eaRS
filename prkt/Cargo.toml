@@ -5,8 +5,8 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0"
-ndarray = "0.15"
-ort = "1.16"
+ndarray = "0.16"
+ort = "2.0.0-rc.10"
 hf-hub = "0.4"
 clap = { version = "4.4", features = ["derive"] }
 rustfft = "6.2"
@@ -20,6 +20,7 @@ default = []
 cuda = ["ort/cuda"]
 coreml = ["ort/coreml"]
 directml = ["ort/directml"]
+rocm = ["ort/rocm"]
 
 [lib]
 name = "prkt"
