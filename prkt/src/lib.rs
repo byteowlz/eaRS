@@ -35,6 +35,19 @@ const N_MELS: usize = 128;  // Parakeet uses 128 mel bins, not 80
 const MEL_FMIN: f32 = 0.0;
 const MEL_FMAX: f32 = 8000.0;
 
+#[derive(Debug, Clone)]
+pub struct TimedWord {
+    pub word: String,
+    pub start_time: f32,
+    pub end_time: f32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParakeetResult {
+    pub text: String,
+    pub words: Vec<TimedWord>,
+}
+
 pub struct ParakeetModel {
     preprocessor: Session,
     encoder: Session,
@@ -146,6 +159,15 @@ impl ParakeetModel {
     }
 
     pub fn transcribe(&mut self, waveform: &[f32], sample_rate: usize) -> Result<String> {
+        let result = self.transcribe_with_timestamps(waveform, sample_rate)?;
+        Ok(result.text)
+    }
+
+    pub fn transcribe_with_timestamps(
+        &mut self,
+        waveform: &[f32],
+        sample_rate: usize,
+    ) -> Result<ParakeetResult> {
         let resampled = if sample_rate != SAMPLE_RATE {
             resample_audio(waveform, sample_rate, SAMPLE_RATE)?
         } else {
@@ -153,10 +175,21 @@ impl ParakeetModel {
         };
 
         let (features, features_lens) = self.preprocess(&resampled)?;
-        
-        let transcript = self.decode_greedy(&features, &features_lens)?;
 
-        Ok(transcript)
+        let audio_duration = resampled.len() as f32 / SAMPLE_RATE as f32;
+        let encoded_frames = features_lens[0] as usize;
+        let frame_duration = if encoded_frames > 0 {
+            audio_duration / encoded_frames as f32
+        } else {
+            0.0
+        };
+
+        let (tokens, token_frames, _encoded_frames) =
+            self.decode_greedy_tokens(&features, &features_lens)?;
+
+        let (text, words) = self.tokens_to_text_and_words(&tokens, &token_frames, frame_duration);
+
+        Ok(ParakeetResult { text, words })
     }
     
     fn preprocess(&mut self, waveform: &[f32]) -> Result<(Array3<f32>, Array1<i64>)> {
@@ -177,7 +210,11 @@ impl ParakeetModel {
         Ok((features, features_lens))
     }
 
-    fn decode_greedy(&mut self, features: &Array3<f32>, features_lens: &Array1<i64>) -> Result<String> {
+    fn decode_greedy_tokens(
+        &mut self,
+        features: &Array3<f32>,
+        features_lens: &Array1<i64>,
+    ) -> Result<(Vec<i32>, Vec<usize>, usize)> {
         let encoder_outputs = self.encoder.run(ort::inputs![
             Tensor::from_array(features.clone())?,
             Tensor::from_array(features_lens.clone())?
@@ -207,6 +244,7 @@ impl ParakeetModel {
         
         let mut t = 0;
         let mut emitted_tokens = 0;
+        let mut token_frames = Vec::new();
         
         while t < encoded_frames {
             let encoder_step_1d = encoder_2d.slice(s![t, ..]).to_owned();
@@ -261,6 +299,7 @@ impl ParakeetModel {
                 state_1 = new_state_1;
                 state_2 = new_state_2;
                 tokens.push(max_idx as i32);
+                token_frames.push(t);
                 emitted_tokens += 1;
             }
             
@@ -273,10 +312,10 @@ impl ParakeetModel {
         // Drop encoder_outputs to release the mutable borrow
         drop(encoder_outputs);
 
-        let text = self.tokens_to_text(&tokens);
-        Ok(text)
+        Ok((tokens, token_frames, encoded_frames))
     }
 
+    #[allow(dead_code)]
     fn tokens_to_text(&self, tokens: &[i32]) -> String {
         let mut text = String::new();
         for &token_id in tokens {
@@ -296,6 +335,86 @@ impl ParakeetModel {
             }
         }
         text.trim().to_string()
+    }
+
+    fn tokens_to_text_and_words(
+        &self,
+        tokens: &[i32],
+        frames: &[usize],
+        frame_duration: f32,
+    ) -> (String, Vec<TimedWord>) {
+        let mut text = String::new();
+        let mut words = Vec::new();
+
+        let mut current_word = String::new();
+        let mut current_start: Option<f32> = None;
+        let mut last_frame_time: f32 = 0.0;
+
+        for (&token_id, &frame_idx) in tokens.iter().zip(frames.iter()) {
+            let idx = token_id as usize;
+            if idx >= self.vocab.len() {
+                continue;
+            }
+
+            let token = &self.vocab[idx];
+            let frame_time = frame_idx as f32 * frame_duration;
+            last_frame_time = frame_time;
+
+            if token == "▁" {
+                if !current_word.is_empty() {
+                    let end_time = frame_time;
+                    words.push(TimedWord {
+                        word: current_word.clone(),
+                        start_time: current_start.unwrap_or(frame_time),
+                        end_time,
+                    });
+                    current_word.clear();
+                    current_start = None;
+                }
+                continue;
+            }
+
+            if token.starts_with('▁') {
+                if !current_word.is_empty() {
+                    let end_time = frame_time;
+                    words.push(TimedWord {
+                        word: current_word.clone(),
+                        start_time: current_start.unwrap_or(frame_time),
+                        end_time,
+                    });
+                }
+
+                let cleaned = if token.len() > 3 { &token[3..] } else { "" };
+                current_word = cleaned.to_string();
+                current_start = Some(frame_time);
+
+                if !text.is_empty() {
+                    text.push(' ');
+                }
+                text.push_str(cleaned);
+            } else {
+                current_word.push_str(token);
+                if text.is_empty() {
+                    text.push_str(token);
+                } else {
+                    text.push_str(token);
+                }
+                if current_start.is_none() {
+                    current_start = Some(frame_time);
+                }
+            }
+        }
+
+        if !current_word.is_empty() {
+            let end_time = last_frame_time + frame_duration;
+            words.push(TimedWord {
+                word: current_word.clone(),
+                start_time: current_start.unwrap_or(last_frame_time),
+                end_time,
+            });
+        }
+
+        (text.trim().to_string(), words)
     }
 }
 

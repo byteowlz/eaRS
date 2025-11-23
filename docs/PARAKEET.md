@@ -368,7 +368,7 @@ hf-hub = "0.4"  # Already in dependencies
 [features]
 default = []
 parakeet = []
-parakeet-cuda = ["onnxruntime/cuda"]
+parakeet + nvidia = Parakeet ONNX Runtime with CUDA
 parakeet-metal = ["onnxruntime/metal"]  # If available in onnxruntime-rs
 ```
 

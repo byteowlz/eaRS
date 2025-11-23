@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, anyhow};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use crossbeam_channel::unbounded;
 use ears::{
     TranscriptionOptions, WebSocketMessage, WordTimestamp, audio, config::AppConfig, server,
@@ -8,12 +8,17 @@ use futures::{SinkExt, StreamExt};
 use serde_json::json;
 use std::{
     io::{self, Write},
+    path::PathBuf,
     process::{Command as ProcessCommand, Stdio},
     thread,
     time::Duration,
 };
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
+
+use ears::server::EngineKind;
+#[cfg(feature = "parakeet")]
+use ears::server::ParakeetDevice;
 
 #[cfg(unix)]
 use libc::{SIGTERM, kill};
@@ -52,6 +57,54 @@ enum DictationCommand {
     Status,
     #[command(about = "Run dictation in foreground with debug output")]
     Debug,
+}
+
+#[derive(Clone, Debug, ValueEnum)]
+enum EngineArg {
+    Kyutai,
+    #[cfg(feature = "parakeet")]
+    Parakeet,
+}
+
+impl EngineArg {
+    fn to_engine_kind(&self) -> EngineKind {
+        match self {
+            EngineArg::Kyutai => EngineKind::Kyutai,
+            #[cfg(feature = "parakeet")]
+            EngineArg::Parakeet => EngineKind::Parakeet,
+        }
+    }
+}
+
+#[cfg(feature = "parakeet")]
+#[derive(Clone, Debug, ValueEnum)]
+enum ParakeetDeviceArg {
+    Cpu,
+    #[cfg(feature = "nvidia")]
+    Cuda,
+    #[cfg(feature = "apple")]
+    Coreml,
+    #[cfg(feature = "directml")]
+    Directml,
+    #[cfg(feature = "amd")]
+    Rocm,
+}
+
+#[cfg(feature = "parakeet")]
+impl From<ParakeetDeviceArg> for ParakeetDevice {
+    fn from(value: ParakeetDeviceArg) -> Self {
+        match value {
+            ParakeetDeviceArg::Cpu => ParakeetDevice::Cpu,
+            #[cfg(feature = "nvidia")]
+            ParakeetDeviceArg::Cuda => ParakeetDevice::Cuda,
+            #[cfg(feature = "apple")]
+            ParakeetDeviceArg::Coreml => ParakeetDevice::CoreML,
+            #[cfg(feature = "directml")]
+            ParakeetDeviceArg::Directml => ParakeetDevice::DirectML,
+            #[cfg(feature = "amd")]
+            ParakeetDeviceArg::Rocm => ParakeetDevice::ROCm,
+        }
+    }
 }
 
 #[derive(Args, Clone)]
@@ -95,6 +148,10 @@ struct ServerStartArgs {
     #[arg(long)]
     bind: Option<String>,
 
+    /// Select default STT engine (kyutai or parakeet)
+    #[arg(long, value_enum, default_value = "kyutai")]
+    engine: EngineArg,
+
     /// Hugging Face repository containing the Kyutai model
     #[arg(long, default_value = "kyutai/stt-1b-en_fr-candle")]
     hf_repo: String,
@@ -119,6 +176,31 @@ struct ServerStartArgs {
     #[cfg(feature = "whisper")]
     #[arg(long, default_value_t = false)]
     whisper: bool,
+
+    /// Parakeet Hugging Face repository (requires --features parakeet)
+    #[cfg(feature = "parakeet")]
+    #[arg(long, default_value = "istupakov/parakeet-tdt-0.6b-v3-onnx")]
+    parakeet_repo: String,
+
+    /// Optional Parakeet model directory override
+    #[cfg(feature = "parakeet")]
+    #[arg(long)]
+    parakeet_model_dir: Option<String>,
+
+    /// Execution device for Parakeet (compile-time providers only)
+    #[cfg(feature = "parakeet")]
+    #[arg(long, value_enum)]
+    parakeet_device: Option<ParakeetDeviceArg>,
+
+    /// Chunk duration for Parakeet streaming (seconds)
+    #[cfg(feature = "parakeet")]
+    #[arg(long, default_value_t = 3.0)]
+    parakeet_chunk_seconds: f32,
+
+    /// Overlap duration between Parakeet chunks (seconds)
+    #[cfg(feature = "parakeet")]
+    #[arg(long, default_value_t = 1.0)]
+    parakeet_overlap_seconds: f32,
 }
 
 #[tokio::main]
@@ -326,6 +408,8 @@ fn append_server_args(cmd: &mut ProcessCommand, args: &ServerStartArgs) {
     if let Some(bind) = &args.bind {
         cmd.arg("--bind").arg(bind);
     }
+    cmd.arg("--engine")
+        .arg(args.engine.to_possible_value().unwrap().get_name());
     if args.cpu {
         cmd.arg("--cpu");
     }
@@ -342,6 +426,23 @@ fn append_server_args(cmd: &mut ProcessCommand, args: &ServerStartArgs) {
     #[cfg(feature = "whisper")]
     if args.whisper {
         cmd.arg("--whisper");
+    }
+    #[cfg(feature = "parakeet")]
+    {
+        if args.parakeet_repo != "istupakov/parakeet-tdt-0.6b-v3-onnx" {
+            cmd.arg("--parakeet-repo").arg(&args.parakeet_repo);
+        }
+        if let Some(dir) = &args.parakeet_model_dir {
+            cmd.arg("--parakeet-model-dir").arg(dir);
+        }
+        if let Some(device) = args.parakeet_device.as_ref() {
+            cmd.arg("--parakeet-device")
+                .arg(device.to_possible_value().unwrap().get_name());
+        }
+        cmd.arg("--parakeet-chunk-seconds")
+            .arg(args.parakeet_chunk_seconds.to_string());
+        cmd.arg("--parakeet-overlap-seconds")
+            .arg(args.parakeet_overlap_seconds.to_string());
     }
 }
 
@@ -380,6 +481,21 @@ fn build_server_options(args: &ServerStartArgs) -> Result<server::ServerOptions>
         max_parallel_sessions: args.max_sessions.max(1),
         enable_listener_mode: config.server.enable_listener_mode,
         listener_tokens: config.server.listener_tokens.clone(),
+        default_engine: args.engine.to_engine_kind(),
+        #[cfg(feature = "parakeet")]
+        parakeet_repo: args.parakeet_repo.clone(),
+        #[cfg(feature = "parakeet")]
+        parakeet_model_dir: args.parakeet_model_dir.clone().map(PathBuf::from),
+        #[cfg(feature = "parakeet")]
+        parakeet_device: args
+            .parakeet_device
+            .as_ref()
+            .map(|d| d.clone().into())
+            .unwrap_or_else(ParakeetDevice::default_for_build),
+        #[cfg(feature = "parakeet")]
+        parakeet_chunk_seconds: args.parakeet_chunk_seconds,
+        #[cfg(feature = "parakeet")]
+        parakeet_overlap_seconds: args.parakeet_overlap_seconds,
     })
 }
 

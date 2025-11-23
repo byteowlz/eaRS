@@ -3,16 +3,25 @@ use futures::{SinkExt, StreamExt};
 #[cfg(unix)]
 use libc::{EPERM, ESRCH, kill};
 use serde_json::json;
-use std::{fs, io, path::PathBuf};
+use std::{fs, io, path::PathBuf, sync::Arc};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 
 use crate::config::{AppConfig, ensure_ref_audio};
 use crate::{Model, TranscriptionOptions, TranscriptionSink, WebSocketMessage};
+use engine::{EngineManager, EngineSession, send_engine_changed};
+#[cfg(feature = "parakeet")]
+use parakeet::{ParakeetEngine, ParakeetEngineConfig};
 
 pub mod listener;
+mod engine;
 mod parallel;
+#[cfg(feature = "parakeet")]
+mod parakeet;
+pub use engine::EngineKind;
+#[cfg(feature = "parakeet")]
+pub use parakeet::ParakeetDevice;
 
 #[derive(Debug, Clone)]
 pub struct ServerOptions {
@@ -23,6 +32,17 @@ pub struct ServerOptions {
     pub max_parallel_sessions: usize,
     pub enable_listener_mode: bool,
     pub listener_tokens: Vec<String>,
+    pub default_engine: EngineKind,
+    #[cfg(feature = "parakeet")]
+    pub parakeet_repo: String,
+    #[cfg(feature = "parakeet")]
+    pub parakeet_model_dir: Option<PathBuf>,
+    #[cfg(feature = "parakeet")]
+    pub parakeet_device: ParakeetDevice,
+    #[cfg(feature = "parakeet")]
+    pub parakeet_chunk_seconds: f32,
+    #[cfg(feature = "parakeet")]
+    pub parakeet_overlap_seconds: f32,
 }
 
 pub async fn run(options: ServerOptions) -> Result<()> {
@@ -30,13 +50,15 @@ pub async fn run(options: ServerOptions) -> Result<()> {
     let config = AppConfig::load()?;
     ensure_ref_audio(&config).await?;
 
+    let batch_size = options.max_parallel_sessions.max(1);
+    let mut engine_manager = EngineManager::new();
+
     let model_dir = if config.storage.model_dir == "default" {
         None
     } else {
         Some(config.model_dir_path())
     };
 
-    let batch_size = options.max_parallel_sessions.max(1);
     let model = if let Some(dir) = model_dir.as_ref() {
         Model::load_from_hf_with_batch(
             &options.hf_repo,
@@ -58,7 +80,44 @@ pub async fn run(options: ServerOptions) -> Result<()> {
     };
 
     let prime_languages = config.model.prime_languages.clone();
-    let engine = parallel::spawn_parallel_engine(model, prime_languages);
+    let kyutai_engine = parallel::spawn_parallel_engine(model, prime_languages);
+    let kyutai_capacity = kyutai_engine.capacity();
+    engine_manager.register(Arc::new(kyutai_engine.clone()));
+
+    #[cfg(feature = "parakeet")]
+    {
+        let model_dir = if let Some(dir) = options.parakeet_model_dir.clone() {
+            Some(PathBuf::from(dir))
+        } else if config.storage.model_dir != "default" {
+            Some(config.model_dir_path())
+        } else {
+            None
+        };
+
+        let parakeet_cfg = ParakeetEngineConfig {
+            model_repo: options.parakeet_repo.clone(),
+            model_dir,
+            device: options.parakeet_device,
+            chunk_seconds: options.parakeet_chunk_seconds,
+            overlap_seconds: options.parakeet_overlap_seconds,
+        };
+
+        match ParakeetEngine::load(parakeet_cfg, options.transcription.clone(), batch_size) {
+            Ok(engine) => {
+                engine_manager.register(Arc::new(engine));
+            }
+            Err(err) => {
+                eprintln!("[ears-server] failed to initialize parakeet engine: {err}");
+            }
+        }
+    }
+
+    let default_engine = if engine_manager.has(options.default_engine) {
+        options.default_engine
+    } else {
+        EngineKind::Kyutai
+    };
+
     let listener = TcpListener::bind(&options.bind_addr).await?;
 
     let stream_registry = if options.enable_listener_mode {
@@ -78,7 +137,16 @@ pub async fn run(options: ServerOptions) -> Result<()> {
     eprintln!(
         "Server listening on {} (max {} concurrent sessions)",
         options.bind_addr,
-        engine.capacity()
+        kyutai_capacity
+    );
+    eprintln!(
+        "[ears-server] engines available: {}",
+        engine_manager
+            .available()
+            .iter()
+            .map(|e| e.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
     );
 
     if options.enable_listener_mode {
@@ -88,16 +156,28 @@ pub async fn run(options: ServerOptions) -> Result<()> {
         );
     }
 
+    let transcription_opts = options.transcription.clone();
+
     loop {
         let (stream, addr) = listener.accept().await?;
         eprintln!("[ears-server] new connection from {}", addr);
-        let engine_clone = engine.clone();
+        let engine_clone = engine_manager.clone();
         let registry_clone = stream_registry.clone();
         let validator_clone = token_validator.clone();
+        let default_engine = default_engine;
+        let transcription_clone = transcription_opts.clone();
         tokio::spawn(async move {
             eprintln!("[ears-server] handling connection from {}", addr);
             if let Err(err) =
-                handle_connection(stream, engine_clone, registry_clone, validator_clone).await
+                handle_connection(
+                    stream,
+                    engine_clone,
+                    registry_clone,
+                    validator_clone,
+                    default_engine,
+                    transcription_clone,
+                )
+                .await
             {
                 eprintln!("[ears-server] connection {} error: {}", addr, err);
             }
@@ -108,11 +188,12 @@ pub async fn run(options: ServerOptions) -> Result<()> {
 
 async fn handle_connection(
     stream: tokio::net::TcpStream,
-    engine: parallel::ParallelEngine,
+    engine_manager: EngineManager,
     registry: Option<listener::StreamRegistry>,
     validator: Option<listener::TokenValidator>,
+    default_engine: EngineKind,
+    transcription: TranscriptionOptions,
 ) -> Result<()> {
-    // Set TCP keepalive to detect dead connections
     let _ = stream.set_nodelay(true);
 
     let ws_stream = accept_async(stream).await?;
@@ -120,17 +201,14 @@ async fn handle_connection(
 
     let (msg_tx, mut msg_rx) = mpsc::unbounded_channel::<Message>();
 
-    // Wait for first message to determine connection type
     let first_msg = match ws_reader.next().await {
         Some(Ok(Message::Text(text))) => {
             if let Ok(cmd) = serde_json::from_str::<listener::ListenerCommand>(&text) {
-                // This is a listener connection
                 return handle_listener_connection(
                     ws_writer, ws_reader, msg_tx, msg_rx, cmd, registry, validator,
                 )
                 .await;
             } else {
-                // Not a listener command, treat as normal connection
                 Some(Message::Text(text))
             }
         }
@@ -139,7 +217,6 @@ async fn handle_connection(
         None => return Ok(()),
     };
 
-    // Regular active transcription connection
     use std::sync::atomic::{AtomicU64, Ordering};
     static SESSION_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
     let session_id = SESSION_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -151,34 +228,17 @@ async fn handle_connection(
         SessionSink::new(msg_tx.clone())
     };
 
-    let session = match engine.allocate_session(sink) {
-        Ok(Some(handle)) => handle,
-        Ok(None) => {
-            let _ = msg_tx.send(Message::text(
-                json!({
-                    "type": "error",
-                    "message": "server busy - maximum concurrent sessions reached"
-                })
-                .to_string(),
-            ));
-            let _ = msg_tx.send(Message::Close(None));
-            while let Some(msg) = msg_rx.recv().await {
-                let _ = ws_writer.send(msg).await;
-            }
-            return Ok(());
-        }
-        Err(err) => {
-            eprintln!("[ears-server] failed to allocate session: {err}");
-            let _ = msg_tx.send(Message::text(
-                json!({ "type": "error", "message": "internal server error" }).to_string(),
-            ));
-            let _ = msg_tx.send(Message::Close(None));
-            while let Some(msg) = msg_rx.recv().await {
-                let _ = ws_writer.send(msg).await;
-            }
-            return Ok(());
-        }
-    };
+    let mut current_engine = default_engine;
+    let session = allocate_session(&engine_manager, current_engine, sink.clone(), &msg_tx)?;
+    if session.is_none() {
+        return Ok(());
+    }
+    let mut sink_for_status = sink.clone();
+    send_engine_changed(&mut sink_for_status, current_engine);
+    eprintln!(
+        "[ears-server] session {} allocated with engine {:?}",
+        session_id, current_engine
+    );
 
     let writer = tokio::spawn(async move {
         while let Some(msg) = msg_rx.recv().await {
@@ -188,103 +248,59 @@ async fn handle_connection(
         }
     });
 
-    let session_reader = session.clone();
-    let reader = tokio::spawn(async move {
-        let session = session_reader;
-        eprintln!("[ears-server] reader task started");
+    let engine_for_reader = engine_manager.clone();
+    let registry_clone = registry.clone();
+    let mut sink_for_reader = sink.clone();
+    let mut session_opt = session;
+    let transcription_options = transcription.clone();
 
-        // Process the first message if it was captured
+    let reader = tokio::spawn(async move {
         if let Some(msg) = first_msg {
-            match msg {
-                Message::Binary(data) => {
-                    if !data.is_empty() {
-                        let chunk = decode_audio_chunk(&data);
-                        if !chunk.is_empty() {
-                            let _ = session.send_audio(chunk);
-                        }
-                    }
-                }
-                Message::Text(text) => {
-                    if should_stop(&text) {
-                        session.request_stop();
-                        return;
-                    }
-                    if let Ok(cmd) = serde_json::from_str::<serde_json::Value>(&text) {
-                        if let Some(cmd_type) = cmd.get("type").and_then(|v| v.as_str()) {
-                            if cmd_type == "setlanguage" {
-                                if let Some(lang) = cmd.get("lang").and_then(|v| v.as_str()) {
-                                    let _ = session.set_language(lang.to_string());
-                                }
-                            }
-                        }
-                    }
-                }
-                _ => {}
+            if let Err(err) = handle_client_message(
+                msg,
+                &mut session_opt,
+                &mut sink_for_reader,
+                &engine_for_reader,
+                &msg_tx,
+                &mut current_engine,
+                &transcription_options,
+            ) {
+                eprintln!("[ears-server] failed to process initial message: {err}");
+                return;
             }
         }
 
         while let Some(msg) = ws_reader.next().await {
             match msg {
-                Ok(Message::Binary(data)) => {
-                    if data.is_empty() {
-                        continue;
-                    }
-                    let chunk = decode_audio_chunk(&data);
-                    if chunk.is_empty() {
-                        continue;
-                    }
-                    if session.send_audio(chunk).is_err() {
-                        eprintln!("[ears-server] audio send failed, breaking reader");
+                Ok(message) => {
+                    if let Err(err) = handle_client_message(
+                        message,
+                        &mut session_opt,
+                        &mut sink_for_reader,
+                        &engine_for_reader,
+                        &msg_tx,
+                        &mut current_engine,
+                        &transcription_options,
+                    ) {
+                        eprintln!("[ears-server] reader error: {err}");
                         break;
                     }
-                }
-                Ok(Message::Text(text)) => {
-                    if should_stop(&text) {
-                        eprintln!("[ears-server] stop command received, breaking reader");
-                        session.request_stop();
-                        break;
-                    }
-
-                    if let Ok(cmd) = serde_json::from_str::<serde_json::Value>(&text) {
-                        if let Some(cmd_type) = cmd.get("type").and_then(|v| v.as_str()) {
-                            if cmd_type == "setlanguage" {
-                                if let Some(lang) = cmd.get("lang").and_then(|v| v.as_str()) {
-                                    eprintln!(
-                                        "[ears-server] received language change command: {}",
-                                        lang
-                                    );
-                                    if let Err(err) = session.set_language(lang.to_string()) {
-                                        eprintln!(
-                                            "[ears-server] failed to forward language change: {err}"
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                Ok(Message::Close(_)) => {
-                    eprintln!("[ears-server] WebSocket close received, breaking reader");
-                    session.request_stop();
-                    break;
                 }
                 Err(e) => {
-                    eprintln!("[ears-server] WebSocket error: {}, breaking reader", e);
-                    session.request_stop();
+                    eprintln!("[ears-server] WebSocket error: {e}");
+                    if let Some(sess) = session_opt.take() {
+                        sess.request_stop();
+                    }
                     break;
                 }
-                _ => {}
             }
         }
-        eprintln!("[ears-server] reader task finished");
     });
 
     let _ = reader.await;
-    drop(session);
-
     let _ = writer.await;
 
-    if let Some(ref reg) = registry {
+    if let Some(ref reg) = registry_clone {
         reg.unregister_stream(session_id);
     }
 
@@ -517,18 +533,175 @@ async fn handle_listener_connection(
     Ok(())
 }
 
+fn handle_client_message(
+    msg: Message,
+    session: &mut Option<Box<dyn EngineSession>>,
+    sink: &mut SessionSink,
+    engine_manager: &EngineManager,
+    msg_tx: &mpsc::UnboundedSender<Message>,
+    current_engine: &mut EngineKind,
+    transcription: &TranscriptionOptions,
+) -> Result<()> {
+    match msg {
+        Message::Binary(data) => {
+            if data.is_empty() {
+                return Ok(());
+            }
+            if session.is_none() {
+                *session = allocate_session(engine_manager, *current_engine, sink.clone(), msg_tx)?;
+                if session.is_none() {
+                    eprintln!("[ears-server] failed to allocate session when receiving audio");
+                    return Ok(());
+                } else {
+                    eprintln!(
+                        "[ears-server] allocated session on engine {:?} for audio",
+                        current_engine
+                    );
+                }
+            }
+            if let Some(sess) = session.as_ref() {
+                let chunk = decode_audio_chunk(&data);
+                if chunk.is_empty() {
+                    return Ok(());
+                }
+                eprintln!("[ears-server] forwarding {} samples to {:?}", chunk.len(), sess.engine());
+                sess.send_audio(chunk)?;
+            }
+        }
+        Message::Text(text) => {
+            if should_stop(&text) {
+                if let Some(sess) = session.take() {
+                    sess.request_stop();
+                }
+                return Err(anyhow!("stop requested"));
+            }
+
+            if let Ok(cmd) = serde_json::from_str::<crate::WebSocketCommand>(&text) {
+                match cmd {
+                    crate::WebSocketCommand::SetLanguage { lang } => {
+                        if let Some(sess) = session.as_mut() {
+                            if sess.supports_language() {
+                                let _ = sess.set_language(lang.clone());
+                            } else {
+                                send_status(sink, transcription, *current_engine);
+                            }
+                        }
+                    }
+                    crate::WebSocketCommand::Restart => {
+                        if let Some(new_session) =
+                            allocate_session(engine_manager, *current_engine, sink.clone(), msg_tx)?
+                        {
+                            if let Some(old) = session.take() {
+                                old.request_stop();
+                            }
+                            *session = Some(new_session);
+                            send_engine_changed(sink, *current_engine);
+                        }
+                    }
+                    crate::WebSocketCommand::SetEngine { engine } => {
+                        if let Some(kind) = EngineKind::from_str(&engine) {
+                            if !engine_manager.has(kind) {
+                                send_error(msg_tx, "engine not available");
+                            } else if kind != *current_engine {
+                                if let Some(new_session) =
+                                    allocate_session(engine_manager, kind, sink.clone(), msg_tx)?
+                                {
+                                    if let Some(old) = session.take() {
+                                        old.request_stop();
+                                    }
+                                    *session = Some(new_session);
+                                    *current_engine = kind;
+                                    send_engine_changed(sink, kind);
+                                }
+                            } else {
+                                send_engine_changed(sink, kind);
+                            }
+                        } else {
+                            send_error(msg_tx, "unknown engine");
+                        }
+                    }
+                    crate::WebSocketCommand::GetStatus => {
+                        send_status(sink, transcription, *current_engine);
+                    }
+                    crate::WebSocketCommand::SetVadTimeout { .. } => {
+                        // Not adjustable per-session for now; ignore gracefully.
+                    }
+                    crate::WebSocketCommand::Pause | crate::WebSocketCommand::Resume => {}
+                }
+                return Ok(());
+            }
+        }
+        Message::Close(_) => {
+            if let Some(sess) = session.take() {
+                sess.request_stop();
+            }
+            return Err(anyhow!("client closed connection"));
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
+fn allocate_session(
+    manager: &EngineManager,
+    engine: EngineKind,
+    sink: SessionSink,
+    msg_tx: &mpsc::UnboundedSender<Message>,
+) -> Result<Option<Box<dyn EngineSession>>> {
+    match manager.allocate(engine, sink) {
+        Ok(Some(session)) => Ok(Some(session)),
+        Ok(None) => {
+            send_error(msg_tx, "server busy - maximum concurrent sessions reached");
+            Ok(None)
+        }
+        Err(err) => {
+            eprintln!("[ears-server] failed to allocate session: {err}");
+            send_error(msg_tx, "internal server error");
+            Ok(None)
+        }
+    }
+}
+
+fn send_status(
+    sink: &mut SessionSink,
+    transcription: &TranscriptionOptions,
+    engine: EngineKind,
+) {
+    let status = WebSocketMessage::Status {
+        paused: false,
+        vad: transcription.vad,
+        timestamps: transcription.timestamps,
+        vad_timeout: transcription.vad_timeout,
+        lang: None,
+        engine: Some(engine.as_str().to_string()),
+    };
+    sink.handle_message(status);
+}
+
+fn send_error(msg_tx: &mpsc::UnboundedSender<Message>, message: &str) {
+    let _ = msg_tx.send(Message::text(
+        json!({
+            "type": "error",
+            "message": message
+        })
+        .to_string(),
+    ));
+}
+
+#[derive(Clone)]
 pub(crate) struct SessionSink {
-    sender: mpsc::UnboundedSender<Message>,
-    session_id: Option<u64>,
-    registry: Option<listener::StreamRegistry>,
+    inner: Arc<SessionSinkInner>,
 }
 
 impl SessionSink {
     pub(crate) fn new(sender: mpsc::UnboundedSender<Message>) -> Self {
         Self {
-            sender,
-            session_id: None,
-            registry: None,
+            inner: Arc::new(SessionSinkInner {
+                sender,
+                session_id: None,
+                registry: None,
+            }),
         }
     }
 
@@ -538,29 +711,38 @@ impl SessionSink {
         registry: listener::StreamRegistry,
     ) -> Self {
         Self {
-            sender,
-            session_id: Some(session_id),
-            registry: Some(registry),
+            inner: Arc::new(SessionSinkInner {
+                sender,
+                session_id: Some(session_id),
+                registry: Some(registry),
+            }),
         }
     }
 
     pub(crate) fn close(&self) {
-        let _ = self.sender.send(Message::Close(None));
+        let _ = self.inner.sender.send(Message::Close(None));
     }
 }
 
 impl TranscriptionSink for SessionSink {
     fn handle_message(&mut self, message: WebSocketMessage) {
         if let Ok(json) = serde_json::to_string(&message) {
-            if self.sender.send(Message::text(json.clone())).is_err() {
+            if self.inner.sender.send(Message::text(json.clone())).is_err() {
                 eprintln!("[ears-server] failed to forward message to websocket writer");
             }
         }
 
-        if let (Some(session_id), Some(registry)) = (self.session_id, &self.registry) {
+        if let (Some(session_id), Some(registry)) = (self.inner.session_id, &self.inner.registry) {
             let _ = registry.broadcast_message(session_id, &message);
         }
     }
+}
+
+#[derive(Clone)]
+struct SessionSinkInner {
+    sender: mpsc::UnboundedSender<Message>,
+    session_id: Option<u64>,
+    registry: Option<listener::StreamRegistry>,
 }
 
 fn decode_audio_chunk(data: &[u8]) -> Vec<f32> {

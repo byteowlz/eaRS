@@ -311,12 +311,16 @@ pub enum WebSocketMessage {
     LanguageChanged {
         lang: String,
     },
+    EngineChanged {
+        engine: String,
+    },
     Status {
         paused: bool,
         vad: bool,
         timestamps: bool,
         vad_timeout: Option<f64>,
         lang: Option<String>,
+        engine: Option<String>,
     },
     WhisperProcessing {
         sentence_id: String,
@@ -352,6 +356,7 @@ pub enum WebSocketCommand {
     SetLanguage { lang: String },
     GetStatus,
     SetVadTimeout { seconds: f64 },
+    SetEngine { engine: String },
 }
 
 #[derive(Debug, Clone)]
@@ -1058,9 +1063,11 @@ impl Model {
                                                     timestamps: false,
                                                     vad_timeout: None,
                                                     lang: lang_tx.borrow().clone(),
+                                                    engine: None,
                                                 };
                                                 let _ = ws_tx.send(status);
                                             }
+                                            WebSocketCommand::SetEngine { .. } => {}
                                             WebSocketCommand::SetVadTimeout { seconds } => {
                                                 // No-op here: handled in processing loop via vad_timeout
                                                 let status = WebSocketMessage::Status {
@@ -1069,6 +1076,7 @@ impl Model {
                                                     timestamps: false,
                                                     vad_timeout: Some(seconds),
                                                     lang: lang_tx.borrow().clone(),
+                                                    engine: None,
                                                 };
                                                 let _ = ws_tx.send(status);
                                             }

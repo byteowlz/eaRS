@@ -20,6 +20,23 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 const PID_FILE_NAME: &str = "dictation.pid";
 
+#[derive(Clone, Debug, clap::ValueEnum)]
+enum EngineArg {
+    Kyutai,
+    #[cfg(feature = "parakeet")]
+    Parakeet,
+}
+
+impl EngineArg {
+    fn as_str(&self) -> &'static str {
+        match self {
+            EngineArg::Kyutai => "kyutai",
+            #[cfg(feature = "parakeet")]
+            EngineArg::Parakeet => "parakeet",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 enum DictationEvent {
     Started,
@@ -42,6 +59,9 @@ struct Args {
         help = "Set the transcription language (e.g., 'en', 'de', 'es', 'fr', 'ja')"
     )]
     lang: Option<String>,
+
+    #[arg(long, value_enum, help = "Select transcription engine (kyutai|parakeet)")]
+    engine: Option<EngineArg>,
 }
 
 fn get_pid_file() -> std::path::PathBuf {
@@ -239,6 +259,16 @@ async fn main() -> Result<()> {
                     if let Err(e) = writer_tx.send(WriterCommand::Text(lang_cmd)) {
                         eprintln!("Failed to send language command: {}", e);
                     }
+                }
+
+                if let Some(ref engine) = args.engine {
+                    eprintln!("Selecting engine: {}", engine.as_str());
+                    let engine_cmd = serde_json::json!({
+                        "type": "setengine",
+                        "engine": engine.as_str(),
+                    })
+                    .to_string();
+                    let _ = writer_tx.send(WriterCommand::Text(engine_cmd));
                 }
 
                 let audio_writer = writer_tx.clone();

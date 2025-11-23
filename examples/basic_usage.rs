@@ -2,17 +2,24 @@
 
 use anyhow::Result;
 use ears::{Model, TranscriptionOptions};
+use tokio::runtime::Runtime;
 
 fn main() -> Result<()> {
     // Create transcription options
     let options = TranscriptionOptions {
         timestamps: true,
-        vad: false,
         save_audio: Some("recorded_audio.wav".to_string()),
+        ..Default::default()
     };
 
-    // Load the model
-    let mut model = Model::load_from_hf("kyutai/stt-1b-en_fr-candle", false, options)?;
+    // Load the model (blocking for simplicity in this example)
+    let rt = Runtime::new()?;
+    let mut model = rt.block_on(Model::load_from_hf(
+        "kyutai/stt-1b-en_fr-candle",
+        false,
+        options,
+        None,
+    ))?;
 
     // Transcribe an audio file
     let result = model.transcribe_file("path/to/your/audio.wav", Some("saved_audio.wav"))?;

@@ -15,6 +15,12 @@ cargo build --release
 cargo build --release --features metal # For Apple silicon
 
 cargo build --release --features cuda # For NVIDIA GPU
+
+cargo build --release --features parakeet             # Enable Parakeet (ONNX) engine (CPU)
+cargo build --release --features "parakeet nvidia"    # Parakeet + CUDA (Kyutai uses CUDA too)
+cargo build --release --features "parakeet apple"     # Parakeet + CoreML, Kyutai + Metal (Apple Silicon)
+cargo build --release --features "parakeet amd"       # Parakeet + ROCm (Kyutai stays CPU)
+cargo build --release --features "parakeet directml"  # Parakeet + DirectML (Kyutai stays CPU)
 ```
 
 All binaries are emitted into `./target/release/`.
@@ -50,7 +56,12 @@ Press `Ctrl+C` in the client to stop streaming. When you are done with the backe
 ```
 ./target/release/ears server start \
     [--bind 0.0.0.0:8765] \
+    [--engine kyutai|parakeet] \
     [--hf-repo kyutai/stt-1b-en_fr-candle] \
+    [--parakeet-repo istupakov/parakeet-tdt-0.6b-v3-onnx] \
+    [--parakeet-device cpu|nvidia|apple|amd|directml] \
+    [--parakeet-chunk-seconds 3.0] \
+    [--parakeet-overlap-seconds 1.0] \
     [--cpu] \
     [--timestamps] \
     [--vad] \
@@ -58,7 +69,9 @@ Press `Ctrl+C` in the client to stop streaming. When you are done with the backe
 ```
 
 - `--bind`: Override the default bind address (`0.0.0.0:<port-from-config>`).
+- `--engine`: Choose the default engine; when compiled with `parakeet`, both engines load and you can switch via WebSocket `{"type":"setengine","engine":"parakeet"}`.
 - `--hf-repo`: Choose a different Kyutai Speech repo hosted on Hugging Face.
+- `--parakeet-*`: Configure the Parakeet ONNX engine (defaults are multilingual, no language selection needed). Parakeet weights are CC-BY and are downloaded at runtime; nothing is redistributed.
 - `--cpu`: Force CPU execution (otherwise CUDA/Metal is used when available).
 - `--timestamps`: Include word timestamps in the server stream.
 - `--vad`: Enable voice-activity detection for automatic sentence segmentation.

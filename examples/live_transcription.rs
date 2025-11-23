@@ -4,24 +4,31 @@ use anyhow::Result;
 use crossbeam_channel::unbounded;
 use ears::{Model, TranscriptionOptions, audio};
 use std::thread;
+use tokio::runtime::Runtime;
 
 fn main() -> Result<()> {
     // Create transcription options
     let options = TranscriptionOptions {
-        timestamps: false,
         vad: true,
         save_audio: Some("live_recording.wav".to_string()),
+        ..Default::default()
     };
 
     // Load the model
-    let mut model = Model::load_from_hf("kyutai/stt-1b-en_fr-candle", false, options)?;
+    let rt = Runtime::new()?;
+    let mut model = rt.block_on(Model::load_from_hf(
+        "kyutai/stt-1b-en_fr-candle",
+        false,
+        options,
+        None,
+    ))?;
 
     // Set up audio capture
     let (audio_tx, audio_rx) = unbounded();
 
     // Start audio capture in a separate thread
     let audio_handle = thread::spawn(move || {
-        if let Err(e) = audio::start_audio_capture(audio_tx) {
+        if let Err(e) = audio::start_audio_capture(audio_tx, None) {
             eprintln!("Audio capture error: {}", e);
         }
     });

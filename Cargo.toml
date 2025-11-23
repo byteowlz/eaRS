@@ -54,17 +54,34 @@ futures-util = "0.3"
 ctrlc = { version = "3.4", features = ["termination"] }
 cudarc = { version = "0.17", optional = true }
 notifica = "3.0.2"
+prkt = { path = "prkt", optional = true }
+webrtc-vad = { version = "0.4", optional = true }
 
 
 [features]
 default = []
 whisper = ["dep:whisper-rs"]
-cuda = ["dep:cudarc", "candle/cuda", "candle-nn/cuda"]
-cuda-whisper = ["cuda", "whisper", "whisper-rs/cuda"]
 cudnn = ["candle/cudnn", "candle-nn/cudnn"]
-metal = ["candle/metal", "candle-nn/metal"]
-metal-whisper = ["metal", "whisper", "whisper-rs/metal"]
 hooks = []
+
+# Engines
+parakeet = ["dep:prkt", "dep:webrtc-vad"]
+
+# Acceleration (shared flags)
+nvidia = ["dep:cudarc", "candle/cuda", "candle-nn/cuda", "prkt/cuda"]
+apple = ["candle/metal", "candle-nn/metal", "prkt/coreml"]
+amd = ["prkt/rocm"]
+directml = ["prkt/directml"]
+
+# Backwards-compat aliases
+cuda = ["nvidia"]
+cuda-whisper = ["nvidia", "whisper", "whisper-rs/cuda"]
+metal = ["apple"]
+metal-whisper = ["apple", "whisper", "whisper-rs/metal"]
+parakeet-cuda = ["parakeet", "nvidia"]
+parakeet-coreml = ["parakeet", "apple"]
+parakeet-directml = ["parakeet", "directml"]
+parakeet-rocm = ["parakeet", "amd"]
 
 [profile.release]
 debug = true

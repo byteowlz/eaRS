@@ -28,6 +28,7 @@ interface TranscriptionMessage {
   text?: string
   paused?: boolean
   lang?: string
+  engine?: string
 }
 
 interface SubsStyle {
@@ -45,6 +46,7 @@ function App() {
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([])
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('')
   const [subsStyle, setSubsStyle] = useState<SubsStyle>({ border_radius: 5, border_thickness: 1 })
+  const [engine, setEngine] = useState<'kyutai' | 'parakeet'>('kyutai')
   
   // Listener mode settings
   const [listenerMode, setListenerMode] = useState(false)
@@ -167,6 +169,7 @@ function App() {
 
       ws.onopen = () => {
         setIsConnected(true)
+        ws.send(JSON.stringify({ type: 'setengine', engine }))
         
         // If listener mode is enabled, authenticate immediately
         if (listenerMode && listenerToken) {
@@ -235,6 +238,11 @@ function App() {
               }, 3000)
             }
             break
+          case 'enginechanged':
+            if (message.engine) {
+              setEngine(message.engine as 'kyutai' | 'parakeet')
+            }
+            break
         }
       }
     } catch (error) {
@@ -301,6 +309,13 @@ function App() {
   const refreshStreams = () => {
     if (wsRef.current?.readyState === WebSocket.OPEN && isAuthenticated) {
       wsRef.current.send(JSON.stringify({ type: 'liststreams' }))
+    }
+  }
+
+  const handleEngineChange = (value: 'kyutai' | 'parakeet') => {
+    setEngine(value)
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'setengine', engine: value }))
     }
   }
 
@@ -543,6 +558,26 @@ function App() {
                 />
                 <p className="text-xs text-white/50">
                   Port for eaRS WebSocket server (default: 8765)
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="engine">Engine</Label>
+                <Select
+                  value={engine}
+                  onValueChange={(value) => handleEngineChange(value as 'kyutai' | 'parakeet')}
+                  disabled={listenerMode}
+                >
+                  <SelectTrigger id="engine" className="bg-white/10 border-white/20">
+                    <SelectValue placeholder="Select engine" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-black/95 border-white/20">
+                    <SelectItem value="kyutai">Kyutai</SelectItem>
+                    <SelectItem value="parakeet">Parakeet</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-white/50">
+                  Choose transcription engine (Parakeet requires server build with `parakeet` feature).
                 </p>
               </div>
             </div>

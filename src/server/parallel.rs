@@ -7,6 +7,7 @@ use crossbeam_channel::{Receiver, Sender, unbounded};
 use moshi::StreamMask;
 
 use crate::{Model, TranscriptionSink, WebSocketMessage, WordTimestamp};
+use super::engine::{Engine, EngineKind, EngineSession};
 
 use super::SessionSink;
 
@@ -51,6 +52,28 @@ impl SessionHandle {
 impl Drop for SessionHandle {
     fn drop(&mut self) {
         self.signal_closed();
+    }
+}
+
+impl EngineSession for SessionHandle {
+    fn engine(&self) -> EngineKind {
+        EngineKind::Kyutai
+    }
+
+    fn send_audio(&self, pcm: Vec<f32>) -> anyhow::Result<()> {
+        SessionHandle::send_audio(self, pcm)
+    }
+
+    fn set_language(&self, lang: String) -> anyhow::Result<()> {
+        SessionHandle::set_language(self, lang)
+    }
+
+    fn request_stop(&self) {
+        SessionHandle::request_stop(self);
+    }
+
+    fn supports_language(&self) -> bool {
+        true
     }
 }
 
@@ -297,6 +320,19 @@ impl ParallelEngine {
             lang_tx: alloc.lang_tx,
             control_tx: alloc.control_tx,
         }))
+    }
+}
+
+impl Engine for ParallelEngine {
+    fn kind(&self) -> EngineKind {
+        EngineKind::Kyutai
+    }
+
+    fn allocate(&self, sink: SessionSink) -> anyhow::Result<Option<Box<dyn EngineSession>>> {
+        let session = self
+            .allocate_session(sink)
+            .context("failed to allocate kyutai session")?;
+        Ok(session.map(|handle| Box::new(handle) as Box<dyn EngineSession>))
     }
 }
 

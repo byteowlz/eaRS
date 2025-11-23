@@ -1,6 +1,58 @@
 use anyhow::Result;
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use ears::{TranscriptionOptions, config::AppConfig, server};
+use ears::server::EngineKind;
+#[cfg(feature = "parakeet")]
+use ears::server::ParakeetDevice;
+use std::path::PathBuf;
+
+#[derive(Clone, Debug, ValueEnum)]
+enum EngineArg {
+    Kyutai,
+    #[cfg(feature = "parakeet")]
+    Parakeet,
+}
+
+impl EngineArg {
+    fn to_engine_kind(&self) -> EngineKind {
+        match self {
+            EngineArg::Kyutai => EngineKind::Kyutai,
+            #[cfg(feature = "parakeet")]
+            EngineArg::Parakeet => EngineKind::Parakeet,
+        }
+    }
+}
+
+#[cfg(feature = "parakeet")]
+#[derive(Clone, Debug, ValueEnum)]
+enum ParakeetDeviceArg {
+    Cpu,
+    #[cfg(feature = "nvidia")]
+    Cuda,
+    #[cfg(feature = "apple")]
+    Coreml,
+    #[cfg(feature = "directml")]
+    Directml,
+    #[cfg(feature = "amd")]
+    Rocm,
+}
+
+#[cfg(feature = "parakeet")]
+impl From<ParakeetDeviceArg> for ParakeetDevice {
+    fn from(value: ParakeetDeviceArg) -> Self {
+        match value {
+            ParakeetDeviceArg::Cpu => ParakeetDevice::Cpu,
+            #[cfg(feature = "nvidia")]
+            ParakeetDeviceArg::Cuda => ParakeetDevice::Cuda,
+            #[cfg(feature = "apple")]
+            ParakeetDeviceArg::Coreml => ParakeetDevice::CoreML,
+            #[cfg(feature = "directml")]
+            ParakeetDeviceArg::Directml => ParakeetDevice::DirectML,
+            #[cfg(feature = "amd")]
+            ParakeetDeviceArg::Rocm => ParakeetDevice::ROCm,
+        }
+    }
+}
 
 #[derive(Debug, Parser)]
 #[command(
@@ -11,6 +63,10 @@ struct Args {
     /// Address to bind the transcription server to (default: <config host>:<config port>)
     #[arg(long)]
     bind: Option<String>,
+
+    /// Select default STT engine (kyutai or parakeet)
+    #[arg(long, value_enum, default_value = "kyutai")]
+    engine: EngineArg,
 
     /// Hugging Face repository for the speech-to-text model
     #[arg(long, default_value = "kyutai/stt-1b-en_fr-candle")]
@@ -40,6 +96,31 @@ struct Args {
     /// Log transcriptions from language injection audio (for debugging)
     #[arg(long, default_value_t = false)]
     verbose_injection: bool,
+
+    /// Parakeet Hugging Face repository (requires `--features parakeet`)
+    #[cfg(feature = "parakeet")]
+    #[arg(long, default_value = "istupakov/parakeet-tdt-0.6b-v3-onnx")]
+    parakeet_repo: String,
+
+    /// Optional Parakeet model directory override
+    #[cfg(feature = "parakeet")]
+    #[arg(long)]
+    parakeet_model_dir: Option<String>,
+
+    /// Execution device for Parakeet (compile-time providers only)
+    #[cfg(feature = "parakeet")]
+    #[arg(long, value_enum)]
+    parakeet_device: Option<ParakeetDeviceArg>,
+
+    /// Chunk duration for Parakeet streaming (seconds)
+    #[cfg(feature = "parakeet")]
+    #[arg(long, default_value_t = 3.0)]
+    parakeet_chunk_seconds: f32,
+
+    /// Overlap duration between Parakeet chunks (seconds)
+    #[cfg(feature = "parakeet")]
+    #[arg(long, default_value_t = 1.0)]
+    parakeet_overlap_seconds: f32,
 }
 
 #[tokio::main]
@@ -85,5 +166,20 @@ fn build_server_options(args: &Args) -> Result<server::ServerOptions> {
         max_parallel_sessions: args.max_sessions.max(1),
         enable_listener_mode: config.server.enable_listener_mode,
         listener_tokens: config.server.listener_tokens.clone(),
+        default_engine: args.engine.to_engine_kind(),
+        #[cfg(feature = "parakeet")]
+        parakeet_repo: args.parakeet_repo.clone(),
+        #[cfg(feature = "parakeet")]
+        parakeet_model_dir: args.parakeet_model_dir.clone().map(PathBuf::from),
+        #[cfg(feature = "parakeet")]
+        parakeet_device: args
+            .parakeet_device
+            .as_ref()
+            .map(|d| d.clone().into())
+            .unwrap_or_else(ParakeetDevice::default_for_build),
+        #[cfg(feature = "parakeet")]
+        parakeet_chunk_seconds: args.parakeet_chunk_seconds,
+        #[cfg(feature = "parakeet")]
+        parakeet_overlap_seconds: args.parakeet_overlap_seconds,
     })
 }
