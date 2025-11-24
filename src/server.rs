@@ -110,7 +110,7 @@ pub async fn run(options: ServerOptions) -> Result<()> {
                 engine_manager.register(Arc::new(engine));
             }
             Err(err) => {
-                eprintln!("[ears-server] failed to initialize parakeet engine: {err}");
+                eprintln!("[ears-server] failed to initialize parakeet engine: {err:#}");
             }
         }
     }

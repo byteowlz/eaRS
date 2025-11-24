@@ -45,6 +45,7 @@ impl ParakeetDevice {
         {
             return ParakeetDevice::DirectML;
         }
+        #[cfg(not(any(feature = "nvidia", feature = "amd", feature = "apple", feature = "directml")))]
         ParakeetDevice::Cpu
     }
 

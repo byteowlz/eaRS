@@ -36,7 +36,11 @@ crossbeam-channel = "0.5"
 hf-hub = "0.4.3"
 kaudio = "0.2.1"
 moshi = "0.6.4"
-sentencepiece = "0.12"
+# prkt must come before sentencepiece to ensure ort's protobuf symbols are used
+# (both bundle protobuf-lite, and the linker uses the first definition)
+prkt = { path = "prkt", optional = true }
+# Use system sentencepiece to avoid protobuf conflicts with ort-sys
+sentencepiece = { version = "0.12", features = ["system"] }
 serde = { version = "1.0.210", features = ["derive"] }
 serde_json = "1.0.115"
 toml = "0.9"
@@ -54,7 +58,6 @@ futures-util = "0.3"
 ctrlc = { version = "3.4", features = ["termination"] }
 cudarc = { version = "0.17", optional = true }
 notifica = "3.0.2"
-prkt = { path = "prkt", optional = true }
 webrtc-vad = { version = "0.4", optional = true }
 
 

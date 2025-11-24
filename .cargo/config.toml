@@ -1,0 +1,15 @@
+# Linker configuration to resolve duplicate protobuf symbols
+# Both ort-sys (ONNX Runtime) and sentencepiece-sys bundle protobuf-lite,
+# causing duplicate symbol errors at link time.
+# Using --allow-multiple-definition lets the linker pick one copy.
+# We also use --whole-archive to ensure ort's protobuf is fully included.
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = [
+    "-C", "link-arg=-Wl,--allow-multiple-definition",
+]
+
+[target.aarch64-unknown-linux-gnu]
+rustflags = [
+    "-C", "link-arg=-Wl,--allow-multiple-definition",
+]
