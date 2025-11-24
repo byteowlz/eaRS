@@ -7,14 +7,55 @@
 - **Server management**: `ears server start|stop` launches and controls the inference backend.
 - **Client capture**: Running `ears` without subcommands streams microphone audio to the server and prints live transcripts.
 
+## System Dependencies
+
+### Linux
+
+On Linux, eaRS uses the system `sentencepiece` library to avoid protobuf conflicts with ONNX Runtime.
+
+**Ubuntu/Debian:**
+```bash
+sudo apt-get update
+sudo apt-get install -y libsentencepiece-dev sentencepiece
+```
+
+**Fedora/RHEL:**
+```bash
+sudo dnf install -y sentencepiece-devel
+```
+
+**Arch Linux:**
+```bash
+sudo pacman -S sentencepiece
+```
+
+### macOS and Windows
+
+On macOS and Windows, `sentencepiece` is compiled from source and statically linked during the build process. No manual installation required.
+
+### Automated Installation (Recommended)
+
+Use the provided `just` recipes which automatically check and install dependencies:
+
+```bash
+# Interactive installation with feature selection
+just install-ears
+
+# Or use specific presets:
+just install-ears-metal      # macOS with Metal acceleration
+just install-ears-cuda       # NVIDIA GPU with CUDA
+just install-ears-parakeet   # Enable Parakeet engine
+just install-ears-default    # CPU only
+```
+
 ## Build
 
 ```bash
 cargo build --release
 
-cargo build --release --features metal # For Apple silicon
+cargo build --release --features apple # For Apple silicon
 
-cargo build --release --features cuda # For NVIDIA GPU
+cargo build --release --features nvidia # For NVIDIA GPU
 
 cargo build --release --features parakeet             # Enable Parakeet (ONNX) engine (CPU)
 cargo build --release --features "parakeet nvidia"    # Parakeet + CUDA (Kyutai uses CUDA too)
@@ -27,12 +68,16 @@ All binaries are emitted into `./target/release/`.
 
 ## Installation
 
+The recommended way to install is using the `just` recipes (see System Dependencies above).
+
+For manual installation:
+
 ```bash
 cargo install --path .
 
-cargo install --path . --features metal # For Apple silicon
+cargo install --path . --features apple # For Apple silicon
 
-cargo install --path . --features cuda # For NVIDIA GPU
+cargo install --path . --features nvidia # For NVIDIA GPU
 ```
 
 ## Quick start

@@ -39,8 +39,6 @@ moshi = "0.6.4"
 # prkt must come before sentencepiece to ensure ort's protobuf symbols are used
 # (both bundle protobuf-lite, and the linker uses the first definition)
 prkt = { path = "prkt", optional = true }
-# Use system sentencepiece to avoid protobuf conflicts with ort-sys
-sentencepiece = { version = "0.12", features = ["system"] }
 serde = { version = "1.0.210", features = ["derive"] }
 serde_json = "1.0.115"
 toml = "0.9"
@@ -60,6 +58,14 @@ cudarc = { version = "0.17", optional = true }
 notifica = "3.0.2"
 webrtc-vad = { version = "0.4", optional = true }
 
+# Platform-specific sentencepiece configuration
+# Linux: use system library to avoid protobuf conflicts with ort-sys
+# macOS/Windows: compile from source (static linking)
+[target.'cfg(target_os = "linux")'.dependencies]
+sentencepiece = { version = "0.12", features = ["system"] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+sentencepiece = { version = "0.12", features = ["static"] }
 
 [features]
 default = []
