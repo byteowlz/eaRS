@@ -69,6 +69,7 @@ pub struct ParakeetEngineConfig {
     pub device: ParakeetDevice,
     pub chunk_seconds: f32,
     pub overlap_seconds: f32,
+    pub noise_gate_rms: f32,
 }
 
 pub struct ParakeetEngine {
@@ -77,6 +78,7 @@ pub struct ParakeetEngine {
     options: TranscriptionOptions,
     chunk_samples_24k: usize,
     overlap_samples_24k: usize,
+    noise_gate_rms: f32,
 }
 
 impl ParakeetEngine {
@@ -103,6 +105,7 @@ impl ParakeetEngine {
             options,
             chunk_samples_24k: chunk_24k,
             overlap_samples_24k: overlap_24k.min(chunk_24k),
+            noise_gate_rms: cfg.noise_gate_rms,
         })
     }
 }
@@ -132,6 +135,7 @@ impl Engine for ParakeetEngine {
             options: self.options.clone(),
             chunk_samples_24k: self.chunk_samples_24k,
             overlap_samples_24k: self.overlap_samples_24k,
+            noise_gate_rms: self.noise_gate_rms,
         };
 
         std::thread::spawn(move || {
@@ -189,6 +193,7 @@ struct ParakeetSessionConfig {
     options: TranscriptionOptions,
     chunk_samples_24k: usize,
     overlap_samples_24k: usize,
+    noise_gate_rms: f32,
 }
 
 struct VadState {
@@ -310,6 +315,23 @@ fn run_parakeet_session(
                     buffer_24k.clear();
                 }
                 continue;
+            }
+
+            if !config.options.vad && config.noise_gate_rms > 0.0 {
+                let chunk_rms = rms(&resampled);
+                if chunk_rms < config.noise_gate_rms && !stop_requested {
+                    eprintln!(
+                        "[parakeet] chunk skipped: below noise gate (rms {:.5} < {:.5})",
+                        chunk_rms, config.noise_gate_rms
+                    );
+                    buffer_offset_24k = total_samples_24k.saturating_sub(config.overlap_samples_24k);
+                    if buffer_24k.len() > config.overlap_samples_24k {
+                        buffer_24k = buffer_24k.split_off(buffer_24k.len() - config.overlap_samples_24k);
+                    } else {
+                        buffer_24k.clear();
+                    }
+                    continue;
+                }
             }
 
             let transcription = {

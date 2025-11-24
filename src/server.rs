@@ -43,6 +43,8 @@ pub struct ServerOptions {
     pub parakeet_chunk_seconds: f32,
     #[cfg(feature = "parakeet")]
     pub parakeet_overlap_seconds: f32,
+    #[cfg(feature = "parakeet")]
+    pub parakeet_noise_gate_rms: f32,
 }
 
 pub async fn run(options: ServerOptions) -> Result<()> {
@@ -100,6 +102,7 @@ pub async fn run(options: ServerOptions) -> Result<()> {
             device: options.parakeet_device,
             chunk_seconds: options.parakeet_chunk_seconds,
             overlap_seconds: options.parakeet_overlap_seconds,
+            noise_gate_rms: options.parakeet_noise_gate_rms,
         };
 
         match ParakeetEngine::load(parakeet_cfg, options.transcription.clone(), batch_size) {

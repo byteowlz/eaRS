@@ -201,6 +201,11 @@ struct ServerStartArgs {
     #[cfg(feature = "parakeet")]
     #[arg(long, default_value_t = 1.0)]
     parakeet_overlap_seconds: f32,
+
+    /// Noise gate RMS for Parakeet when VAD is off (set 0 to disable)
+    #[cfg(feature = "parakeet")]
+    #[arg(long, default_value_t = 0.0015)]
+    parakeet_noise_gate_rms: f32,
 }
 
 #[tokio::main]
@@ -443,6 +448,8 @@ fn append_server_args(cmd: &mut ProcessCommand, args: &ServerStartArgs) {
             .arg(args.parakeet_chunk_seconds.to_string());
         cmd.arg("--parakeet-overlap-seconds")
             .arg(args.parakeet_overlap_seconds.to_string());
+        cmd.arg("--parakeet-noise-gate-rms")
+            .arg(args.parakeet_noise_gate_rms.to_string());
     }
 }
 
@@ -496,6 +503,8 @@ fn build_server_options(args: &ServerStartArgs) -> Result<server::ServerOptions>
         parakeet_chunk_seconds: args.parakeet_chunk_seconds,
         #[cfg(feature = "parakeet")]
         parakeet_overlap_seconds: args.parakeet_overlap_seconds,
+        #[cfg(feature = "parakeet")]
+        parakeet_noise_gate_rms: args.parakeet_noise_gate_rms,
     })
 }
 
