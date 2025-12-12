@@ -29,6 +29,46 @@ sudo dnf install -y sentencepiece-devel
 sudo pacman -S sentencepiece
 ```
 
+#### Additional Setup for Dictation on Wayland/Linux
+
+eaRS dictation uses the Linux `uinput` interface for reliable keyboard input on both Wayland and X11. One-time setup is required:
+
+**1. Load the uinput kernel module:**
+```bash
+sudo modprobe uinput
+```
+
+**2. Make it permanent (load on boot):**
+```bash
+echo "uinput" | sudo tee /etc/modules-load.d/uinput.conf
+```
+
+**3. Add your user to the `input` group:**
+```bash
+sudo usermod -a -G input $USER
+```
+
+**4. Log out and log back in** (or reboot) for group changes to take effect.
+
+**5. Verify your setup:**
+```bash
+# Check you're in the input group
+groups | grep input
+
+# Check /dev/uinput is accessible
+ls -l /dev/uinput
+```
+
+You should see something like:
+```
+crw-rw---- 1 root input 10, 223 Dec 12 10:00 /dev/uinput
+```
+
+**Troubleshooting dictation:**
+- **Error: "Failed to open /dev/uinput"** – Ensure uinput module is loaded: `lsmod | grep uinput`
+- **Still not working?** – Check you're in input group: `groups | grep input`
+- **Verify you've logged out/in after adding to group**
+
 ### macOS and Windows
 
 On macOS and Windows, `sentencepiece` is compiled from source and statically linked during the build process. No manual installation required.

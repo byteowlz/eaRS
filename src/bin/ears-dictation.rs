@@ -5,7 +5,7 @@ use ears::audio;
 #[cfg(feature = "hooks")]
 use ears::config::DictationHooksConfig;
 use ears::config::{AppConfig, DictationNotificationConfig};
-use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+use ears::virtual_keyboard::{create_virtual_keyboard, VirtualKeyboard, SpecialKey};
 use futures_util::{SinkExt, StreamExt};
 use notifica::notify;
 use rdev::{EventType, listen};
@@ -244,8 +244,9 @@ async fn main() -> Result<()> {
             Ok((ws_stream, _)) => {
                 eprintln!("Connected to transcription server");
                 let (mut write, mut read) = ws_stream.split();
-                let mut enigo = Enigo::new(&Settings::default())
-                    .context("Failed to initialize keyboard controller")?;
+                let mut keyboard = create_virtual_keyboard()
+                    .context("Failed to initialize virtual keyboard. \
+                              On Linux/Wayland, ensure you are in the 'input' group.")?;
 
                 let (writer_tx, mut writer_rx) = mpsc::unbounded_channel::<WriterCommand>();
 
@@ -318,7 +319,7 @@ async fn main() -> Result<()> {
                                     Ok(Message::Text(text)) => {
                                         eprintln!("[WS RECEIVED] {}", text);
                                         if let Ok(json) = serde_json::from_str::<Value>(&text) {
-                                            handle_message(&json, &mut enigo, &capturing)?;
+                                            handle_message(&json, &mut keyboard, &capturing)?;
                                         } else {
                                             eprintln!("[ERROR] Failed to parse JSON");
                                         }
@@ -379,7 +380,11 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn handle_message(json: &Value, enigo: &mut Enigo, capturing: &Arc<Mutex<bool>>) -> Result<()> {
+fn handle_message(
+    json: &Value, 
+    keyboard: &mut Box<dyn VirtualKeyboard>, 
+    capturing: &Arc<Mutex<bool>>
+) -> Result<()> {
     let is_capturing = *capturing.lock().unwrap();
 
     if let Some(event_type) = json.get("type").and_then(|v| v.as_str()) {
@@ -388,8 +393,8 @@ fn handle_message(json: &Value, enigo: &mut Enigo, capturing: &Arc<Mutex<bool>>)
                 if let Some(word) = json.get("word").and_then(|v| v.as_str()) {
                     if !word.is_empty() {
                         eprintln!("[TYPING WORD] {}", word);
-                        enigo.text(word)?;
-                        enigo.key(Key::Space, Direction::Click)?;
+                        keyboard.type_text(word)?;
+                        keyboard.press_key(SpecialKey::Space)?;
                     }
                 }
             }
@@ -397,8 +402,8 @@ fn handle_message(json: &Value, enigo: &mut Enigo, capturing: &Arc<Mutex<bool>>)
                 if let Some(text) = json.get("text").and_then(|v| v.as_str()) {
                     if !text.is_empty() {
                         eprintln!("[TYPING FINAL] {}", text);
-                        enigo.text(text)?;
-                        enigo.key(Key::Space, Direction::Click)?;
+                        keyboard.type_text(text)?;
+                        keyboard.press_key(SpecialKey::Space)?;
                     }
                 }
             }

@@ -59,10 +59,11 @@ notifica = "3.0.2"
 webrtc-vad = { version = "0.4", optional = true }
 
 # Platform-specific sentencepiece configuration
-# Linux: use system library to avoid protobuf conflicts with ort-sys
+# Linux: use system library (requires sentencepiece package to be built against current protobuf)
 # macOS/Windows: compile from source (static linking)
 [target.'cfg(target_os = "linux")'.dependencies]
 sentencepiece = { version = "0.12", features = ["system"] }
+uinput = "0.1"
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 sentencepiece = { version = "0.12", features = ["static"] }

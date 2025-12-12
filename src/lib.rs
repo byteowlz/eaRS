@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub mod config;
+pub mod virtual_keyboard;
 pub use kaudio;
 #[cfg(feature = "whisper")]
 pub mod whisper;
@@ -59,6 +60,7 @@ pub mod whisper {
             _model_override: Option<&str>,
             _quantization_override: Option<&str>,
             _device: Device,
+            _forced_lang: Option<&str>,
         ) -> Result<Self> {
             Err(anyhow::anyhow!("whisper feature not enabled"))
         }
@@ -495,6 +497,7 @@ impl Model {
                     options.whisper_model.as_deref(),
                     options.whisper_quantization.as_deref(),
                     device.clone(),
+                    options.whisper_force_lang.as_deref(),
                 )
                 .await
                 {
