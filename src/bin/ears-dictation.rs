@@ -302,6 +302,8 @@ async fn main() -> Result<()> {
                                 }
                             }
                             WriterCommand::Stop => {
+                                // Send close frame to properly terminate the WebSocket
+                                let _ = write.send(Message::Close(None)).await;
                                 break;
                             }
                         }

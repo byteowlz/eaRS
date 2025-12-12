@@ -31,31 +31,48 @@ sudo pacman -S sentencepiece
 
 #### Additional Setup for Dictation on Wayland/Linux
 
-eaRS dictation uses the Linux `uinput` interface for reliable keyboard input on both Wayland and X11. One-time setup is required:
+eaRS dictation uses the Linux `uinput` interface for reliable keyboard input on both Wayland and X11.
 
-**1. Load the uinput kernel module:**
+**Quick Setup (Recommended):**
 ```bash
+# Run the automated setup script
+./scripts/setup-dictation-linux.sh
+```
+
+The script will:
+- Load the uinput kernel module
+- Configure uinput to load on boot
+- Create udev rule for proper `/dev/uinput` permissions
+- Add your user to the input group
+- Verify permissions
+
+**Manual Setup:**
+
+If you prefer to set up manually:
+
+```bash
+# 1. Load the uinput kernel module
 sudo modprobe uinput
-```
 
-**2. Make it permanent (load on boot):**
-```bash
+# 2. Make it permanent (load on boot)
 echo "uinput" | sudo tee /etc/modules-load.d/uinput.conf
-```
 
-**3. Add your user to the `input` group:**
-```bash
+# 3. Create udev rule for proper permissions
+echo 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"' | sudo tee /etc/udev/rules.d/99-uinput.conf
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+
+# 4. Reload uinput module to apply new permissions
+sudo rmmod uinput
+sudo modprobe uinput
+
+# 5. Add your user to the input group
 sudo usermod -a -G input $USER
-```
 
-**4. Log out and log back in** (or reboot) for group changes to take effect.
+# 6. Log out and log back in (or reboot)
 
-**5. Verify your setup:**
-```bash
-# Check you're in the input group
+# 7. Verify your setup
 groups | grep input
-
-# Check /dev/uinput is accessible
 ls -l /dev/uinput
 ```
 
@@ -65,9 +82,10 @@ crw-rw---- 1 root input 10, 223 Dec 12 10:00 /dev/uinput
 ```
 
 **Troubleshooting dictation:**
-- **Error: "Failed to open /dev/uinput"** – Ensure uinput module is loaded: `lsmod | grep uinput`
-- **Still not working?** – Check you're in input group: `groups | grep input`
-- **Verify you've logged out/in after adding to group**
+- **Error: "Failed to open /dev/uinput"** – Check: `ls -l /dev/uinput` (should show `crw-rw---- 1 root input`)
+- **Wrong permissions?** – Create udev rule (see manual setup step 3 above)
+- **Still not working?** – Verify: `lsmod | grep uinput` and `groups | grep input`
+- **After adding to group** – You MUST log out and back in for group changes to take effect
 
 ### macOS and Windows
 
