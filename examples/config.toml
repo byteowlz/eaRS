@@ -1,4 +1,5 @@
 # eaRS Configuration File
+"$schema" = "https://raw.githubusercontent.com/byteowlz/schemas/refs/heads/main/eaRS/eaRS.config.schema.json"
 
 [storage]
 # Model storage directory - "default" uses HuggingFace cache
@@ -103,5 +104,5 @@ width = 90
 heigth = 10
 # border radius in px
 border_radius = 5
-# border-thickness in px, 0 for no border
-border-thickness = 1
+# border_thickness in px, 0 for no border
+border_thickness = 1

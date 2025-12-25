@@ -4,15 +4,39 @@ set positional-arguments
 help:
     just -l
 
-# format code
+# === Build ===
+
+# Debug build
+build:
+    cargo build
+
+# Release build
+build-release:
+    cargo build --release
+
+# Check compilation without building
+check:
+    cargo check --all-features
+
+# === Code Quality ===
+
+# Format code
 fmt:
     cargo fmt -- --config imports_granularity=Item
 
+# Auto-fix lint warnings
 fix *args:
     cargo clippy --fix --all-features --tests --allow-dirty "$@"
 
+# Run linter
 clippy:
     cargo clippy --all-features --tests "$@"
+
+# Alias for clippy
+lint:
+    just clippy
+
+# === Installation ===
 
 install:
     #!/usr/bin/env bash
@@ -544,3 +568,17 @@ install-ears-parakeet:
     fi
     
     cargo install --path . --force --features parakeet
+
+# === Maintenance ===
+
+# Clean build artifacts
+clean:
+    cargo clean
+
+# Update dependencies
+update:
+    cargo update
+
+# Generate documentation
+docs:
+    cargo doc --no-deps --open

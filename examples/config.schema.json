@@ -1,0 +1,310 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/byteowlz/schemas/refs/heads/main/eaRS/eaRS.config.schema.json",
+  "title": "eaRS Configuration",
+  "description": "Configuration schema for eaRS (Enhanced Audio Recognition System)",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema reference for editor support"
+    },
+    "storage": {
+      "type": "object",
+      "description": "Storage configuration for models and reference audio",
+      "properties": {
+        "model_dir": {
+          "type": "string",
+          "default": "default",
+          "description": "Model storage directory. Use 'default' for HuggingFace cache, or specify a custom path"
+        },
+        "ref_audio": {
+          "type": "string",
+          "default": "~/.local/share/ears/ref_audio",
+          "description": "Reference audio directory for language priming"
+        }
+      },
+      "required": ["model_dir", "ref_audio"],
+      "additionalProperties": false
+    },
+    "model": {
+      "type": "object",
+      "description": "Model configuration",
+      "properties": {
+        "prime_languages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Languages to prime on model startup (e.g., ['de', 'ja']). Improves transcription accuracy for these languages from the first words"
+        }
+      },
+      "additionalProperties": false
+    },
+    "whisper": {
+      "type": "object",
+      "description": "Whisper enhancement configuration for higher accuracy transcription",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable Whisper enhancement for higher accuracy transcription"
+        },
+        "default_model": {
+          "type": "string",
+          "default": "large-v3-turbo",
+          "description": "Default Whisper model to use",
+          "enum": ["tiny", "base", "small", "medium", "large", "large-v2", "large-v3", "large-v3-turbo"]
+        },
+        "model_format": {
+          "type": "string",
+          "default": "gguf",
+          "description": "Model format",
+          "enum": ["gguf", "safetensors"]
+        },
+        "quantization": {
+          "type": "string",
+          "default": "Q5_0",
+          "description": "Quantization level for ggerganov/whisper.cpp models",
+          "enum": ["Q5_0", "Q8_0", "f32"]
+        },
+        "languages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": ["ger", "jap"],
+          "description": "Languages to enhance (only these will be processed by Whisper)"
+        },
+        "confidence_threshold": {
+          "type": "number",
+          "default": 0.7,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Confidence threshold for accepting Whisper corrections"
+        },
+        "storage_dir": {
+          "type": "string",
+          "default": "default",
+          "description": "Storage directory for Whisper models. Use 'default' for HuggingFace cache"
+        },
+        "sentence_detection": {
+          "type": "object",
+          "description": "Sentence detection configuration",
+          "properties": {
+            "min_duration": {
+              "type": "number",
+              "default": 1.0,
+              "minimum": 0.0,
+              "description": "Minimum sentence duration in seconds"
+            },
+            "max_duration": {
+              "type": "number",
+              "default": 30.0,
+              "minimum": 0.0,
+              "description": "Maximum sentence duration in seconds"
+            },
+            "vad_pause_threshold": {
+              "type": "number",
+              "default": 0.8,
+              "minimum": 0.0,
+              "maximum": 1.0,
+              "description": "VAD confidence threshold for detecting pauses"
+            },
+            "silence_duration": {
+              "type": "number",
+              "default": 0.5,
+              "minimum": 0.0,
+              "description": "Minimum silence duration to consider sentence boundary (in seconds)"
+            },
+            "punctuation_markers": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": [".", "!", "?", "\u3002", "\uff01", "\uff1f"],
+              "description": "Punctuation markers that indicate sentence endings"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "server": {
+      "type": "object",
+      "description": "WebSocket server configuration",
+      "properties": {
+        "host": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "WebSocket server host address"
+        },
+        "websocket_port": {
+          "type": "integer",
+          "default": 8765,
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "WebSocket server port for streaming transcription"
+        },
+        "enable_listener_mode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable listener mode to allow read-only clients to monitor transcription streams"
+        },
+        "listener_tokens": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Authentication tokens for listener clients. Generate with: openssl rand -hex 32"
+        }
+      },
+      "additionalProperties": false
+    },
+    "dictation": {
+      "type": "object",
+      "description": "Dictation mode configuration",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable dictation mode (types transcribed text directly into any focused textbox)"
+        },
+        "type_live_words": {
+          "type": "boolean",
+          "default": true,
+          "description": "Type words immediately as they arrive (true) or only when final transcription is ready (false)"
+        },
+        "notifications": {
+          "type": "object",
+          "description": "Desktop notification settings for dictation",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "Show desktop notification when dictation is toggled on/off"
+            },
+            "start_message": {
+              "type": "string",
+              "default": "Dictation enabled",
+              "description": "Message shown when dictation resumes typing input"
+            },
+            "pause_message": {
+              "type": "string",
+              "default": "Dictation paused",
+              "description": "Message shown when dictation pauses typing input"
+            },
+            "stop_message": {
+              "type": "string",
+              "default": "Dictation disabled",
+              "description": "Message shown when dictation stops completely"
+            }
+          },
+          "additionalProperties": false
+        },
+        "hooks": {
+          "type": "object",
+          "description": "Dictation hooks (requires compiling with --features hooks)",
+          "properties": {
+            "start_command": {
+              "type": "string",
+              "default": "",
+              "description": "Command executed when dictation resumes typing input (leave blank to disable)"
+            },
+            "pause_command": {
+              "type": "string",
+              "default": "",
+              "description": "Command executed when dictation pauses typing input (leave blank to disable)"
+            },
+            "stop_command": {
+              "type": "string",
+              "default": "",
+              "description": "Command executed when dictation stops completely (leave blank to disable)"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "hotkeys": {
+      "type": "object",
+      "description": "Global hotkey configuration for dictation control",
+      "properties": {
+        "enable_internal": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable internal global hotkeys for dictation control (disable if using WM binds like Hyprland)"
+        },
+        "toggle": {
+          "type": "string",
+          "default": "ctrl+shift+v",
+          "description": "Toggle dictation pause/resume"
+        },
+        "language_cycle": {
+          "type": "string",
+          "default": "ctrl+shift+l",
+          "description": "Cycle language among en, de, fr, es, ja"
+        }
+      },
+      "additionalProperties": false
+    },
+    "subs": {
+      "type": "object",
+      "description": "Subtitle bar configuration",
+      "properties": {
+        "font": {
+          "type": "string",
+          "default": "JetBrainsMono NerdFont",
+          "description": "Font family for subtitles"
+        },
+        "x_position": {
+          "type": "integer",
+          "default": 50,
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Horizontal position of the subtitle bar in percent relative to screen width"
+        },
+        "y_position": {
+          "type": "integer",
+          "default": 90,
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Vertical position of the subtitle bar in percent relative to screen height"
+        },
+        "width": {
+          "type": "integer",
+          "default": 90,
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Width of the subtitle bar in percentage relative to screen width"
+        },
+        "heigth": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Height of the subtitle bar in percentage relative to screen height"
+        },
+        "border_radius": {
+          "type": "integer",
+          "default": 5,
+          "minimum": 0,
+          "description": "Border radius in pixels"
+        },
+        "border_thickness": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 0,
+          "description": "Border thickness in pixels (0 for no border)"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["storage"],
+  "additionalProperties": false
+}

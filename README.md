@@ -7,6 +7,78 @@
 - **Server management**: `ears server start|stop` launches and controls the inference backend.
 - **Client capture**: Running `ears` without subcommands streams microphone audio to the server and prints live transcripts.
 
+## Installation
+
+### Using just (Recommended)
+
+eaRS uses [just](https://github.com/casey/just) as a command runner. Install it first:
+
+```bash
+# macOS
+brew install just
+
+# Arch Linux
+sudo pacman -S just
+
+# Ubuntu/Debian
+sudo apt install just
+
+# Or via cargo
+cargo install just
+```
+
+Then install eaRS with automatic hardware detection:
+
+```bash
+
+# Install with all features and auto-detected acceleration
+just install-all
+
+# Interactive installation - detects your hardware and offers feature selection
+just install-ears
+
+# Or use presets for specific configurations:
+just install-ears-metal         # macOS with Metal acceleration (Apple Silicon)
+just install-ears-cuda          # Linux/Windows with NVIDIA GPU (CUDA)
+just install-ears-cuda-parakeet # NVIDIA GPU with Parakeet engine
+just install-ears-parakeet      # Parakeet engine (CPU)
+just install-ears-default       # CPU only, no acceleration
+
+# Install with custom feature combinations
+just install-ears-features "nvidia,parakeet,whisper,hooks"
+```
+
+The `just install-ears` command will:
+
+1. Check and install system dependencies (sentencepiece on Linux)
+2. Detect your hardware (GPU type, Wayland session, etc.)
+3. Set appropriate environment variables (CUDA paths, Wayland compat, etc.)
+4. Let you choose which features to enable
+5. Build and install the binaries
+
+**Available features:**
+
+| Feature    | Description                                            |
+| ---------- | ------------------------------------------------------ |
+| `nvidia`   | CUDA acceleration for NVIDIA GPUs                      |
+| `apple`    | Metal/CoreML acceleration for Apple Silicon            |
+| `amd`      | ROCm acceleration for AMD GPUs                         |
+| `directml` | DirectML acceleration for Windows                      |
+| `parakeet` | Enable Parakeet ONNX engine                            |
+| `whisper`  | Enable Whisper post-processing                         |
+| `hooks`    | Enable shell command hooks for dictation state changes |
+
+### Manual Installation
+
+If you prefer not to use just:
+
+```bash
+cargo install --path .                        # CPU only
+cargo install --path . --features apple       # Apple Silicon
+cargo install --path . --features nvidia      # NVIDIA GPU
+cargo install --path . --features parakeet    # With Parakeet engine
+```
+
 ## System Dependencies
 
 ### Linux
@@ -14,129 +86,167 @@
 On Linux, eaRS uses the system `sentencepiece` library to avoid protobuf conflicts with ONNX Runtime.
 
 **Ubuntu/Debian:**
+
 ```bash
 sudo apt-get update
 sudo apt-get install -y libsentencepiece-dev sentencepiece
 ```
 
 **Fedora/RHEL:**
+
 ```bash
 sudo dnf install -y sentencepiece-devel
 ```
 
 **Arch Linux:**
+
 ```bash
 sudo pacman -S sentencepiece
 ```
 
-#### Additional Setup for Dictation on Wayland/Linux
-
-eaRS dictation uses the Linux `uinput` interface for reliable keyboard input on both Wayland and X11.
-
-**Quick Setup (Recommended):**
-```bash
-# Run the automated setup script
-./scripts/setup-dictation-linux.sh
-```
-
-The script will:
-- Load the uinput kernel module
-- Configure uinput to load on boot
-- Create udev rule for proper `/dev/uinput` permissions
-- Add your user to the input group
-- Verify permissions
-
-**Manual Setup:**
-
-If you prefer to set up manually:
-
-```bash
-# 1. Load the uinput kernel module
-sudo modprobe uinput
-
-# 2. Make it permanent (load on boot)
-echo "uinput" | sudo tee /etc/modules-load.d/uinput.conf
-
-# 3. Create udev rule for proper permissions
-echo 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"' | sudo tee /etc/udev/rules.d/99-uinput.conf
-sudo udevadm control --reload-rules
-sudo udevadm trigger
-
-# 4. Reload uinput module to apply new permissions
-sudo rmmod uinput
-sudo modprobe uinput
-
-# 5. Add your user to the input group
-sudo usermod -a -G input $USER
-
-# 6. Log out and log back in (or reboot)
-
-# 7. Verify your setup
-groups | grep input
-ls -l /dev/uinput
-```
-
-You should see something like:
-```
-crw-rw---- 1 root input 10, 223 Dec 12 10:00 /dev/uinput
-```
-
-**Troubleshooting dictation:**
-- **Error: "Failed to open /dev/uinput"** – Check: `ls -l /dev/uinput` (should show `crw-rw---- 1 root input`)
-- **Wrong permissions?** – Create udev rule (see manual setup step 3 above)
-- **Still not working?** – Verify: `lsmod | grep uinput` and `groups | grep input`
-- **After adding to group** – You MUST log out and back in for group changes to take effect
+> **Note:** The `just install-*` commands automatically check for and install sentencepiece.
 
 ### macOS and Windows
 
 On macOS and Windows, `sentencepiece` is compiled from source and statically linked during the build process. No manual installation required.
 
-### Automated Installation (Recommended)
+## Wayland/Linux Keyboard Emulation
 
-Use the provided `just` recipes which automatically check and install dependencies:
+eaRS dictation uses the Linux **uinput** kernel interface for reliable keyboard input. This approach works on both Wayland and X11, unlike X11-only tools like `xdotool`.
+
+### Why uinput?
+
+Wayland's security model prevents applications from injecting keystrokes into other windows using traditional X11 methods. eaRS solves this by creating a virtual keyboard device at the kernel level via `/dev/uinput`, which:
+
+- Works on **all** Wayland compositors (Sway, Hyprland, KWin, GNOME, etc.)
+- Works on X11 as well (unified codebase)
+- Is compositor-agnostic (no protocol negotiation needed)
+- Provides reliable, low-latency input
+
+### Quick Setup
+
+Run the automated setup script:
 
 ```bash
-# Interactive installation with feature selection
-just install-ears
-
-# Or use specific presets:
-just install-ears-metal      # macOS with Metal acceleration
-just install-ears-cuda       # NVIDIA GPU with CUDA
-just install-ears-parakeet   # Enable Parakeet engine
-just install-ears-default    # CPU only
+./scripts/setup-dictation-linux.sh
 ```
+
+The script will:
+
+1. Load the uinput kernel module
+2. Configure uinput to load on boot
+3. Create a udev rule for proper `/dev/uinput` permissions
+4. Add your user to the `input` group
+5. Verify the configuration
+
+**You must log out and log back in after setup for group changes to take effect.**
+
+### Manual Setup
+
+If you prefer to configure manually:
+
+```bash
+# 1. Load the uinput kernel module
+sudo modprobe uinput
+
+# 2. Make it load on boot
+echo "uinput" | sudo tee /etc/modules-load.d/uinput.conf
+
+# 3. Create udev rule for proper permissions
+echo 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"' | \
+    sudo tee /etc/udev/rules.d/99-uinput.conf
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+
+# 4. Reload uinput to apply permissions
+sudo rmmod uinput && sudo modprobe uinput
+
+# 5. Add your user to the input group
+sudo usermod -a -G input $USER
+
+# 6. Log out and log back in (required!)
+
+# 7. Verify setup
+groups | grep input
+ls -l /dev/uinput
+```
+
+Expected output:
+
+```
+crw-rw---- 1 root input 10, 223 Dec 12 10:00 /dev/uinput
+```
+
+### Troubleshooting Dictation
+
+| Issue                         | Solution                                                                       |
+| ----------------------------- | ------------------------------------------------------------------------------ |
+| "Failed to open /dev/uinput"  | Check permissions: `ls -l /dev/uinput` (should show `crw-rw---- 1 root input`) |
+| Wrong group on /dev/uinput    | Create/update udev rule (step 3 above), then reload uinput                     |
+| uinput module not loaded      | Run `sudo modprobe uinput` and verify with `lsmod \| grep uinput`              |
+| Not in input group            | Run `groups \| grep input` - if missing, add yourself and **log out/in**       |
+| Still not working after setup | Reboot to ensure all changes take effect                                       |
+
+### How It Works
+
+```
+[Speech] -> [ears server] -> [WebSocket] -> [ears-dictation]
+                                                   |
+                                                   v
+                                          [uinput device]
+                                                   |
+                                                   v
+                                          [/dev/uinput]
+                                                   |
+                                                   v
+                                          [Linux kernel]
+                                                   |
+                                                   v
+                                        [Focused application]
+```
+
+The `src/virtual_keyboard.rs` module provides a cross-platform abstraction:
+
+- **Linux**: Uses uinput directly (works on Wayland and X11)
+- **macOS/Windows**: Falls back to enigo library
 
 ## Build
 
+For development builds:
+
 ```bash
-cargo build --release
-
-cargo build --release --features apple # For Apple silicon
-
-cargo build --release --features nvidia # For NVIDIA GPU
-
-cargo build --release --features parakeet             # Enable Parakeet (ONNX) engine (CPU)
-cargo build --release --features "parakeet nvidia"    # Parakeet + CUDA (Kyutai uses CUDA too)
-cargo build --release --features "parakeet apple"     # Parakeet + CoreML, Kyutai + Metal (Apple Silicon)
-cargo build --release --features "parakeet amd"       # Parakeet + ROCm (Kyutai stays CPU)
-cargo build --release --features "parakeet directml"  # Parakeet + DirectML (Kyutai stays CPU)
+cargo build --release                                 # CPU only
+cargo build --release --features apple                # Apple Silicon (Metal)
+cargo build --release --features nvidia               # NVIDIA GPU (CUDA)
+cargo build --release --features parakeet             # Parakeet ONNX engine
+cargo build --release --features "parakeet nvidia"    # Parakeet + CUDA
+cargo build --release --features "parakeet apple"     # Parakeet + CoreML/Metal
+cargo build --release --features "parakeet amd"       # Parakeet + ROCm
+cargo build --release --features "parakeet directml"  # Parakeet + DirectML
 ```
 
 All binaries are emitted into `./target/release/`.
 
-## Installation
+## Just Commands Reference
 
-The recommended way to install is using the `just` recipes (see System Dependencies above).
-
-For manual installation:
-
-```bash
-cargo install --path .
-
-cargo install --path . --features apple # For Apple silicon
-
-cargo install --path . --features nvidia # For NVIDIA GPU
-```
+| Command                              | Description                                            |
+| ------------------------------------ | ------------------------------------------------------ |
+| `just`                               | Show all available commands                            |
+| `just install`                       | Prepare environment (detect hardware, fetch deps)      |
+| `just install-ears`                  | Interactive installation with feature selection        |
+| `just install-all`                   | Install with all features + auto-detected acceleration |
+| `just install-ears-features "f1,f2"` | Install with specific features                         |
+| `just check-deps`                    | Check/install system dependencies only                 |
+| `just build`                         | Debug build                                            |
+| `just build-release`                 | Release build                                          |
+| `just check`                         | Fast compile check (no build)                          |
+| `just test`                          | Run tests (uses cargo-nextest)                         |
+| `just fmt`                           | Format code                                            |
+| `just clippy` / `just lint`          | Run linter                                             |
+| `just fix`                           | Auto-fix lint warnings                                 |
+| `just clean`                         | Clean build artifacts                                  |
+| `just update`                        | Update dependencies                                    |
+| `just docs`                          | Generate and open documentation                        |
 
 ## Quick start
 
