@@ -473,14 +473,27 @@ impl Model {
         let vb_lm = unsafe {
             candle_nn::VarBuilder::from_mmaped_safetensors(&[&model_file], dtype, &device)?
         };
-        let audio_tokenizer = moshi::mimi::load(mimi_file.to_str().unwrap(), Some(32), &device)?;
-        let lm = moshi::lm::LmModel::new(
-            &config.model_config(options.vad),
-            moshi::nn::MaybeQuantizedVarBuilder::Real(vb_lm),
-        )?;
+        let batch_size = batch_size.max(1);
+        let audio_tokenizer = if batch_size > 1 {
+            moshi::mimi::load_b(Some(batch_size), mimi_file.to_str().unwrap(), Some(32), &device)?
+        } else {
+            moshi::mimi::load(mimi_file.to_str().unwrap(), Some(32), &device)?
+        };
+        let lm = if batch_size > 1 {
+            moshi::lm::LmModel::batched(
+                batch_size,
+                &config.model_config(options.vad),
+                moshi::nn::MaybeQuantizedVarBuilder::Real(vb_lm),
+            )?
+        } else {
+            moshi::lm::LmModel::new(
+                &config.model_config(options.vad),
+                moshi::nn::MaybeQuantizedVarBuilder::Real(vb_lm),
+            )?
+        };
         let asr_delay_in_tokens = (config.stt_config.audio_delay_seconds * 12.5) as usize;
         let state = moshi::asr::State::new(
-            batch_size.max(1),
+            batch_size,
             asr_delay_in_tokens,
             0.,
             audio_tokenizer,

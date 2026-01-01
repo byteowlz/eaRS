@@ -477,3 +477,50 @@ fn allocate_session(
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_sink() -> SessionSink {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        SessionSink::new(tx)
+    }
+
+    #[test]
+    fn allocate_session_respects_capacity() {
+        let mut sessions = vec![None, None];
+        let allocation = allocate_session(&mut sessions, make_sink(), false, false, None, 1920);
+        assert!(allocation.is_some());
+        let allocation = allocate_session(&mut sessions, make_sink(), false, false, None, 1920);
+        assert!(allocation.is_some());
+        let allocation = allocate_session(&mut sessions, make_sink(), false, false, None, 1920);
+        assert!(allocation.is_none());
+    }
+
+    #[test]
+    fn session_flush_pads_to_frame() {
+        let (audio_tx, audio_rx) = unbounded();
+        let (_lang_tx, lang_rx) = unbounded();
+        let (_ctrl_tx, control_rx) = unbounded();
+        let mut state = SessionState::new(
+            1,
+            make_sink(),
+            audio_rx,
+            lang_rx,
+            control_rx,
+            false,
+            false,
+            None,
+            FRAME_SIZE / 2,
+        );
+        let _ = audio_tx;
+        state.closed = true;
+        state.prepare_flush();
+        assert!(state.sample_buffer.len() < FRAME_SIZE);
+        state.prepare_flush();
+        assert_eq!(state.sample_buffer.len(), FRAME_SIZE);
+        let frame = state.take_frame();
+        assert_eq!(frame.map(|f| f.len()), Some(FRAME_SIZE));
+    }
+}
