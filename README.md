@@ -2,10 +2,11 @@
 
 # eaRS
 
-`eaRS` is a Rust-based streaming speech-to-text stack built on Kyutai's models. The tool is now delivered as a single CLI with two responsibilities:
+`eaRS` is a Rust-based streaming speech-to-text stack built on Kyutai's models. The tool is now delivered as a single CLI with three responsibilities:
 
 - **Server management**: `ears server start|stop` launches and controls the inference backend.
 - **Client capture**: Running `ears` without subcommands streams microphone audio to the server and prints live transcripts.
+- **Dictation**: `ears dictation start|stop` enables system-wide dictation with hotkey control.
 
 ## Installation
 
@@ -256,9 +257,14 @@ All binaries are emitted into `./target/release/`.
 
 # 2. Stream your microphone to the server and print live text
 ./target/release/ears
+
+# 3. (Optional) Enable system-wide dictation
+./target/release/ears dictation start
 ```
 
 Press `Ctrl+C` in the client to stop streaming. When you are done with the backend:
+
+If the local server is not running, `ears` will start it automatically before connecting.
 
 ```bash
 ./target/release/ears server stop

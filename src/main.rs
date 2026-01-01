@@ -24,7 +24,12 @@ use ears::server::ParakeetDevice;
 use libc::{SIGTERM, kill};
 
 #[derive(Parser)]
-#[command(author, version, about = "eaRS client and server controller")]
+#[command(
+    author,
+    version,
+    about = "eaRS client and server controller",
+    after_long_help = "Tip: for system-wide dictation, run `ears dictation start` and toggle it with your hotkey."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -208,6 +213,34 @@ struct ServerStartArgs {
     parakeet_noise_gate_rms: f32,
 }
 
+impl Default for ServerStartArgs {
+    fn default() -> Self {
+        Self {
+            bind: None,
+            engine: EngineArg::Kyutai,
+            hf_repo: "kyutai/stt-1b-en_fr-candle".to_string(),
+            cpu: false,
+            timestamps: false,
+            vad: false,
+            max_sessions: 8,
+            #[cfg(feature = "whisper")]
+            whisper: false,
+            #[cfg(feature = "parakeet")]
+            parakeet_repo: "istupakov/parakeet-tdt-0.6b-v3-onnx".to_string(),
+            #[cfg(feature = "parakeet")]
+            parakeet_model_dir: None,
+            #[cfg(feature = "parakeet")]
+            parakeet_device: None,
+            #[cfg(feature = "parakeet")]
+            parakeet_chunk_seconds: 3.0,
+            #[cfg(feature = "parakeet")]
+            parakeet_overlap_seconds: 1.0,
+            #[cfg(feature = "parakeet")]
+            parakeet_noise_gate_rms: 0.0015,
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -263,45 +296,19 @@ fn run_dictation_foreground() -> Result<()> {
 }
 
 fn start_server(args: ServerStartArgs) -> Result<()> {
-    if let Some(pid) = server::read_pid_file()? {
-        if server::is_process_alive(pid) {
-            return Err(anyhow!("ears server already running (pid {})", pid));
-        }
-        server::remove_pid_file()?;
-    }
-
-    let mut cmd = ProcessCommand::new(std::env::current_exe()?);
-    cmd.arg("server").arg("run");
-    append_server_args(&mut cmd, &args);
-    cmd.stdin(Stdio::null());
-    cmd.stdout(Stdio::null());
-    cmd.stderr(Stdio::null());
-
-    let child = cmd.spawn().context("failed to spawn ears server process")?;
-    let pid = child.id();
+    let pid = spawn_server_process(&args)?;
 
     print!("ears server starting (pid {})...", pid);
     io::stdout().flush().ok();
 
     let config = AppConfig::load()?;
-
-    for i in 0..30 {
-        thread::sleep(Duration::from_millis(500));
-        if let Ok(stream) =
-            std::net::TcpStream::connect(("127.0.0.1", config.server.websocket_port))
-        {
-            drop(stream);
-            println!("\rears server started (pid {}) and ready", pid);
-            return Ok(());
-        }
-        if i % 2 == 1 {
-            print!(".");
-            io::stdout().flush().ok();
-        }
-    }
-
-    println!("\rears server started (pid {}) but not yet ready", pid);
-    println!("server may still be loading the model - try connecting in a few seconds");
+    let ready = wait_for_server_ready(
+        config.server.websocket_port,
+        30,
+        Duration::from_millis(500),
+        true,
+    );
+    report_server_ready(pid, ready);
     Ok(())
 }
 
@@ -313,10 +320,7 @@ fn check_server_status() -> Result<()> {
             if server::is_process_alive(pid) {
                 println!("ears server is running (pid {})", pid);
 
-                if let Ok(stream) =
-                    std::net::TcpStream::connect(("127.0.0.1", config.server.websocket_port))
-                {
-                    drop(stream);
+                if is_server_port_open(config.server.websocket_port) {
                     println!(
                         "server is accepting connections on port {}",
                         config.server.websocket_port
@@ -523,18 +527,37 @@ async fn run_client(args: ClientArgs) -> Result<()> {
         .clone()
         .unwrap_or_else(|| format!("ws://127.0.0.1:{}/", config.server.websocket_port));
 
+    let should_autostart = args.server.is_none();
+    let (ws_stream, _) = match connect_async(&server_url).await {
+        Ok(result) => result,
+        Err(err) => {
+            let connect_err =
+                anyhow!(err).context(format!("failed to connect to {}", server_url));
+            if should_autostart {
+                eprintln!(
+                    "No local server detected at {}. Starting one now...",
+                    server_url
+                );
+                let info = ensure_server_running(&config)?;
+                if !info.ready {
+                    eprintln!("Server is still loading, trying to connect anyway...");
+                }
+                connect_async(&server_url)
+                    .await
+                    .map_err(|err| anyhow!(err))
+                    .with_context(|| format!("failed to connect to {}", server_url))?
+            } else {
+                return Err(connect_err);
+            }
+        }
+    };
+
+    if atty::is(atty::Stream::Stdout) {
+        eprintln!("Tip: for system-wide dictation, run `ears dictation start`.");
+    }
+
     let (audio_tx, audio_rx) = unbounded();
     let device_index = args.device;
-
-    thread::spawn(move || {
-        if let Err(err) = audio::start_audio_capture(audio_tx, device_index) {
-            eprintln!("Audio capture error: {err}");
-        }
-    });
-
-    let (ws_stream, _) = connect_async(&server_url)
-        .await
-        .with_context(|| format!("failed to connect to {}", server_url))?;
     if args.verbose {
         eprintln!("Connected to server at {}", server_url);
     }
@@ -585,6 +608,12 @@ async fn run_client(args: ClientArgs) -> Result<()> {
             {
                 break;
             }
+        }
+    });
+
+    thread::spawn(move || {
+        if let Err(err) = audio::start_audio_capture(audio_tx, device_index) {
+            eprintln!("Audio capture error: {err}");
         }
     });
 
@@ -891,6 +920,100 @@ fn encode_chunk(chunk: &[f32]) -> Vec<u8> {
     bytes
 }
 
+struct ServerStartInfo {
+    pid: u32,
+    started: bool,
+    ready: bool,
+}
+
+fn spawn_server_process(args: &ServerStartArgs) -> Result<u32> {
+    if let Some(pid) = server::read_pid_file()? {
+        if server::is_process_alive(pid) {
+            return Err(anyhow!("ears server already running (pid {})", pid));
+        }
+        server::remove_pid_file()?;
+    }
+
+    let mut cmd = ProcessCommand::new(std::env::current_exe()?);
+    cmd.arg("server").arg("run");
+    append_server_args(&mut cmd, args);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::null());
+
+    let child = cmd.spawn().context("failed to spawn ears server process")?;
+    Ok(child.id())
+}
+
+fn ensure_server_running(config: &AppConfig) -> Result<ServerStartInfo> {
+    if let Some(pid) = server::read_pid_file()? {
+        if server::is_process_alive(pid) {
+            let ready = wait_for_server_ready(
+                config.server.websocket_port,
+                30,
+                Duration::from_millis(500),
+                false,
+            );
+            return Ok(ServerStartInfo {
+                pid: pid as u32,
+                started: false,
+                ready,
+            });
+        }
+        server::remove_pid_file()?;
+    }
+
+    let pid = spawn_server_process(&ServerStartArgs::default())?;
+    print!("ears server starting (pid {})...", pid);
+    io::stdout().flush().ok();
+
+    let ready = wait_for_server_ready(
+        config.server.websocket_port,
+        30,
+        Duration::from_millis(500),
+        true,
+    );
+    report_server_ready(pid, ready);
+
+    Ok(ServerStartInfo {
+        pid,
+        started: true,
+        ready,
+    })
+}
+
+fn report_server_ready(pid: u32, ready: bool) {
+    if ready {
+        println!("\rears server started (pid {}) and ready", pid);
+    } else {
+        println!("\rears server started (pid {}) but not yet ready", pid);
+        println!("server may still be loading the model - try connecting in a few seconds");
+    }
+}
+
+fn is_server_port_open(port: u16) -> bool {
+    std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
+}
+
+fn wait_for_server_ready(
+    port: u16,
+    max_attempts: usize,
+    poll_interval: Duration,
+    show_progress: bool,
+) -> bool {
+    for attempt in 0..max_attempts {
+        if is_server_port_open(port) {
+            return true;
+        }
+        if show_progress && attempt % 2 == 1 {
+            print!(".");
+            io::stdout().flush().ok();
+        }
+        thread::sleep(poll_interval);
+    }
+    false
+}
+
 fn get_dictation_pid_file() -> std::path::PathBuf {
     let state_dir = if let Ok(xdg_state) = std::env::var("XDG_STATE_HOME") {
         if !xdg_state.is_empty() {
@@ -904,6 +1027,42 @@ fn get_dictation_pid_file() -> std::path::PathBuf {
         std::path::PathBuf::from(home).join(".local/state")
     };
     state_dir.join("ears").join("dictation.pid")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    #[test]
+    fn wait_for_server_ready_detects_listener() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test listener");
+        let port = listener.local_addr().expect("local addr").port();
+        assert!(wait_for_server_ready(port, 10, Duration::from_millis(10), false));
+    }
+
+    #[test]
+    fn wait_for_server_ready_times_out() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test listener");
+        let port = listener.local_addr().expect("local addr").port();
+        drop(listener);
+        assert!(!wait_for_server_ready(port, 5, Duration::from_millis(10), false));
+    }
+
+    #[test]
+    fn server_start_args_defaults_match_expected() {
+        let args = ServerStartArgs::default();
+        match args.engine {
+            EngineArg::Kyutai => {}
+            #[cfg(feature = "parakeet")]
+            EngineArg::Parakeet => panic!("unexpected default engine"),
+        }
+        assert_eq!(args.hf_repo, "kyutai/stt-1b-en_fr-candle");
+        assert_eq!(args.max_sessions, 8);
+        assert!(!args.cpu);
+        assert!(!args.timestamps);
+        assert!(!args.vad);
+    }
 }
 
 fn read_dictation_pid() -> Result<Option<i32>> {
