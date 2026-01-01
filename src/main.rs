@@ -8,7 +8,6 @@ use futures::{SinkExt, StreamExt};
 use serde_json::json;
 use std::{
     io::{self, Write},
-    path::PathBuf,
     process::{Command as ProcessCommand, Stdio},
     thread,
     time::Duration,
@@ -19,6 +18,8 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use ears::server::EngineKind;
 #[cfg(feature = "parakeet")]
 use ears::server::ParakeetDevice;
+#[cfg(feature = "parakeet")]
+use std::path::PathBuf;
 
 #[cfg(unix)]
 use libc::{SIGTERM, kill};
@@ -538,8 +539,8 @@ async fn run_client(args: ClientArgs) -> Result<()> {
                     "No local server detected at {}. Starting one now...",
                     server_url
                 );
-                let info = ensure_server_running(&config)?;
-                if !info.ready {
+                let ready = ensure_server_running(&config)?;
+                if !ready {
                     eprintln!("Server is still loading, trying to connect anyway...");
                 }
                 connect_async(&server_url)
@@ -556,7 +557,7 @@ async fn run_client(args: ClientArgs) -> Result<()> {
         eprintln!("Tip: for system-wide dictation, run `ears dictation start`.");
     }
 
-    let (audio_tx, audio_rx) = unbounded();
+    let (audio_tx, audio_rx) = unbounded::<Vec<f32>>();
     let device_index = args.device;
     if args.verbose {
         eprintln!("Connected to server at {}", server_url);
@@ -920,12 +921,6 @@ fn encode_chunk(chunk: &[f32]) -> Vec<u8> {
     bytes
 }
 
-struct ServerStartInfo {
-    pid: u32,
-    started: bool,
-    ready: bool,
-}
-
 fn spawn_server_process(args: &ServerStartArgs) -> Result<u32> {
     if let Some(pid) = server::read_pid_file()? {
         if server::is_process_alive(pid) {
@@ -945,7 +940,7 @@ fn spawn_server_process(args: &ServerStartArgs) -> Result<u32> {
     Ok(child.id())
 }
 
-fn ensure_server_running(config: &AppConfig) -> Result<ServerStartInfo> {
+fn ensure_server_running(config: &AppConfig) -> Result<bool> {
     if let Some(pid) = server::read_pid_file()? {
         if server::is_process_alive(pid) {
             let ready = wait_for_server_ready(
@@ -954,11 +949,7 @@ fn ensure_server_running(config: &AppConfig) -> Result<ServerStartInfo> {
                 Duration::from_millis(500),
                 false,
             );
-            return Ok(ServerStartInfo {
-                pid: pid as u32,
-                started: false,
-                ready,
-            });
+            return Ok(ready);
         }
         server::remove_pid_file()?;
     }
@@ -975,11 +966,7 @@ fn ensure_server_running(config: &AppConfig) -> Result<ServerStartInfo> {
     );
     report_server_ready(pid, ready);
 
-    Ok(ServerStartInfo {
-        pid,
-        started: true,
-        ready,
-    })
+    Ok(ready)
 }
 
 fn report_server_ready(pid: u32, ready: bool) {
