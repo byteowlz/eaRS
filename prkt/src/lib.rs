@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use ndarray::{s, Array1, Array2, Array3, ArrayViewD};
 use ort::session::{Session, builder::{SessionBuilder, GraphOptimizationLevel}};
 use ort::value::Tensor;
+use indicatif::ProgressBar;
 #[cfg(feature = "cuda")]
 use ort::execution_providers::CUDAExecutionProvider;
 #[cfg(feature = "coreml")]
@@ -58,22 +59,48 @@ pub struct ParakeetModel {
 
 impl ParakeetModel {
     pub fn load_from_hf(repo: &str, model_dir: Option<&Path>, device: Device) -> Result<Self> {
-        let api = if let Some(dir) = model_dir {
-            hf_hub::api::sync::ApiBuilder::new()
-                .with_cache_dir(dir.to_path_buf())
-                .build()?
+        fn fetch_repo_file(
+            repo: &hf_hub::api::sync::ApiRepo,
+            cache_repo: &hf_hub::CacheRepo,
+            filename: &str,
+        ) -> Result<std::path::PathBuf> {
+            if cache_repo.get(filename).is_some() {
+                return Ok(repo.get(filename)?);
+            }
+            eprintln!("Downloading {}...", filename);
+            let pb = ProgressBar::new(0);
+            let path = repo.download_with_progress(filename, pb)?;
+            Ok(path)
+        }
+
+        let (api, cache_repo) = if let Some(dir) = model_dir {
+            let cache = hf_hub::Cache::new(dir.to_path_buf());
+            (
+                hf_hub::api::sync::ApiBuilder::new()
+                    .with_cache_dir(dir.to_path_buf())
+                    .with_progress(true)
+                    .build()?,
+                cache.model(repo.to_string()),
+            )
         } else {
-            hf_hub::api::sync::Api::new()?
+            let cache = hf_hub::Cache::from_env();
+            (
+                hf_hub::api::sync::ApiBuilder::new()
+                    .with_progress(true)
+                    .build()?,
+                cache.model(repo.to_string()),
+            )
         };
 
         let repo = api.model(repo.to_string());
-        
-        eprintln!("Downloading model files...");
-        let preprocessor_path = repo.get("nemo128.onnx")?;
-        let encoder_path = repo.get("encoder-model.onnx")?;
-        let _encoder_data_path = repo.get("encoder-model.onnx.data")?; // External weights
-        let decoder_joint_path = repo.get("decoder_joint-model.onnx")?;
-        let vocab_path = repo.get("vocab.txt")?;
+
+        let preprocessor_path = fetch_repo_file(&repo, &cache_repo, "nemo128.onnx")?;
+        let encoder_path = fetch_repo_file(&repo, &cache_repo, "encoder-model.onnx")?;
+        let _encoder_data_path =
+            fetch_repo_file(&repo, &cache_repo, "encoder-model.onnx.data")?; // External weights
+        let decoder_joint_path =
+            fetch_repo_file(&repo, &cache_repo, "decoder_joint-model.onnx")?;
+        let vocab_path = fetch_repo_file(&repo, &cache_repo, "vocab.txt")?;
 
         eprintln!("Loading ONNX models with device: {:?}", device);
         
