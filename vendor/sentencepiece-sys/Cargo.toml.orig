@@ -1,0 +1,21 @@
+[package]
+name = "sentencepiece-sys"
+version = "0.12.0"
+authors = ["Daniël de Kok <me@danieldk.eu>"]
+edition = "2018"
+description = "Binding for the sentencepiece tokenizer"
+repository = "https://github.com/danieldk/sentencepiece.git"
+license = "Apache-2.0"
+
+exclude = ["source/data", "source/doc", "source/python", "source/tensorflow"]
+
+[dependencies]
+
+[build-dependencies]
+cc = "1"
+cmake = "0.1"
+pkg-config = "0.3"
+
+[features]
+system = []
+static = []

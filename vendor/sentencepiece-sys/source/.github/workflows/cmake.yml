@@ -1,0 +1,84 @@
+name: CI for general build
+
+on:
+  push:
+    branches: [ master ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ master ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, ubuntu-20.04, windows-latest, macOS-11 ]
+        arch: [ x64 ]
+        include:
+          - os: windows-latest
+            arch: x86
+    runs-on: ${{ matrix.os }}
+
+    permissions:
+      contents: write # svenstaro/upload-release-action 
+
+    steps:
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+    - uses: actions/setup-python@65d7f2d534ac1bc67fcd62888c5f4f3d2cb2b236 # v4.7.1
+      with:
+        python-version: '3.x'
+        architecture: ${{matrix.arch}}
+
+    - name: Config for Windows
+      if: runner.os == 'Windows'
+      run: |
+        if ("${{matrix.arch}}" -eq "x64") {
+          $msbuildPlatform = "x64"
+        } else {
+          $msbuildPlatform = "Win32"
+        }
+        cmake -A $msbuildPlatform -B ${{github.workspace}}/build -DSPM_BUILD_TEST=ON -DSPM_ENABLE_SHARED=OFF -DCMAKE_INSTALL_PREFIX=${{github.workspace}}/build/root
+
+    - name: Config for Unix
+      if: runner.os != 'Windows'
+      run: cmake -B ${{github.workspace}}/build -DSPM_BUILD_TEST=ON -DCMAKE_INSTALL_PREFIX=${{github.workspace}}/build/root
+      env:
+        CMAKE_OSX_ARCHITECTURES: arm64;x86_64
+
+    - name: Build
+      run: cmake --build ${{github.workspace}}/build --config Release --target install --parallel 8
+
+    - name: Test
+      working-directory: ${{github.workspace}}/build
+      run: ctest -C Release --output-on-failure
+
+    - name: Package
+      working-directory: ${{github.workspace}}/build
+      run: cpack
+
+    - name: Build Python wrapper
+      working-directory: ${{github.workspace}}/python
+      run: |
+        python -m pip install --require-hashes --no-dependencies -r ../.github/workflows/requirements/base.txt
+        python setup.py test
+        python setup.py bdist_wheel
+
+    - name: Upload artifcacts
+      uses: actions/upload-artifact@a8a3f3ad30e3422c9c7b888a15615d19a852ae32 # v3.1.3
+      with:
+        path: ./build/*.7z
+
+    - name: Upload Release Assets
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: svenstaro/upload-release-action@1beeb572c19a9242f4361f4cee78f8e0d9aec5df # v2.7.0
+      with:
+        repo_token: ${{ secrets.GITHUB_TOKEN }}
+        file: ./build/*.7z
+        tag: ${{ github.ref }}
+        overwrite: true
+        prerelease: true
+        file_glob: true
+        body: "This is my release text"
