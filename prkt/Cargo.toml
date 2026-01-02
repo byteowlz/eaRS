@@ -10,7 +10,7 @@ ort = { version = "2.0.0-rc.10", default-features = false, features = ["ndarray"
 hf-hub = "0.4"
 clap = { version = "4.4", features = ["derive"] }
 rustfft = "6.2"
-indicatif = "0.18"
+indicatif = "0.17.5"
 hound = "3.5"
 rubato = "0.15"
 cpal = "0.16"
