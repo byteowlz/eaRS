@@ -46,7 +46,7 @@ dirs = "6.0"
 tokio = { version = "1.0", features = ["full"] }
 tokio-tungstenite = "0.28"
 futures = "0.3"
-indicatif = "0.18"
+indicatif = "0.17.5"
 uuid = { version = "1.0", features = ["v4"] }
 colored = "3.0"
 libc = "0.2"
@@ -61,10 +61,9 @@ notifica = "3.0.2"
 webrtc-vad = { version = "0.4", optional = true }
 
 # Platform-specific sentencepiece configuration
-# All platforms: compile from source (static linking)
-# Note: "system" feature on Linux has linker issues with sentencepiece-sys
+# Linux: use system library to avoid build failures with static sentencepiece-sys.
 [target.'cfg(target_os = "linux")'.dependencies]
-sentencepiece = { version = "0.12", features = ["static"] }
+sentencepiece = { version = "0.12", features = ["system"] }
 uinput = "0.1"
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
@@ -106,5 +105,3 @@ debug = false
 [profile.dist]
 inherits = "release"
 lto = "thin"
-
-
