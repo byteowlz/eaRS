@@ -1,6 +1,7 @@
 use anyhow::Result;
 use candle::{Device, Tensor};
 use crossbeam_channel::Receiver;
+use indicatif::ProgressBar;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -452,22 +453,47 @@ impl Model {
         model_dir: Option<&std::path::Path>,
         batch_size: usize,
     ) -> Result<Self> {
+        fn fetch_repo_file(
+            repo: &hf_hub::api::sync::ApiRepo,
+            cache_repo: &hf_hub::CacheRepo,
+            filename: &str,
+        ) -> Result<std::path::PathBuf> {
+            if cache_repo.get(filename).is_some() {
+                return Ok(repo.get(filename)?);
+            }
+            eprintln!("Downloading {}...", filename);
+            let pb = ProgressBar::new(0);
+            let path = repo.download_with_progress(filename, pb)?;
+            Ok(path)
+        }
+
         let device = create_device(cpu)?;
         let dtype = device.bf16_default_to_f32();
 
-        let api = if let Some(model_dir) = model_dir {
-            hf_hub::api::sync::ApiBuilder::new()
-                .with_cache_dir(model_dir.to_path_buf())
-                .build()?
+        let (api, cache_repo) = if let Some(model_dir) = model_dir {
+            let cache = hf_hub::Cache::new(model_dir.to_path_buf());
+            (
+                hf_hub::api::sync::ApiBuilder::new()
+                    .with_cache_dir(model_dir.to_path_buf())
+                    .with_progress(true)
+                    .build()?,
+                cache.model(hf_repo.to_string()),
+            )
         } else {
-            hf_hub::api::sync::Api::new()?
+            let cache = hf_hub::Cache::from_env();
+            (
+                hf_hub::api::sync::ApiBuilder::new()
+                    .with_progress(true)
+                    .build()?,
+                cache.model(hf_repo.to_string()),
+            )
         };
         let repo = api.model(hf_repo.to_string());
-        let config_file = repo.get("config.json")?;
+        let config_file = fetch_repo_file(&repo, &cache_repo, "config.json")?;
         let config: Config = serde_json::from_str(&std::fs::read_to_string(&config_file)?)?;
-        let tokenizer_file = repo.get(&config.tokenizer_name)?;
-        let model_file = repo.get("model.safetensors")?;
-        let mimi_file = repo.get(&config.mimi_name)?;
+        let tokenizer_file = fetch_repo_file(&repo, &cache_repo, &config.tokenizer_name)?;
+        let model_file = fetch_repo_file(&repo, &cache_repo, "model.safetensors")?;
+        let mimi_file = fetch_repo_file(&repo, &cache_repo, &config.mimi_name)?;
 
         let text_tokenizer = sentencepiece::SentencePieceProcessor::open(&tokenizer_file)?;
         let vb_lm = unsafe {

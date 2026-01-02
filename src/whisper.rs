@@ -1,6 +1,7 @@
 use anyhow::Result;
 use candle::Device;
 use indicatif::{ProgressBar, ProgressStyle};
+use hf_hub::Cache;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -156,27 +157,28 @@ impl WhisperModel {
             return Ok(model_file_path);
         }
 
-        // Download the model with progress bar
-
-        let api = hf_hub::api::sync::Api::new()?;
+        let api = hf_hub::api::sync::ApiBuilder::new()
+            .with_progress(true)
+            .build()?;
         let repo = api.model(repo_name.clone());
+        let cache = Cache::from_env();
+        let cache_repo = cache.model(repo_name.clone());
 
-        // Create progress bar
-        let pb = ProgressBar::new(0);
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template(
-                    "[{elapsed_precise}] {bar:40.cyan/blue} {bytes:>7}/{total_bytes:7} {msg}",
-                )?
-                .progress_chars("##-"),
-        );
-
-        // Download model
-        pb.set_message(format!("Downloading {}", filename));
-        let downloaded_path = repo.get(&filename)?;
+        let downloaded_path = if cache_repo.get(&filename).is_some() {
+            repo.get(&filename)?
+        } else {
+            let pb = ProgressBar::new(0);
+            pb.set_style(
+                ProgressStyle::default_bar()
+                    .template(
+                        "[{elapsed_precise}] {bar:40.cyan/blue} {bytes:>7}/{total_bytes:7} {msg}",
+                    )?
+                    .progress_chars("##-"),
+            );
+            pb.set_message(format!("Downloading {}", filename));
+            repo.download_with_progress(&filename, pb)?
+        };
         std::fs::copy(&downloaded_path, &model_file_path)?;
-
-        pb.finish_with_message("Download complete");
 
         Ok(model_file_path)
     }
