@@ -54,15 +54,17 @@ enigo = "0.6"
 rdev = "0.5"
 futures-util = "0.3"
 ctrlc = { version = "3.4", features = ["termination"] }
-cudarc = { version = "0.17", optional = true }
+# cudarc auto-detects CUDA version from the build system (nvcc)
+# Users can override by setting CUDARC_CUDA_VERSION environment variable
+cudarc = { version = "0.17", optional = true, features = ["cuda-version-from-build-system"] }
 notifica = "3.0.2"
 webrtc-vad = { version = "0.4", optional = true }
 
 # Platform-specific sentencepiece configuration
-# Linux: use system library (requires sentencepiece package to be built against current protobuf)
-# macOS/Windows: compile from source (static linking)
+# All platforms: compile from source (static linking)
+# Note: "system" feature on Linux has linker issues with sentencepiece-sys
 [target.'cfg(target_os = "linux")'.dependencies]
-sentencepiece = { version = "0.12", features = ["system"] }
+sentencepiece = { version = "0.12", features = ["static"] }
 uinput = "0.1"
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
@@ -105,5 +107,4 @@ debug = false
 inherits = "release"
 lto = "thin"
 
-[patch.crates-io]
-cudarc = { git = "https://github.com/coreylowman/cudarc" }
+
