@@ -1,2 +1,16 @@
-# trx configuration
+storage_version = "v2"
 prefix = "trx"
+default_priority = 2
+default_type = "task"
+auto_sync = false
+sync_message_template = "trx: {action} {id}"
+show_closed = false
+
+[git]
+auto_stage = false
+
+[display]
+colors = true
+date_format = "%Y-%m-%d %H:%M"
+show_count = true
+max_title_length = 80
