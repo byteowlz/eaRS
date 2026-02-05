@@ -56,13 +56,20 @@ enum ServerCommand {
     Run(ServerStartArgs),
 }
 
+#[derive(Args, Clone)]
+struct DictationStartArgs {
+    /// Server alias from config (e.g., 'local', 'workstation') or full WebSocket URL
+    #[arg(short, long)]
+    server: Option<String>,
+}
+
 #[derive(Subcommand)]
 enum DictationCommand {
-    Start,
+    Start(DictationStartArgs),
     Stop,
     Status,
     #[command(about = "Run dictation in foreground with debug output")]
-    Debug,
+    Debug(DictationStartArgs),
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -273,19 +280,26 @@ async fn handle_server_command(command: ServerCommand) -> Result<()> {
 
 fn handle_dictation_command(command: DictationCommand) -> Result<()> {
     match command {
-        DictationCommand::Start => start_dictation(),
+        DictationCommand::Start(args) => start_dictation(args.server.as_deref()),
         DictationCommand::Stop => stop_dictation(),
         DictationCommand::Status => check_dictation_status(),
-        DictationCommand::Debug => run_dictation_foreground(),
+        DictationCommand::Debug(args) => run_dictation_foreground(args.server.as_deref()),
     }
 }
 
-fn run_dictation_foreground() -> Result<()> {
+fn run_dictation_foreground(server: Option<&str>) -> Result<()> {
     let exe = std::env::current_exe()?;
     let exe_dir = exe.parent().context("failed to get exe directory")?;
     let dictation_bin = exe_dir.join("ears-dictation");
 
-    let status = ProcessCommand::new(&dictation_bin)
+    let mut cmd = ProcessCommand::new(&dictation_bin);
+    
+    // Pass server argument if provided
+    if let Some(server) = server {
+        cmd.arg("--server").arg(server);
+    }
+
+    let status = cmd
         .status()
         .context("failed to run ears-dictation")?;
 
@@ -1070,7 +1084,7 @@ fn read_dictation_pid() -> Result<Option<i32>> {
     Ok(contents.trim().parse::<i32>().ok())
 }
 
-fn start_dictation() -> Result<()> {
+fn start_dictation(server: Option<&str>) -> Result<()> {
     if let Some(pid) = read_dictation_pid()? {
         if server::is_process_alive(pid) {
             return Err(anyhow!("ears dictation already running (pid {})", pid));
@@ -1087,12 +1101,20 @@ fn start_dictation() -> Result<()> {
     cmd.stdout(Stdio::null());
     cmd.stderr(Stdio::null());
 
+    // Pass server argument if provided
+    if let Some(server) = server {
+        cmd.arg("--server").arg(server);
+    }
+
     let child = cmd
         .spawn()
         .context("failed to spawn ears-dictation process")?;
     let pid = child.id();
 
     println!("ears dictation started (pid {})", pid);
+    if let Some(server) = server {
+        println!("Connecting to server: {}", server);
+    }
     println!("Use keyboard shortcut to toggle pause/resume (see config)");
 
     Ok(())
