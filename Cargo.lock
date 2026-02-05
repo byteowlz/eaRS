@@ -969,7 +969,7 @@ checksum = "e1d926b4d407d372f141f93bb444696142c29d32962ccbd3531117cf3aa0bfa9"
 
 [[package]]
 name = "eaRS"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "atty",
