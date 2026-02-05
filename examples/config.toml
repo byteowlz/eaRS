@@ -63,6 +63,29 @@ listener_tokens = []
 enabled = false
 # Type words immediately as they arrive (true) or only when final transcription is ready (false)
 type_live_words = true
+# Default server alias to connect to (use with: ears-dictation or ears-dictation --server local)
+default_server = "local"
+
+# Named server configurations for quick switching between endpoints
+# Usage: ears-dictation --server <alias>
+# Or directly: ears-dictation --server ws://custom-host:9000
+
+[dictation.servers.local]
+# Local server running on this machine
+host = "127.0.0.1"
+port = 8765
+description = "Local eaRS server"
+
+# Example remote server configurations (uncomment to use):
+# [dictation.servers.workstation]
+# host = "192.168.1.100"
+# port = 8765
+# description = "Office workstation with GPU"
+
+# [dictation.servers.cloud]
+# host = "transcribe.example.com"
+# port = 443
+# description = "Cloud transcription service"
 
 [dictation.notifications]
 # Show desktop notification when dictation is toggled on/off

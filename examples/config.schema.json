@@ -178,6 +178,44 @@
           "default": true,
           "description": "Type words immediately as they arrive (true) or only when final transcription is ready (false)"
         },
+        "default_server": {
+          "type": "string",
+          "default": "local",
+          "description": "Default server alias to connect to when running ears-dictation"
+        },
+        "servers": {
+          "type": "object",
+          "description": "Named server configurations for quick switching between endpoints",
+          "additionalProperties": {
+            "type": "object",
+            "description": "Server endpoint configuration",
+            "properties": {
+              "host": {
+                "type": "string",
+                "description": "WebSocket host address (e.g., '127.0.0.1', '192.168.1.100', 'transcribe.example.com')"
+              },
+              "port": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535,
+                "description": "WebSocket port number"
+              },
+              "description": {
+                "type": "string",
+                "description": "Optional description for this server"
+              }
+            },
+            "required": ["host", "port"],
+            "additionalProperties": false
+          },
+          "default": {
+            "local": {
+              "host": "127.0.0.1",
+              "port": 8765,
+              "description": "Local eaRS server"
+            }
+          }
+        },
         "notifications": {
           "type": "object",
           "description": "Desktop notification settings for dictation",

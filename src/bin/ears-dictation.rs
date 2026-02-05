@@ -5,7 +5,7 @@ use ears::audio;
 #[cfg(feature = "hooks")]
 use ears::config::DictationHooksConfig;
 use ears::config::{AppConfig, DictationNotificationConfig};
-use ears::virtual_keyboard::{create_virtual_keyboard, VirtualKeyboard, SpecialKey};
+use ears::virtual_keyboard::{SpecialKey, VirtualKeyboard, create_virtual_keyboard};
 use futures_util::{SinkExt, StreamExt};
 use notifica::notify;
 use rdev::{EventType, listen};
@@ -60,8 +60,22 @@ struct Args {
     )]
     lang: Option<String>,
 
-    #[arg(long, value_enum, help = "Select transcription engine (kyutai|parakeet)")]
+    #[arg(
+        long,
+        value_enum,
+        help = "Select transcription engine (kyutai|parakeet)"
+    )]
     engine: Option<EngineArg>,
+
+    #[arg(
+        short,
+        long,
+        help = "Server alias from config (e.g., 'local', 'remote') or full WebSocket URL (ws://host:port)"
+    )]
+    server: Option<String>,
+
+    #[arg(long, help = "List all configured servers and exit")]
+    list_servers: bool,
 }
 
 fn get_pid_file() -> std::path::PathBuf {
@@ -93,12 +107,69 @@ fn remove_pid_file() {
     let _ = fs::remove_file(pid_file);
 }
 
+/// Resolve the server URL from command-line argument or config.
+/// Accepts either:
+/// - A full WebSocket URL (ws:// or wss://)
+/// - A server alias defined in config
+/// - None to use the default server
+fn resolve_server_url(server_arg: &Option<String>, config: &AppConfig) -> Result<String> {
+    match server_arg {
+        Some(server) if server.starts_with("ws://") || server.starts_with("wss://") => {
+            // Direct WebSocket URL provided
+            Ok(server.clone())
+        }
+        Some(alias) => {
+            // Treat as server alias
+            config.dictation.get_server_url(Some(alias)).ok_or_else(|| {
+                let available: Vec<_> = config
+                    .dictation
+                    .servers
+                    .keys()
+                    .map(|s| s.as_str())
+                    .collect();
+                anyhow::anyhow!(
+                    "Unknown server alias '{}'. Available: {}",
+                    alias,
+                    available.join(", ")
+                )
+            })
+        }
+        None => {
+            // Use default server
+            config.dictation.get_server_url(None).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Default server '{}' not found in config",
+                    config.dictation.default_server
+                )
+            })
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
     let config = AppConfig::load().unwrap_or_default();
-    let port = config.server.websocket_port;
-    let url = format!("ws://127.0.0.1:{}", port);
+
+    // Handle --list-servers flag
+    if args.list_servers {
+        println!("Configured dictation servers:");
+        println!("  {:12} {:30} {}", "ALIAS", "URL", "DESCRIPTION");
+        println!("  {:12} {:30} {}", "-----", "---", "-----------");
+        let mut servers: Vec<_> = config.dictation.list_servers();
+        servers.sort_by_key(|(alias, _)| *alias);
+        for (alias, server) in servers {
+            let is_default = alias == config.dictation.default_server;
+            let marker = if is_default { "*" } else { " " };
+            let desc = server.description.as_deref().unwrap_or("");
+            println!("{} {:12} {:30} {}", marker, alias, server.ws_url(), desc);
+        }
+        println!("\n* = default server");
+        return Ok(());
+    }
+
+    // Resolve server URL from --server argument or config
+    let url = resolve_server_url(&args.server, &config)?;
 
     write_pid_file()?;
 
@@ -244,9 +315,10 @@ async fn main() -> Result<()> {
             Ok((ws_stream, _)) => {
                 eprintln!("Connected to transcription server");
                 let (mut write, mut read) = ws_stream.split();
-                let mut keyboard = create_virtual_keyboard()
-                    .context("Failed to initialize virtual keyboard. \
-                              On Linux/Wayland, ensure you are in the 'input' group.")?;
+                let mut keyboard = create_virtual_keyboard().context(
+                    "Failed to initialize virtual keyboard. \
+                              On Linux/Wayland, ensure you are in the 'input' group.",
+                )?;
 
                 let (writer_tx, mut writer_rx) = mpsc::unbounded_channel::<WriterCommand>();
 
@@ -383,9 +455,9 @@ async fn main() -> Result<()> {
 }
 
 fn handle_message(
-    json: &Value, 
-    keyboard: &mut Box<dyn VirtualKeyboard>, 
-    capturing: &Arc<Mutex<bool>>
+    json: &Value,
+    keyboard: &mut Box<dyn VirtualKeyboard>,
+    capturing: &Arc<Mutex<bool>>,
 ) -> Result<()> {
     let is_capturing = *capturing.lock().unwrap();
 

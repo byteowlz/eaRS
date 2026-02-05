@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -62,15 +63,72 @@ pub struct ServerConfig {
     pub enable_listener_mode: bool,
 }
 
+/// Configuration for a single dictation server endpoint
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DictationServerConfig {
+    /// WebSocket host address (e.g., "localhost", "192.168.1.100", "transcribe.example.com")
+    pub host: String,
+    /// WebSocket port number
+    pub port: u16,
+    /// Optional description for this server
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+impl DictationServerConfig {
+    /// Build the WebSocket URL for this server
+    pub fn ws_url(&self) -> String {
+        format!("ws://{}:{}", self.host, self.port)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DictationConfig {
     pub enabled: bool,
     pub type_live_words: bool,
+    /// Default server alias to use when none is specified (defaults to "local")
+    #[serde(default = "default_server_alias")]
+    pub default_server: String,
+    /// Named server configurations for quick switching
+    #[serde(default = "default_servers")]
+    pub servers: HashMap<String, DictationServerConfig>,
     #[serde(default)]
     pub notifications: DictationNotificationConfig,
     #[cfg(feature = "hooks")]
     #[serde(default)]
     pub hooks: DictationHooksConfig,
+}
+
+fn default_server_alias() -> String {
+    "local".to_string()
+}
+
+fn default_servers() -> HashMap<String, DictationServerConfig> {
+    let mut servers = HashMap::new();
+    servers.insert(
+        "local".to_string(),
+        DictationServerConfig {
+            host: "127.0.0.1".to_string(),
+            port: 8765,
+            description: Some("Local eaRS server".to_string()),
+        },
+    );
+    servers
+}
+
+impl DictationConfig {
+    /// Get the WebSocket URL for a server by alias.
+    /// If alias is None, uses the default_server.
+    /// Returns None if the alias doesn't exist.
+    pub fn get_server_url(&self, alias: Option<&str>) -> Option<String> {
+        let alias = alias.unwrap_or(&self.default_server);
+        self.servers.get(alias).map(|s| s.ws_url())
+    }
+
+    /// List all available server aliases
+    pub fn list_servers(&self) -> Vec<(&str, &DictationServerConfig)> {
+        self.servers.iter().map(|(k, v)| (k.as_str(), v)).collect()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,6 +223,8 @@ impl Default for DictationConfig {
         Self {
             enabled: false,
             type_live_words: true,
+            default_server: default_server_alias(),
+            servers: default_servers(),
             notifications: DictationNotificationConfig::default(),
             #[cfg(feature = "hooks")]
             hooks: DictationHooksConfig::default(),
