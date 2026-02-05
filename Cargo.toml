@@ -39,6 +39,9 @@ moshi = "0.6.4"
 # prkt must come before sentencepiece to ensure ort's protobuf symbols are used
 # (both bundle protobuf-lite, and the linker uses the first definition)
 prkt = { path = "prkt", optional = true }
+# Pin ort to compatible version - prkt needs ort 2.0.0-rc.9/rc.10 API
+ort = { version = "=2.0.0-rc.10", optional = true }
+ort-sys = { version = "=2.0.0-rc.10", optional = true, features = ["download-binaries"] }
 serde = { version = "1.0.210", features = ["derive"] }
 serde_json = "1.0.115"
 toml = "0.9"
@@ -76,7 +79,7 @@ cudnn = ["candle/cudnn", "candle-nn/cudnn"]
 hooks = []
 
 # Engines
-parakeet = ["dep:prkt", "dep:webrtc-vad"]
+parakeet = ["dep:prkt", "dep:ort", "dep:ort-sys", "dep:webrtc-vad"]
 
 # Acceleration (shared flags)
 nvidia = ["dep:cudarc", "candle/cuda", "candle-nn/cuda", "prkt/cuda"]
