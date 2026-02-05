@@ -1,7 +1,7 @@
 use anyhow::Result;
 use candle::Device;
-use indicatif::{ProgressBar, ProgressStyle};
 use hf_hub::Cache;
+use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::path::PathBuf;

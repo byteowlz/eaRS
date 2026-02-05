@@ -1,9 +1,9 @@
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
-use ears::{TranscriptionOptions, config::AppConfig, server};
 use ears::server::EngineKind;
 #[cfg(feature = "parakeet")]
 use ears::server::ParakeetDevice;
+use ears::{TranscriptionOptions, config::AppConfig, server};
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, ValueEnum)]

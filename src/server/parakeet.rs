@@ -2,12 +2,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use crossbeam_channel::{select, unbounded, Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, select, unbounded};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use webrtc_vad::{SampleRate, Vad, VadMode};
 
-use crate::server::engine::{Engine, EngineKind, EngineSession};
 use crate::server::SessionSink;
+use crate::server::engine::{Engine, EngineKind, EngineSession};
 use crate::{TranscriptionOptions, TranscriptionSink, WebSocketMessage, WordTimestamp};
 
 const PARAKEET_SAMPLE_RATE: usize = 16_000;
@@ -41,11 +41,21 @@ impl ParakeetDevice {
         {
             return ParakeetDevice::CoreML;
         }
-        #[cfg(all(feature = "directml", not(feature = "nvidia"), not(feature = "amd"), not(feature = "apple")))]
+        #[cfg(all(
+            feature = "directml",
+            not(feature = "nvidia"),
+            not(feature = "amd"),
+            not(feature = "apple")
+        ))]
         {
             return ParakeetDevice::DirectML;
         }
-        #[cfg(not(any(feature = "nvidia", feature = "amd", feature = "apple", feature = "directml")))]
+        #[cfg(not(any(
+            feature = "nvidia",
+            feature = "amd",
+            feature = "apple",
+            feature = "directml"
+        )))]
         ParakeetDevice::Cpu
     }
 
@@ -282,23 +292,20 @@ fn run_parakeet_session(
             }
         }
 
-        let should_transcribe =
-            buffer_24k.len() >= config.chunk_samples_24k || (stop_requested && !buffer_24k.is_empty());
+        let should_transcribe = buffer_24k.len() >= config.chunk_samples_24k
+            || (stop_requested && !buffer_24k.is_empty());
 
         if should_transcribe {
             let start_time = buffer_offset_24k as f64 / SERVER_SAMPLE_RATE as f64;
-            let resampled = match kaudio::resample(
-                &buffer_24k,
-                SERVER_SAMPLE_RATE,
-                PARAKEET_SAMPLE_RATE,
-            ) {
-                Ok(res) => res,
-                Err(err) => {
-                    eprintln!("[parakeet] resample failed: {err}");
-                    buffer_24k.clear();
-                    continue;
-                }
-            };
+            let resampled =
+                match kaudio::resample(&buffer_24k, SERVER_SAMPLE_RATE, PARAKEET_SAMPLE_RATE) {
+                    Ok(res) => res,
+                    Err(err) => {
+                        eprintln!("[parakeet] resample failed: {err}");
+                        buffer_24k.clear();
+                        continue;
+                    }
+                };
 
             eprintln!(
                 "[parakeet] chunk {:.2}s rms {:.4}",
@@ -306,12 +313,14 @@ fn run_parakeet_session(
                 rms(&resampled)
             );
 
-            let has_voice = process_vad_frames(&resampled, &mut vad_state, &mut last_pause_sent, &mut sink);
+            let has_voice =
+                process_vad_frames(&resampled, &mut vad_state, &mut last_pause_sent, &mut sink);
             if !has_voice && !stop_requested {
                 eprintln!("[parakeet] chunk skipped: no voice detected");
                 buffer_offset_24k = total_samples_24k.saturating_sub(config.overlap_samples_24k);
                 if buffer_24k.len() > config.overlap_samples_24k {
-                    buffer_24k = buffer_24k.split_off(buffer_24k.len() - config.overlap_samples_24k);
+                    buffer_24k =
+                        buffer_24k.split_off(buffer_24k.len() - config.overlap_samples_24k);
                 } else {
                     buffer_24k.clear();
                 }
@@ -325,9 +334,11 @@ fn run_parakeet_session(
                         "[parakeet] chunk skipped: below noise gate (rms {:.5} < {:.5})",
                         chunk_rms, config.noise_gate_rms
                     );
-                    buffer_offset_24k = total_samples_24k.saturating_sub(config.overlap_samples_24k);
+                    buffer_offset_24k =
+                        total_samples_24k.saturating_sub(config.overlap_samples_24k);
                     if buffer_24k.len() > config.overlap_samples_24k {
-                        buffer_24k = buffer_24k.split_off(buffer_24k.len() - config.overlap_samples_24k);
+                        buffer_24k =
+                            buffer_24k.split_off(buffer_24k.len() - config.overlap_samples_24k);
                     } else {
                         buffer_24k.clear();
                     }

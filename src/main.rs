@@ -532,8 +532,7 @@ async fn run_client(args: ClientArgs) -> Result<()> {
     let (ws_stream, _) = match connect_async(&server_url).await {
         Ok(result) => result,
         Err(err) => {
-            let connect_err =
-                anyhow!(err).context(format!("failed to connect to {}", server_url));
+            let connect_err = anyhow!(err).context(format!("failed to connect to {}", server_url));
             if should_autostart {
                 eprintln!(
                     "No local server detected at {}. Starting one now...",
@@ -1025,7 +1024,12 @@ mod tests {
     fn wait_for_server_ready_detects_listener() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind test listener");
         let port = listener.local_addr().expect("local addr").port();
-        assert!(wait_for_server_ready(port, 10, Duration::from_millis(10), false));
+        assert!(wait_for_server_ready(
+            port,
+            10,
+            Duration::from_millis(10),
+            false
+        ));
     }
 
     #[test]
@@ -1033,7 +1037,12 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind test listener");
         let port = listener.local_addr().expect("local addr").port();
         drop(listener);
-        assert!(!wait_for_server_ready(port, 5, Duration::from_millis(10), false));
+        assert!(!wait_for_server_ready(
+            port,
+            5,
+            Duration::from_millis(10),
+            false
+        ));
     }
 
     #[test]

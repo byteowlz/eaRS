@@ -14,11 +14,11 @@ use engine::{EngineManager, EngineSession, send_engine_changed};
 #[cfg(feature = "parakeet")]
 use parakeet::{ParakeetEngine, ParakeetEngineConfig};
 
-pub mod listener;
 mod engine;
-mod parallel;
+pub mod listener;
 #[cfg(feature = "parakeet")]
 mod parakeet;
+mod parallel;
 pub use engine::EngineKind;
 #[cfg(feature = "parakeet")]
 pub use parakeet::ParakeetDevice;
@@ -139,8 +139,7 @@ pub async fn run(options: ServerOptions) -> Result<()> {
 
     eprintln!(
         "Server listening on {} (max {} concurrent sessions)",
-        options.bind_addr,
-        kyutai_capacity
+        options.bind_addr, kyutai_capacity
     );
     eprintln!(
         "[ears-server] engines available: {}",
@@ -171,16 +170,15 @@ pub async fn run(options: ServerOptions) -> Result<()> {
         let transcription_clone = transcription_opts.clone();
         tokio::spawn(async move {
             eprintln!("[ears-server] handling connection from {}", addr);
-            if let Err(err) =
-                handle_connection(
-                    stream,
-                    engine_clone,
-                    registry_clone,
-                    validator_clone,
-                    default_engine,
-                    transcription_clone,
-                )
-                .await
+            if let Err(err) = handle_connection(
+                stream,
+                engine_clone,
+                registry_clone,
+                validator_clone,
+                default_engine,
+                transcription_clone,
+            )
+            .await
             {
                 eprintln!("[ears-server] connection {} error: {}", addr, err);
             }
@@ -567,7 +565,11 @@ fn handle_client_message(
                 if chunk.is_empty() {
                     return Ok(());
                 }
-                eprintln!("[ears-server] forwarding {} samples to {:?}", chunk.len(), sess.engine());
+                eprintln!(
+                    "[ears-server] forwarding {} samples to {:?}",
+                    chunk.len(),
+                    sess.engine()
+                );
                 sess.send_audio(chunk)?;
             }
         }
@@ -666,11 +668,7 @@ fn allocate_session(
     }
 }
 
-fn send_status(
-    sink: &mut SessionSink,
-    transcription: &TranscriptionOptions,
-    engine: EngineKind,
-) {
+fn send_status(sink: &mut SessionSink, transcription: &TranscriptionOptions, engine: EngineKind) {
     let status = WebSocketMessage::Status {
         paused: false,
         vad: transcription.vad,

@@ -501,7 +501,12 @@ impl Model {
         };
         let batch_size = batch_size.max(1);
         let audio_tokenizer = if batch_size > 1 {
-            moshi::mimi::load_b(Some(batch_size), mimi_file.to_str().unwrap(), Some(32), &device)?
+            moshi::mimi::load_b(
+                Some(batch_size),
+                mimi_file.to_str().unwrap(),
+                Some(32),
+                &device,
+            )?
         } else {
             moshi::mimi::load(mimi_file.to_str().unwrap(), Some(32), &device)?
         };
@@ -518,13 +523,8 @@ impl Model {
             )?
         };
         let asr_delay_in_tokens = (config.stt_config.audio_delay_seconds * 12.5) as usize;
-        let state = moshi::asr::State::new(
-            batch_size,
-            asr_delay_in_tokens,
-            0.,
-            audio_tokenizer,
-            lm,
-        )?;
+        let state =
+            moshi::asr::State::new(batch_size, asr_delay_in_tokens, 0., audio_tokenizer, lm)?;
 
         // Initialize Whisper model if enabled
         let whisper_model = if options.whisper_enabled {

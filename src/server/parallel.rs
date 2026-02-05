@@ -6,8 +6,8 @@ use candle::Tensor;
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use moshi::StreamMask;
 
-use crate::{Model, TranscriptionSink, WebSocketMessage, WordTimestamp};
 use super::engine::{Engine, EngineKind, EngineSession};
+use crate::{Model, TranscriptionSink, WebSocketMessage, WordTimestamp};
 
 use super::SessionSink;
 
