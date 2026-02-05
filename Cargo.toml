@@ -1,6 +1,6 @@
 [package]
 name = "eaRS"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2024"
 description = "Easy automatic speech recognition library using Kyutai's STT models"
 license = "MIT"
