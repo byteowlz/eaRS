@@ -391,16 +391,11 @@ async fn main() -> Result<()> {
                             if let Some(message) = read.next().await {
                                 match message {
                                     Ok(Message::Text(text)) => {
-                                        eprintln!("[WS RECEIVED] {}", text);
                                         if let Ok(json) = serde_json::from_str::<Value>(&text) {
                                             handle_message(&json, &mut keyboard, &capturing)?;
-                                        } else {
-                                            eprintln!("[ERROR] Failed to parse JSON");
                                         }
                                     }
-                                    Ok(Message::Binary(data)) => {
-                                        eprintln!("[WS BINARY] {} bytes", data.len());
-                                    }
+                                    Ok(Message::Binary(_data)) => {}
                                     Ok(Message::Close(_)) => {
                                         eprintln!("WebSocket closed");
                                         break;
@@ -466,7 +461,6 @@ fn handle_message(
             "word" if is_capturing => {
                 if let Some(word) = json.get("word").and_then(|v| v.as_str()) {
                     if !word.is_empty() {
-                        eprintln!("[TYPING WORD] {}", word);
                         keyboard.type_text(word)?;
                         keyboard.press_key(SpecialKey::Space)?;
                     }
@@ -475,7 +469,6 @@ fn handle_message(
             "final" if is_capturing => {
                 if let Some(text) = json.get("text").and_then(|v| v.as_str()) {
                     if !text.is_empty() {
-                        eprintln!("[TYPING FINAL] {}", text);
                         keyboard.type_text(text)?;
                         keyboard.press_key(SpecialKey::Space)?;
                     }
