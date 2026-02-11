@@ -1099,7 +1099,7 @@ fn start_dictation(server: Option<&str>) -> Result<()> {
     let mut cmd = ProcessCommand::new(&dictation_bin);
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::null());
-    cmd.stderr(Stdio::null());
+    // Keep stderr visible so startup errors (like unknown server alias) are shown
 
     // Pass server argument if provided
     if let Some(server) = server {
