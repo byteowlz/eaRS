@@ -1096,10 +1096,23 @@ fn start_dictation(server: Option<&str>) -> Result<()> {
     let exe_dir = exe.parent().context("failed to get exe directory")?;
     let dictation_bin = exe_dir.join("ears-dictation");
 
+    // Setup log file for stderr
+    let log_path = get_dictation_pid_file()
+        .parent()
+        .map(|p| p.join("dictation.log"))
+        .context("failed to get log path")?;
+    if let Some(parent) = log_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)?;
+
     let mut cmd = ProcessCommand::new(&dictation_bin);
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::null());
-    // Keep stderr visible so startup errors (like unknown server alias) are shown
+    cmd.stderr(log_file);
 
     // Pass server argument if provided
     if let Some(server) = server {
@@ -1116,6 +1129,7 @@ fn start_dictation(server: Option<&str>) -> Result<()> {
         println!("Connecting to server: {}", server);
     }
     println!("Use keyboard shortcut to toggle pause/resume (see config)");
+    println!("Logs: {}", log_path.display());
 
     Ok(())
 }
