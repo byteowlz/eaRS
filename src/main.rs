@@ -288,6 +288,20 @@ fn handle_dictation_command(command: DictationCommand) -> Result<()> {
 }
 
 fn run_dictation_foreground(server: Option<&str>) -> Result<()> {
+    // Pre-check server reachability
+    let config = AppConfig::load()?;
+    let url = resolve_dictation_server_url(server, &config)?;
+    if let Some((host, port)) = parse_ws_host_port(&url) {
+        if !is_server_reachable(&host, port) {
+            return Err(anyhow!(
+                "Cannot reach server at {} ({}:{}). Is the server running?",
+                url,
+                host,
+                port
+            ));
+        }
+    }
+
     let exe = std::env::current_exe()?;
     let exe_dir = exe.parent().context("failed to get exe directory")?;
     let dictation_bin = exe_dir.join("ears-dictation");
@@ -1073,6 +1087,51 @@ mod tests {
         assert!(!args.timestamps);
         assert!(!args.vad);
     }
+
+    #[test]
+    fn parse_ws_host_port_with_port() {
+        let result = parse_ws_host_port("ws://192.168.1.100:8765");
+        assert_eq!(result, Some(("192.168.1.100".to_string(), 8765)));
+    }
+
+    #[test]
+    fn parse_ws_host_port_with_path() {
+        let result = parse_ws_host_port("ws://myhost:9000/transcribe");
+        assert_eq!(result, Some(("myhost".to_string(), 9000)));
+    }
+
+    #[test]
+    fn parse_ws_host_port_no_port() {
+        let result = parse_ws_host_port("ws://myhost");
+        assert_eq!(result, Some(("myhost".to_string(), 80)));
+    }
+
+    #[test]
+    fn parse_ws_host_port_wss_no_port() {
+        let result = parse_ws_host_port("wss://myhost");
+        assert_eq!(result, Some(("myhost".to_string(), 443)));
+    }
+
+    #[test]
+    fn parse_ws_host_port_invalid() {
+        let result = parse_ws_host_port("http://myhost:8080");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn is_server_reachable_open_port() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test listener");
+        let port = listener.local_addr().expect("local addr").port();
+        assert!(is_server_reachable("127.0.0.1", port));
+    }
+
+    #[test]
+    fn is_server_reachable_closed_port() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test listener");
+        let port = listener.local_addr().expect("local addr").port();
+        drop(listener);
+        assert!(!is_server_reachable("127.0.0.1", port));
+    }
 }
 
 fn read_dictation_pid() -> Result<Option<i32>> {
@@ -1084,12 +1143,92 @@ fn read_dictation_pid() -> Result<Option<i32>> {
     Ok(contents.trim().parse::<i32>().ok())
 }
 
+/// Resolve the dictation server URL from an optional alias/URL argument.
+/// Accepts either a full WebSocket URL (ws:// or wss://) or a server alias from config.
+/// Returns the resolved WebSocket URL.
+fn resolve_dictation_server_url(server: Option<&str>, config: &AppConfig) -> Result<String> {
+    match server {
+        Some(s) if s.starts_with("ws://") || s.starts_with("wss://") => Ok(s.to_string()),
+        Some(alias) => config.dictation.get_server_url(Some(alias)).ok_or_else(|| {
+            let available: Vec<_> = config
+                .dictation
+                .servers
+                .keys()
+                .map(|s| s.as_str())
+                .collect();
+            anyhow!(
+                "Unknown server alias '{}'. Available: {}",
+                alias,
+                available.join(", ")
+            )
+        }),
+        None => config
+            .dictation
+            .get_server_url(None)
+            .ok_or_else(|| {
+                anyhow!(
+                    "Default server '{}' not found in config",
+                    config.dictation.default_server
+                )
+            }),
+    }
+}
+
+/// Extract host and port from a WebSocket URL for TCP connectivity checks.
+fn parse_ws_host_port(url: &str) -> Option<(String, u16)> {
+    // Strip ws:// or wss:// prefix
+    let stripped = url
+        .strip_prefix("ws://")
+        .or_else(|| url.strip_prefix("wss://"))?;
+    // Remove any trailing path
+    let authority = stripped.split('/').next()?;
+    if let Some((host, port_str)) = authority.rsplit_once(':') {
+        let port = port_str.parse::<u16>().ok()?;
+        Some((host.to_string(), port))
+    } else {
+        // Default WebSocket port
+        let default_port = if url.starts_with("wss://") {
+            443
+        } else {
+            80
+        };
+        Some((authority.to_string(), default_port))
+    }
+}
+
+/// Check if a server is reachable via TCP with a short timeout.
+fn is_server_reachable(host: &str, port: u16) -> bool {
+    use std::net::ToSocketAddrs;
+    let addr_str = format!("{}:{}", host, port);
+    if let Ok(mut addrs) = addr_str.to_socket_addrs() {
+        if let Some(addr) = addrs.next() {
+            return std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(3)).is_ok();
+        }
+    }
+    false
+}
+
 fn start_dictation(server: Option<&str>) -> Result<()> {
     if let Some(pid) = read_dictation_pid()? {
         if server::is_process_alive(pid) {
             return Err(anyhow!("ears dictation already running (pid {})", pid));
         }
         let _ = std::fs::remove_file(get_dictation_pid_file());
+    }
+
+    // Resolve and validate server URL before spawning
+    let config = AppConfig::load()?;
+    let url = resolve_dictation_server_url(server, &config)?;
+
+    if let Some((host, port)) = parse_ws_host_port(&url) {
+        if !is_server_reachable(&host, port) {
+            return Err(anyhow!(
+                "Cannot reach server at {} ({}:{}). Is the server running?",
+                url,
+                host,
+                port
+            ));
+        }
     }
 
     let exe = std::env::current_exe()?;
@@ -1125,9 +1264,7 @@ fn start_dictation(server: Option<&str>) -> Result<()> {
     let pid = child.id();
 
     println!("ears dictation started (pid {})", pid);
-    if let Some(server) = server {
-        println!("Connecting to server: {}", server);
-    }
+    println!("Connected to server: {}", url);
     println!("Use keyboard shortcut to toggle pause/resume (see config)");
     println!("Logs: {}", log_path.display());
 
