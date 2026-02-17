@@ -154,12 +154,29 @@ check-deps:
         # Linux: requires system sentencepiece to avoid protobuf conflicts
         if command -v apt-get &> /dev/null; then
             # Debian/Ubuntu
-            if ! pkg-config --exists sentencepiece; then
-                echo "Installing sentencepiece..."
-                sudo apt-get update
-                sudo apt-get install -y libsentencepiece-dev sentencepiece
+            PKGS_TO_INSTALL=()
+            if ! command -v pkg-config &> /dev/null; then
+                PKGS_TO_INSTALL+=(pkg-config)
+            fi
+            if ! pkg-config --exists sentencepiece 2>/dev/null; then
+                PKGS_TO_INSTALL+=(libsentencepiece-dev sentencepiece)
             else
                 echo "✓ sentencepiece already installed"
+            fi
+            if ! pkg-config --exists libudev 2>/dev/null; then
+                PKGS_TO_INSTALL+=(libudev-dev)
+            else
+                echo "✓ libudev already installed"
+            fi
+            if ! pkg-config --exists x11 2>/dev/null || ! pkg-config --exists xi 2>/dev/null; then
+                PKGS_TO_INSTALL+=(xorg-dev libxkbcommon-dev)
+            else
+                echo "✓ x11/xorg already installed"
+            fi
+            if [ ${#PKGS_TO_INSTALL[@]} -gt 0 ]; then
+                echo "Installing: ${PKGS_TO_INSTALL[*]}..."
+                sudo apt-get update
+                sudo apt-get install -y "${PKGS_TO_INSTALL[@]}"
             fi
         elif command -v dnf &> /dev/null; then
             # Fedora/RHEL

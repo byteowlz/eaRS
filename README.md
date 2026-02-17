@@ -90,7 +90,8 @@ On Linux, eaRS uses the system `sentencepiece` library to avoid protobuf conflic
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y libsentencepiece-dev sentencepiece
+sudo apt-get install -y pkg-config build-essential libsentencepiece-dev sentencepiece \
+    libudev-dev xorg-dev libxkbcommon-dev
 ```
 
 **Fedora/RHEL:**
