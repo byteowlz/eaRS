@@ -5,16 +5,20 @@ use ears::audio;
 #[cfg(feature = "hooks")]
 use ears::config::DictationHooksConfig;
 use ears::config::{AppConfig, DictationNotificationConfig};
+use ears::server;
 use ears::virtual_keyboard::{SpecialKey, VirtualKeyboard, create_virtual_keyboard};
 use futures_util::{SinkExt, StreamExt};
 use notifica::notify;
 use rdev::{EventType, listen};
 use serde_json::Value;
 use std::fs;
+use std::io::Write;
+use std::process::Stdio;
 #[cfg(feature = "hooks")]
 use std::process::Command as ProcessCommand;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
@@ -146,6 +150,102 @@ fn resolve_server_url(server_arg: &Option<String>, config: &AppConfig) -> Result
     }
 }
 
+/// Check if a TCP port is accepting connections on localhost.
+fn is_server_port_open(port: u16) -> bool {
+    std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
+}
+
+/// Extract the port from a WebSocket URL. Returns None for non-localhost URLs.
+fn extract_local_port(url: &str) -> Option<u16> {
+    // Only auto-start for local servers
+    let url_lower = url.to_lowercase();
+    if !url_lower.contains("localhost") && !url_lower.contains("127.0.0.1") {
+        return None;
+    }
+    // Parse port from ws://host:port or ws://host:port/path
+    if let Some(host_port) = url.split("://").nth(1) {
+        let host_port = host_port.split('/').next().unwrap_or(host_port);
+        if let Some(port_str) = host_port.split(':').nth(1) {
+            return port_str.parse::<u16>().ok();
+        }
+    }
+    None
+}
+
+/// Attempt to spawn the ears server process and wait for it to become ready.
+/// Returns Ok(true) if the server is ready, Ok(false) if started but not yet
+/// ready, and Err if the server binary could not be found or spawned.
+fn ensure_server_running(config: &AppConfig) -> Result<bool> {
+    // Check if server is already running via PID file
+    if let Ok(Some(pid)) = server::read_pid_file() {
+        if server::is_process_alive(pid) {
+            // Server process exists, wait for it to accept connections
+            let ready = wait_for_server_ready(
+                config.server.websocket_port,
+                30,
+                Duration::from_millis(500),
+            );
+            return Ok(ready);
+        }
+        let _ = server::remove_pid_file();
+    }
+
+    // Find the ears binary (should be next to ears-dictation)
+    let exe = std::env::current_exe()?;
+    let exe_dir = exe.parent().context("failed to get exe directory")?;
+    let ears_bin = exe_dir.join("ears");
+
+    if !ears_bin.exists() {
+        return Err(anyhow::anyhow!(
+            "ears binary not found at {}. Please start the server manually with: ears server start",
+            ears_bin.display()
+        ));
+    }
+
+    eprintln!("ears server is not running, starting it automatically...");
+
+    let mut cmd = std::process::Command::new(&ears_bin);
+    cmd.arg("server").arg("run");
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::null());
+
+    let child = cmd.spawn().context("failed to spawn ears server process")?;
+    let pid = child.id();
+
+    eprint!("ears server starting (pid {})...", pid);
+    std::io::stderr().flush().ok();
+
+    let ready = wait_for_server_ready(
+        config.server.websocket_port,
+        60,
+        Duration::from_millis(500),
+    );
+
+    if ready {
+        eprintln!("\rears server started (pid {}) and ready        ", pid);
+    } else {
+        eprintln!(
+            "\rears server started (pid {}) but not yet ready        ",
+            pid
+        );
+        eprintln!("server may still be loading the model - dictation will connect once ready");
+    }
+
+    Ok(ready)
+}
+
+/// Poll a local TCP port until it accepts connections or the attempts run out.
+fn wait_for_server_ready(port: u16, max_attempts: usize, poll_interval: Duration) -> bool {
+    for _ in 0..max_attempts {
+        if is_server_port_open(port) {
+            return true;
+        }
+        thread::sleep(poll_interval);
+    }
+    false
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -170,6 +270,28 @@ async fn main() -> Result<()> {
 
     // Resolve server URL from --server argument or config
     let url = resolve_server_url(&args.server, &config)?;
+
+    // For local server URLs, ensure the server is running before we start
+    // capturing audio and connecting. This avoids the confusing situation
+    // where dictation appears to start successfully but silently fails to
+    // transcribe because no server is available.
+    if let Some(port) = extract_local_port(&url) {
+        if !is_server_port_open(port) {
+            match ensure_server_running(&config) {
+                Ok(_) => {}
+                Err(err) => {
+                    eprintln!(
+                        "warning: could not auto-start ears server: {}",
+                        err
+                    );
+                    eprintln!(
+                        "dictation will keep retrying the connection to {}",
+                        url
+                    );
+                }
+            }
+        }
+    }
 
     write_pid_file()?;
 

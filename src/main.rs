@@ -1078,6 +1078,26 @@ fn start_dictation() -> Result<()> {
         let _ = std::fs::remove_file(get_dictation_pid_file());
     }
 
+    // Ensure the transcription server is running before starting dictation
+    let config = AppConfig::load()?;
+    let server_running = match server::read_pid_file()? {
+        Some(pid) if server::is_process_alive(pid) => {
+            is_server_port_open(config.server.websocket_port)
+        }
+        _ => false,
+    };
+
+    if !server_running {
+        println!("ears server is not running, starting it first...");
+        let ready = ensure_server_running(&config)?;
+        if !ready {
+            println!("warning: server started but may still be loading the model");
+            println!("dictation will connect once the server is ready");
+        } else {
+            println!("ears server is ready");
+        }
+    }
+
     let exe = std::env::current_exe()?;
     let exe_dir = exe.parent().context("failed to get exe directory")?;
     let dictation_bin = exe_dir.join("ears-dictation");

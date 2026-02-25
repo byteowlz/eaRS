@@ -364,6 +364,16 @@ fn run_parallel_loop(
                         flush_samples,
                     );
                     if let Some(ref allocation) = alloc {
+                        // Reset the model state for this batch slot to ensure
+                        // no leftover transcription data from a previous session
+                        // leaks into the new one. This is critical for session
+                        // isolation, especially after unclean disconnects.
+                        if let Err(err) = model.reset_batch_slot(allocation.batch_idx) {
+                            eprintln!(
+                                "[ears-server] failed to reset batch slot {}: {}",
+                                allocation.batch_idx, err
+                            );
+                        }
                         for lang in &prime_languages {
                             if let Err(err) =
                                 model.prime_with_lang_code_for_slot(lang, allocation.batch_idx)
