@@ -1,36 +1,43 @@
-## Issue Tracking with bd (beads)
+## Issue Tracking with trx
 
-**IMPORTANT**: This project uses **bd (beads)** for ALL issue tracking. Do NOT use markdown TODOs, task lists, or other tracking methods.
+**IMPORTANT**: This project uses **trx** for ALL issue tracking. Do NOT use markdown TODOs, task lists, or other tracking methods.
 
-### Why bd?
+### Why trx?
 
 - Dependency-aware: Track blockers and relationships between issues
-- Git-friendly: Auto-syncs to JSONL for version control
-- Agent-optimized: JSON output, ready work detection, discovered-from links
+- Git-friendly: CRDT-based storage in `.trx/` for version control
+- Agent-optimized: JSON output, ready work detection, parent/child relationships
 - Prevents duplicate tracking systems and confusion
 
 ### Quick Start
 
 **Check for ready work:**
 ```bash
-bd ready --json
+trx ready --json
 ```
 
 **Create new issues:**
 ```bash
-bd create "Issue title" -t bug|feature|task -p 0-4 --json
-bd create "Issue title" -p 1 --deps discovered-from:bd-123 --json
+trx create "Issue title" -t bug|feature|task -p 0-4 --json
+trx create "Child issue" -t task -p 1 --parent trx-123 --json
 ```
 
 **Claim and update:**
 ```bash
-bd update bd-42 --status in_progress --json
-bd update bd-42 --priority 1 --json
+trx update trx-42 --status in_progress --json
+trx update trx-42 -p 1 --json
 ```
 
 **Complete work:**
 ```bash
-bd close bd-42 --reason "Completed" --json
+trx close trx-42 --reason "Completed" --json
+```
+
+**Manage dependencies:**
+```bash
+trx dep add trx-42 trx-10       # trx-42 depends on trx-10
+trx dep rm trx-42 trx-10        # remove dependency
+trx dep tree --json              # show dependency tree
 ```
 
 ### Issue Types
@@ -51,40 +58,13 @@ bd close bd-42 --reason "Completed" --json
 
 ### Workflow for AI Agents
 
-1. **Check ready work**: `bd ready` shows unblocked issues
-2. **Claim your task**: `bd update <id> --status in_progress`
+1. **Check ready work**: `trx ready` shows unblocked issues
+2. **Claim your task**: `trx update <id> --status in_progress`
 3. **Work on it**: Implement, test, document
 4. **Discover new work?** Create linked issue:
-   - `bd create "Found bug" -p 1 --deps discovered-from:<parent-id>`
-5. **Complete**: `bd close <id> --reason "Done"`
-6. **Commit together**: Always commit the `.beads/issues.jsonl` file together with the code changes so issue state stays in sync with code state
-
-### Auto-Sync
-
-bd automatically syncs with git:
-- Exports to `.beads/issues.jsonl` after changes (5s debounce)
-- Imports from JSONL when newer (e.g., after `git pull`)
-- No manual export/import needed!
-
-### MCP Server (Recommended)
-
-If using Claude or MCP-compatible clients, install the beads MCP server:
-
-```bash
-pip install beads-mcp
-```
-
-Add to MCP config (e.g., `~/.config/claude/config.json`):
-```json
-{
-  "beads": {
-    "command": "beads-mcp",
-    "args": []
-  }
-}
-```
-
-Then use `mcp__beads__*` functions instead of CLI commands.
+   - `trx create "Found bug" -t bug -p 1 --parent <parent-id>`
+5. **Complete**: `trx close <id> --reason "Done"`
+6. **Sync**: Run `trx sync` to commit `.trx/` changes, or commit the `.trx/` directory together with your code changes so issue state stays in sync with code state
 
 ### Managing AI-Generated Planning Documents
 
@@ -109,14 +89,12 @@ history/
 
 ### Important Rules
 
-- ✅ Use bd for ALL task tracking
-- ✅ Always use `--json` flag for programmatic bd commands
-- ✅ Link discovered work with discovered-from dependencies
-- ✅ Check `bd ready` before asking "what should I work on?"
-- ✅ Store AI planning docs in `history/` directory
-- ❌ Do NOT create markdown TODO lists
-- ❌ Do NOT use external issue trackers
-- ❌ Do NOT duplicate tracking systems
-- ❌ Do NOT clutter repo root with planning documents
-
-For more details, see README.md and QUICKSTART.md.
+- Use trx for ALL task tracking
+- Always use `--json` flag for programmatic trx commands
+- Link discovered work with `--parent` to connect related issues
+- Check `trx ready` before asking "what should I work on?"
+- Store AI planning docs in `history/` directory
+- Do NOT create markdown TODO lists
+- Do NOT use external issue trackers
+- Do NOT duplicate tracking systems
+- Do NOT clutter repo root with planning documents
