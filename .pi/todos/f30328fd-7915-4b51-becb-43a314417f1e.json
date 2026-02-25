@@ -2,40 +2,22 @@
   "todos": [
     {
       "id": "1",
-      "content": "Bug 1: Session isolation - reset_batch_slot on new connection to clear stale model state",
+      "content": "Run tests via remote-build",
       "status": "completed",
       "priority": "high"
     },
     {
       "id": "2",
-      "content": "Bug 1: ears-dictation client sends session_reset on connect to clear any server-side leftovers",
-      "status": "cancelled",
+      "content": "Bump version to 0.4.3 (patch - bug fixes)",
+      "status": "in_progress",
       "priority": "high"
     },
     {
       "id": "3",
-      "content": "Bug 2: start_dictation() must check server is running and auto-start if not",
-      "status": "completed",
+      "content": "Release with cargo-release",
+      "status": "pending",
       "priority": "high"
-    },
-    {
-      "id": "4",
-      "content": "Bug 2: ears-dictation binary must also check server before connecting",
-      "status": "completed",
-      "priority": "high"
-    },
-    {
-      "id": "5",
-      "content": "Compile and verify with remote-build check",
-      "status": "completed",
-      "priority": "high"
-    },
-    {
-      "id": "6",
-      "content": "Create bd issues for the two bugs",
-      "status": "cancelled",
-      "priority": "medium"
     }
   ],
-  "updated_at": "2026-02-25T07:39:13.598Z"
+  "updated_at": "2026-02-25T07:41:47.087Z"
 }
