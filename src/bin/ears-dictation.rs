@@ -97,12 +97,15 @@ fn get_pid_file() -> std::path::PathBuf {
     state_dir.join("ears").join(PID_FILE_NAME)
 }
 
-fn write_pid_file() -> Result<()> {
+fn write_pid_file(server_url: &str) -> Result<()> {
     let pid_file = get_pid_file();
     if let Some(parent) = pid_file.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(&pid_file, std::process::id().to_string())?;
+    // Store PID and server URL so `ears server stop` can determine whether
+    // this dictation session depends on the local server.
+    let contents = format!("{}\n{}", std::process::id(), server_url);
+    fs::write(&pid_file, contents)?;
     Ok(())
 }
 
@@ -293,7 +296,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    write_pid_file()?;
+    write_pid_file(&url)?;
 
     let running = Arc::new(Mutex::new(true));
     let capturing = Arc::new(Mutex::new(true));

@@ -399,26 +399,46 @@ fn stop_server() -> Result<()> {
         }
     }
 
-    if let Some(dictation_pid) = read_dictation_pid()? {
+    // Only stop dictation if it is connected to the local server.
+    // If it is connected to a remote server, leave it running.
+    if let (Some(dictation_pid), dictation_url) = read_dictation_pid_info()? {
         if server::is_process_alive(dictation_pid) {
-            println!(
-                "stopping associated dictation process (pid {})...",
-                dictation_pid
-            );
-            #[cfg(unix)]
-            unsafe {
-                let _ = kill(dictation_pid, SIGTERM);
-            }
-
-            for _ in 0..50 {
-                if !server::is_process_alive(dictation_pid) {
-                    break;
+            let is_local = match dictation_url.as_deref() {
+                Some(url) => {
+                    let lower = url.to_lowercase();
+                    lower.contains("localhost") || lower.contains("127.0.0.1")
+                        || lower.contains("0.0.0.0") || lower.contains("::1")
                 }
-                thread::sleep(Duration::from_millis(100));
-            }
+                // Legacy pid file without URL -- assume local
+                None => true,
+            };
 
-            let _ = std::fs::remove_file(get_dictation_pid_file());
-            println!("ears dictation stopped.");
+            if is_local {
+                println!(
+                    "stopping associated dictation process (pid {})...",
+                    dictation_pid
+                );
+                #[cfg(unix)]
+                unsafe {
+                    let _ = kill(dictation_pid, SIGTERM);
+                }
+
+                for _ in 0..50 {
+                    if !server::is_process_alive(dictation_pid) {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(100));
+                }
+
+                let _ = std::fs::remove_file(get_dictation_pid_file());
+                println!("ears dictation stopped.");
+            } else {
+                println!(
+                    "ears dictation (pid {}) is connected to remote server {}, leaving it running.",
+                    dictation_pid,
+                    dictation_url.as_deref().unwrap_or("unknown")
+                );
+            }
         }
     }
 
@@ -1077,13 +1097,23 @@ mod tests {
     }
 }
 
-fn read_dictation_pid() -> Result<Option<i32>> {
+/// Read the dictation PID file. Returns (pid, optional server URL).
+/// The file format is either just a PID (legacy) or PID\nURL.
+fn read_dictation_pid_info() -> Result<(Option<i32>, Option<String>)> {
     let pid_file = get_dictation_pid_file();
     if !pid_file.exists() {
-        return Ok(None);
+        return Ok((None, None));
     }
     let contents = std::fs::read_to_string(&pid_file)?;
-    Ok(contents.trim().parse::<i32>().ok())
+    let mut lines = contents.lines();
+    let pid = lines.next().and_then(|s| s.trim().parse::<i32>().ok());
+    let url = lines.next().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    Ok((pid, url))
+}
+
+fn read_dictation_pid() -> Result<Option<i32>> {
+    let (pid, _) = read_dictation_pid_info()?;
+    Ok(pid)
 }
 
 fn start_dictation(args: &DictationStartArgs) -> Result<()> {
@@ -1094,23 +1124,29 @@ fn start_dictation(args: &DictationStartArgs) -> Result<()> {
         let _ = std::fs::remove_file(get_dictation_pid_file());
     }
 
-    // Ensure the transcription server is running before starting dictation
+    // Only auto-start the local server when no remote server is specified.
+    // Resolve the target server to decide: if it points at localhost we may
+    // need to start the server, otherwise it is remote and we skip this.
     let config = AppConfig::load()?;
-    let server_running = match server::read_pid_file()? {
-        Some(pid) if server::is_process_alive(pid) => {
-            is_server_port_open(config.server.websocket_port)
-        }
-        _ => false,
-    };
+    let target_is_local = is_dictation_target_local(args.server.as_deref(), &config);
 
-    if !server_running {
-        println!("ears server is not running, starting it first...");
-        let ready = ensure_server_running(&config)?;
-        if !ready {
-            println!("warning: server started but may still be loading the model");
-            println!("dictation will connect once the server is ready");
-        } else {
-            println!("ears server is ready");
+    if target_is_local {
+        let server_running = match server::read_pid_file()? {
+            Some(pid) if server::is_process_alive(pid) => {
+                is_server_port_open(config.server.websocket_port)
+            }
+            _ => false,
+        };
+
+        if !server_running {
+            println!("ears server is not running, starting it first...");
+            let ready = ensure_server_running(&config)?;
+            if !ready {
+                println!("warning: server started but may still be loading the model");
+                println!("dictation will connect once the server is ready");
+            } else {
+                println!("ears server is ready");
+            }
         }
     }
 
@@ -1145,6 +1181,44 @@ fn append_dictation_args(cmd: &mut ProcessCommand, args: &DictationStartArgs) {
     if let Some(ref engine) = args.engine {
         cmd.arg("--engine").arg(engine);
     }
+}
+
+/// Determine whether the dictation target is a local server that we can
+/// auto-start. Returns `true` when no explicit server is given (defaults to
+/// local) or when the resolved server host is localhost / 127.0.0.1.
+fn is_dictation_target_local(server_arg: Option<&str>, config: &AppConfig) -> bool {
+    let host = match server_arg {
+        // Direct WebSocket URL on the command line
+        Some(url) if url.starts_with("ws://") || url.starts_with("wss://") => {
+            // Extract host from ws://host:port/...
+            url.split("://")
+                .nth(1)
+                .and_then(|rest| rest.split('/').next())
+                .and_then(|host_port| host_port.split(':').next())
+                .unwrap_or("")
+                .to_string()
+        }
+        // Server alias -- look up in config
+        Some(alias) => {
+            config
+                .dictation
+                .servers
+                .get(alias)
+                .map(|s| s.host.clone())
+                .unwrap_or_default()
+        }
+        // No argument -- use default server from config
+        None => {
+            config
+                .dictation
+                .servers
+                .get(&config.dictation.default_server)
+                .map(|s| s.host.clone())
+                .unwrap_or_else(|| "127.0.0.1".to_string())
+        }
+    };
+    let h = host.to_lowercase();
+    h == "localhost" || h == "127.0.0.1" || h == "::1" || h == "0.0.0.0"
 }
 
 fn stop_dictation() -> Result<()> {
