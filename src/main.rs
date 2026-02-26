@@ -58,11 +58,26 @@ enum ServerCommand {
 
 #[derive(Subcommand)]
 enum DictationCommand {
-    Start,
+    Start(DictationStartArgs),
     Stop,
     Status,
     #[command(about = "Run dictation in foreground with debug output")]
-    Debug,
+    Debug(DictationStartArgs),
+}
+
+#[derive(Args, Clone)]
+struct DictationStartArgs {
+    /// Server alias from config (e.g., 'local', 'remote') or full WebSocket URL (ws://host:port)
+    #[arg(short, long)]
+    server: Option<String>,
+
+    /// Set the transcription language (e.g., 'en', 'de', 'es', 'fr', 'ja')
+    #[arg(long)]
+    lang: Option<String>,
+
+    /// Select transcription engine (kyutai|parakeet)
+    #[arg(long)]
+    engine: Option<String>,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -273,21 +288,22 @@ async fn handle_server_command(command: ServerCommand) -> Result<()> {
 
 fn handle_dictation_command(command: DictationCommand) -> Result<()> {
     match command {
-        DictationCommand::Start => start_dictation(),
+        DictationCommand::Start(args) => start_dictation(&args),
         DictationCommand::Stop => stop_dictation(),
         DictationCommand::Status => check_dictation_status(),
-        DictationCommand::Debug => run_dictation_foreground(),
+        DictationCommand::Debug(args) => run_dictation_foreground(&args),
     }
 }
 
-fn run_dictation_foreground() -> Result<()> {
+fn run_dictation_foreground(args: &DictationStartArgs) -> Result<()> {
     let exe = std::env::current_exe()?;
     let exe_dir = exe.parent().context("failed to get exe directory")?;
     let dictation_bin = exe_dir.join("ears-dictation");
 
-    let status = ProcessCommand::new(&dictation_bin)
-        .status()
-        .context("failed to run ears-dictation")?;
+    let mut cmd = ProcessCommand::new(&dictation_bin);
+    append_dictation_args(&mut cmd, args);
+
+    let status = cmd.status().context("failed to run ears-dictation")?;
 
     if !status.success() {
         return Err(anyhow!("ears-dictation exited with error"));
@@ -1070,7 +1086,7 @@ fn read_dictation_pid() -> Result<Option<i32>> {
     Ok(contents.trim().parse::<i32>().ok())
 }
 
-fn start_dictation() -> Result<()> {
+fn start_dictation(args: &DictationStartArgs) -> Result<()> {
     if let Some(pid) = read_dictation_pid()? {
         if server::is_process_alive(pid) {
             return Err(anyhow!("ears dictation already running (pid {})", pid));
@@ -1103,6 +1119,7 @@ fn start_dictation() -> Result<()> {
     let dictation_bin = exe_dir.join("ears-dictation");
 
     let mut cmd = ProcessCommand::new(&dictation_bin);
+    append_dictation_args(&mut cmd, args);
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::null());
     cmd.stderr(Stdio::null());
@@ -1116,6 +1133,18 @@ fn start_dictation() -> Result<()> {
     println!("Use keyboard shortcut to toggle pause/resume (see config)");
 
     Ok(())
+}
+
+fn append_dictation_args(cmd: &mut ProcessCommand, args: &DictationStartArgs) {
+    if let Some(ref server) = args.server {
+        cmd.arg("--server").arg(server);
+    }
+    if let Some(ref lang) = args.lang {
+        cmd.arg("--lang").arg(lang);
+    }
+    if let Some(ref engine) = args.engine {
+        cmd.arg("--engine").arg(engine);
+    }
 }
 
 fn stop_dictation() -> Result<()> {
