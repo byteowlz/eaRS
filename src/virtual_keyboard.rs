@@ -4,7 +4,7 @@
 //! - Linux (Wayland/X11): uinput kernel interface
 //! - Other platforms: enigo fallback
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 
 #[cfg(target_os = "linux")]
 use uinput::{Device, event::keyboard};

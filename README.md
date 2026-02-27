@@ -186,6 +186,7 @@ crw-rw---- 1 root input 10, 223 Dec 12 10:00 /dev/uinput
 | Wrong group on /dev/uinput    | Create/update udev rule (step 3 above), then reload uinput                     |
 | uinput module not loaded      | Run `sudo modprobe uinput` and verify with `lsmod \| grep uinput`              |
 | Not in input group            | Run `groups \| grep input` - if missing, add yourself and **log out/in**       |
+| Dictation startup fails       | Check logs at `$XDG_STATE_HOME/ears/dictation.log` (default: `~/.local/state/ears/dictation.log`) |
 | Still not working after setup | Reboot to ensure all changes take effect                                       |
 
 ### How It Works

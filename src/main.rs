@@ -7,10 +7,11 @@ use ears::{
 use futures::{SinkExt, StreamExt};
 use serde_json::json;
 use std::{
+    fs::OpenOptions,
     io::{self, Write},
     process::{Command as ProcessCommand, Stdio},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -1051,6 +1052,21 @@ fn get_dictation_pid_file() -> std::path::PathBuf {
     state_dir.join("ears").join("dictation.pid")
 }
 
+fn get_dictation_log_file() -> std::path::PathBuf {
+    let state_dir = if let Ok(xdg_state) = std::env::var("XDG_STATE_HOME") {
+        if !xdg_state.is_empty() {
+            std::path::PathBuf::from(xdg_state)
+        } else {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            std::path::PathBuf::from(home).join(".local/state")
+        }
+    } else {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        std::path::PathBuf::from(home).join(".local/state")
+    };
+    state_dir.join("ears").join("dictation.log")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1154,16 +1170,72 @@ fn start_dictation(args: &DictationStartArgs) -> Result<()> {
     let exe_dir = exe.parent().context("failed to get exe directory")?;
     let dictation_bin = exe_dir.join("ears-dictation");
 
+    let log_path = get_dictation_log_file();
+    if let Some(parent) = log_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let log_file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&log_path)
+        .with_context(|| format!("failed to open dictation log file at {}", log_path.display()))?;
+    let log_file_err = log_file
+        .try_clone()
+        .context("failed to clone dictation log file handle")?;
+
     let mut cmd = ProcessCommand::new(&dictation_bin);
     append_dictation_args(&mut cmd, args);
     cmd.stdin(Stdio::null());
-    cmd.stdout(Stdio::null());
-    cmd.stderr(Stdio::null());
+    cmd.stdout(Stdio::from(log_file));
+    cmd.stderr(Stdio::from(log_file_err));
 
-    let child = cmd
+    let mut child = cmd
         .spawn()
         .context("failed to spawn ears-dictation process")?;
     let pid = child.id();
+
+    let startup_deadline = Instant::now() + Duration::from_secs(5);
+    let mut server_ready = !target_is_local;
+
+    while Instant::now() < startup_deadline {
+        if let Some(status) = child
+            .try_wait()
+            .context("failed to check ears-dictation process status")?
+        {
+            return Err(anyhow!(
+                "ears dictation exited early with status {}. See log at {}",
+                status,
+                log_path.display()
+            ));
+        }
+
+        if target_is_local {
+            if is_server_port_open(config.server.websocket_port) {
+                server_ready = true;
+                break;
+            }
+
+            match server::read_pid_file()? {
+                Some(server_pid) if server::is_process_alive(server_pid) => {}
+                _ => {
+                    return Err(anyhow!(
+                        "ears server failed to start. See log at {}",
+                        log_path.display()
+                    ));
+                }
+            }
+        } else {
+            break;
+        }
+
+        thread::sleep(Duration::from_millis(200));
+    }
+
+    if target_is_local && !server_ready {
+        println!("warning: ears server is still starting; dictation will connect when ready");
+        println!("dictation log: {}", log_path.display());
+    }
 
     println!("ears dictation started (pid {})", pid);
     println!("Use keyboard shortcut to toggle pause/resume (see config)");
