@@ -27,7 +27,7 @@ use ears::server::ParakeetDevice;
 use std::path::PathBuf;
 
 #[cfg(unix)]
-use libc::{SIGTERM, kill};
+use libc::{SIGINT, SIGTERM, kill};
 
 #[derive(Parser)]
 #[command(
@@ -1430,9 +1430,12 @@ fn stop_dictation() -> Result<()> {
             if server::is_process_alive(pid) {
                 #[cfg(unix)]
                 unsafe {
-                    if kill(pid, SIGTERM) != 0 {
+                    // Send SIGINT first so ears-dictation can run graceful
+                    // shutdown logic (including stop hooks). If it does not
+                    // exit quickly, fall back to SIGTERM.
+                    if kill(pid, SIGINT) != 0 {
                         return Err(io::Error::last_os_error())
-                            .context("failed to send SIGTERM to ears-dictation");
+                            .context("failed to send SIGINT to ears-dictation");
                     }
                 }
 
@@ -1443,11 +1446,30 @@ fn stop_dictation() -> Result<()> {
                     ));
                 }
 
-                for _ in 0..50 {
+                let mut stopped = false;
+                for _ in 0..20 {
                     if !server::is_process_alive(pid) {
+                        stopped = true;
                         break;
                     }
                     thread::sleep(Duration::from_millis(100));
+                }
+
+                if !stopped {
+                    #[cfg(unix)]
+                    unsafe {
+                        if kill(pid, SIGTERM) != 0 {
+                            return Err(io::Error::last_os_error())
+                                .context("failed to send SIGTERM to ears-dictation");
+                        }
+                    }
+
+                    for _ in 0..30 {
+                        if !server::is_process_alive(pid) {
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(100));
+                    }
                 }
             } else {
                 println!(
