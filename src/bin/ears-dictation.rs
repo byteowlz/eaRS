@@ -13,9 +13,9 @@ use rdev::{EventType, listen};
 use serde_json::Value;
 use std::fs;
 use std::io::Write;
-use std::process::Stdio;
 #[cfg(feature = "hooks")]
 use std::process::Command as ProcessCommand;
+use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -183,11 +183,8 @@ fn ensure_server_running(config: &AppConfig) -> Result<bool> {
     if let Ok(Some(pid)) = server::read_pid_file() {
         if server::is_process_alive(pid) {
             // Server process exists, wait for it to accept connections
-            let ready = wait_for_server_ready(
-                config.server.websocket_port,
-                30,
-                Duration::from_millis(500),
-            );
+            let ready =
+                wait_for_server_ready(config.server.websocket_port, 30, Duration::from_millis(500));
             return Ok(ready);
         }
         let _ = server::remove_pid_file();
@@ -219,11 +216,7 @@ fn ensure_server_running(config: &AppConfig) -> Result<bool> {
     eprint!("ears server starting (pid {})...", pid);
     std::io::stderr().flush().ok();
 
-    let ready = wait_for_server_ready(
-        config.server.websocket_port,
-        60,
-        Duration::from_millis(500),
-    );
+    let ready = wait_for_server_ready(config.server.websocket_port, 60, Duration::from_millis(500));
 
     if ready {
         eprintln!("\rears server started (pid {}) and ready        ", pid);
@@ -283,14 +276,8 @@ async fn main() -> Result<()> {
             match ensure_server_running(&config) {
                 Ok(_) => {}
                 Err(err) => {
-                    eprintln!(
-                        "warning: could not auto-start ears server: {}",
-                        err
-                    );
-                    eprintln!(
-                        "dictation will keep retrying the connection to {}",
-                        url
-                    );
+                    eprintln!("warning: could not auto-start ears server: {}", err);
+                    eprintln!("dictation will keep retrying the connection to {}", url);
                 }
             }
         }

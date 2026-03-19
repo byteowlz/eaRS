@@ -187,6 +187,7 @@ crw-rw---- 1 root input 10, 223 Dec 12 10:00 /dev/uinput
 | uinput module not loaded      | Run `sudo modprobe uinput` and verify with `lsmod \| grep uinput`              |
 | Not in input group            | Run `groups \| grep input` - if missing, add yourself and **log out/in**       |
 | Dictation startup fails       | Check logs at `$XDG_STATE_HOME/ears/dictation.log` (default: `~/.local/state/ears/dictation.log`) |
+| Server unreachable on start   | `ears dictation start` now fails fast if the endpoint is not stably reachable; verify configured `dictation.servers` host/port (or `--server` URL) |
 | Still not working after setup | Reboot to ensure all changes take effect                                       |
 
 ### How It Works

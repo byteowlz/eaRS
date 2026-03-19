@@ -9,12 +9,16 @@ use serde_json::json;
 use std::{
     fs::OpenOptions,
     io::{self, Write},
+    net::{TcpStream, ToSocketAddrs},
     process::{Command as ProcessCommand, Stdio},
     thread,
     time::{Duration, Instant},
 };
 use tokio::sync::mpsc;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{Message, http::Uri},
+};
 
 use ears::server::EngineKind;
 #[cfg(feature = "parakeet")]
@@ -407,8 +411,10 @@ fn stop_server() -> Result<()> {
             let is_local = match dictation_url.as_deref() {
                 Some(url) => {
                     let lower = url.to_lowercase();
-                    lower.contains("localhost") || lower.contains("127.0.0.1")
-                        || lower.contains("0.0.0.0") || lower.contains("::1")
+                    lower.contains("localhost")
+                        || lower.contains("127.0.0.1")
+                        || lower.contains("0.0.0.0")
+                        || lower.contains("::1")
                 }
                 // Legacy pid file without URL -- assume local
                 None => true,
@@ -1123,7 +1129,10 @@ fn read_dictation_pid_info() -> Result<(Option<i32>, Option<String>)> {
     let contents = std::fs::read_to_string(&pid_file)?;
     let mut lines = contents.lines();
     let pid = lines.next().and_then(|s| s.trim().parse::<i32>().ok());
-    let url = lines.next().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let url = lines
+        .next()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     Ok((pid, url))
 }
 
@@ -1140,30 +1149,41 @@ fn start_dictation(args: &DictationStartArgs) -> Result<()> {
         let _ = std::fs::remove_file(get_dictation_pid_file());
     }
 
-    // Only auto-start the local server when no remote server is specified.
-    // Resolve the target server to decide: if it points at localhost we may
-    // need to start the server, otherwise it is remote and we skip this.
     let config = AppConfig::load()?;
-    let target_is_local = is_dictation_target_local(args.server.as_deref(), &config);
+    let target = resolve_dictation_target(args.server.as_deref(), &config)?;
+    let probe_host = dictation_probe_host(&target.host, target.is_local);
 
-    if target_is_local {
+    if target.is_local {
         let server_running = match server::read_pid_file()? {
             Some(pid) if server::is_process_alive(pid) => {
-                is_server_port_open(config.server.websocket_port)
+                is_tcp_endpoint_open(&probe_host, target.port)
             }
             _ => false,
         };
 
         if !server_running {
             println!("ears server is not running, starting it first...");
-            let ready = ensure_server_running(&config)?;
-            if !ready {
-                println!("warning: server started but may still be loading the model");
-                println!("dictation will connect once the server is ready");
-            } else {
-                println!("ears server is ready");
-            }
+            let _ = ensure_server_running(&config)?;
         }
+
+        if !wait_for_tcp_endpoint_ready(&probe_host, target.port, 40, Duration::from_millis(250)) {
+            return Err(anyhow!(
+                "ears server is not reachable at {}:{}",
+                probe_host,
+                target.port
+            ));
+        }
+
+        println!("ears server is ready at {}", target.url);
+    } else {
+        println!("checking remote dictation server at {}...", target.url);
+        if !wait_for_tcp_endpoint_ready(&probe_host, target.port, 12, Duration::from_millis(250)) {
+            return Err(anyhow!(
+                "remote dictation server is not reachable at {}",
+                target.url
+            ));
+        }
+        println!("remote dictation server is reachable");
     }
 
     let exe = std::env::current_exe()?;
@@ -1179,7 +1199,12 @@ fn start_dictation(args: &DictationStartArgs) -> Result<()> {
         .write(true)
         .truncate(true)
         .open(&log_path)
-        .with_context(|| format!("failed to open dictation log file at {}", log_path.display()))?;
+        .with_context(|| {
+            format!(
+                "failed to open dictation log file at {}",
+                log_path.display()
+            )
+        })?;
     let log_file_err = log_file
         .try_clone()
         .context("failed to clone dictation log file handle")?;
@@ -1195,8 +1220,15 @@ fn start_dictation(args: &DictationStartArgs) -> Result<()> {
         .context("failed to spawn ears-dictation process")?;
     let pid = child.id();
 
-    let startup_deadline = Instant::now() + Duration::from_secs(5);
-    let mut server_ready = !target_is_local;
+    let startup_deadline = Instant::now()
+        + if target.is_local {
+            Duration::from_secs(5)
+        } else {
+            Duration::from_secs(3)
+        };
+    let required_consecutive_successes = if target.is_local { 2 } else { 3 };
+    let mut consecutive_successes = 0usize;
+    let mut endpoint_ready = false;
 
     while Instant::now() < startup_deadline {
         if let Some(status) = child
@@ -1210,12 +1242,17 @@ fn start_dictation(args: &DictationStartArgs) -> Result<()> {
             ));
         }
 
-        if target_is_local {
-            if is_server_port_open(config.server.websocket_port) {
-                server_ready = true;
+        if is_tcp_endpoint_open(&probe_host, target.port) {
+            consecutive_successes += 1;
+            if consecutive_successes >= required_consecutive_successes {
+                endpoint_ready = true;
                 break;
             }
+        } else {
+            consecutive_successes = 0;
+        }
 
+        if target.is_local {
             match server::read_pid_file()? {
                 Some(server_pid) if server::is_process_alive(server_pid) => {}
                 _ => {
@@ -1225,16 +1262,23 @@ fn start_dictation(args: &DictationStartArgs) -> Result<()> {
                     ));
                 }
             }
-        } else {
-            break;
         }
 
         thread::sleep(Duration::from_millis(200));
     }
 
-    if target_is_local && !server_ready {
-        println!("warning: ears server is still starting; dictation will connect when ready");
-        println!("dictation log: {}", log_path.display());
+    if !endpoint_ready {
+        if target.is_local {
+            return Err(anyhow!(
+                "ears server did not become stably reachable at {}:{}",
+                probe_host,
+                target.port
+            ));
+        }
+        return Err(anyhow!(
+            "remote dictation server at {} became unavailable during startup",
+            target.url
+        ));
     }
 
     println!("ears dictation started (pid {})", pid);
@@ -1255,42 +1299,129 @@ fn append_dictation_args(cmd: &mut ProcessCommand, args: &DictationStartArgs) {
     }
 }
 
-/// Determine whether the dictation target is a local server that we can
-/// auto-start. Returns `true` when no explicit server is given (defaults to
-/// local) or when the resolved server host is localhost / 127.0.0.1.
-fn is_dictation_target_local(server_arg: Option<&str>, config: &AppConfig) -> bool {
-    let host = match server_arg {
-        // Direct WebSocket URL on the command line
-        Some(url) if url.starts_with("ws://") || url.starts_with("wss://") => {
-            // Extract host from ws://host:port/...
-            url.split("://")
-                .nth(1)
-                .and_then(|rest| rest.split('/').next())
-                .and_then(|host_port| host_port.split(':').next())
-                .unwrap_or("")
-                .to_string()
+#[derive(Debug, Clone)]
+struct DictationTarget {
+    url: String,
+    host: String,
+    port: u16,
+    is_local: bool,
+}
+
+fn resolve_dictation_target(
+    server_arg: Option<&str>,
+    config: &AppConfig,
+) -> Result<DictationTarget> {
+    match server_arg {
+        Some(raw) if raw.starts_with("ws://") || raw.starts_with("wss://") => {
+            let (host, port) = parse_ws_host_port(raw)?;
+            Ok(DictationTarget {
+                url: raw.to_string(),
+                is_local: is_local_host(&host),
+                host,
+                port,
+            })
         }
-        // Server alias -- look up in config
         Some(alias) => {
-            config
+            let server_cfg = config.dictation.servers.get(alias).ok_or_else(|| {
+                let mut available: Vec<_> = config.dictation.servers.keys().cloned().collect();
+                available.sort();
+                anyhow!(
+                    "Unknown server alias '{}'. Available: {}",
+                    alias,
+                    available.join(", ")
+                )
+            })?;
+            Ok(DictationTarget {
+                url: server_cfg.ws_url(),
+                host: server_cfg.host.clone(),
+                port: server_cfg.port,
+                is_local: is_local_host(&server_cfg.host),
+            })
+        }
+        None => {
+            let alias = &config.dictation.default_server;
+            let server_cfg = config
                 .dictation
                 .servers
                 .get(alias)
-                .map(|s| s.host.clone())
-                .unwrap_or_default()
+                .ok_or_else(|| anyhow!("Default server '{}' not found in config", alias))?;
+            Ok(DictationTarget {
+                url: server_cfg.ws_url(),
+                host: server_cfg.host.clone(),
+                port: server_cfg.port,
+                is_local: is_local_host(&server_cfg.host),
+            })
         }
-        // No argument -- use default server from config
-        None => {
-            config
-                .dictation
-                .servers
-                .get(&config.dictation.default_server)
-                .map(|s| s.host.clone())
-                .unwrap_or_else(|| "127.0.0.1".to_string())
-        }
+    }
+}
+
+fn parse_ws_host_port(url: &str) -> Result<(String, u16)> {
+    let uri: Uri = url
+        .parse()
+        .with_context(|| format!("invalid server URL: {}", url))?;
+
+    let scheme = uri
+        .scheme_str()
+        .ok_or_else(|| anyhow!("missing URL scheme in {}", url))?;
+    if scheme != "ws" && scheme != "wss" {
+        return Err(anyhow!("unsupported URL scheme '{}' in {}", scheme, url));
+    }
+
+    let host = uri
+        .host()
+        .ok_or_else(|| anyhow!("missing host in {}", url))?
+        .to_string();
+    let port = uri
+        .port_u16()
+        .unwrap_or_else(|| if scheme == "wss" { 443 } else { 80 });
+
+    Ok((host, port))
+}
+
+fn is_local_host(host: &str) -> bool {
+    matches!(
+        host.to_ascii_lowercase().as_str(),
+        "localhost" | "127.0.0.1" | "::1" | "0.0.0.0" | "::" | "[::1]" | "[::]"
+    )
+}
+
+fn dictation_probe_host(host: &str, is_local: bool) -> String {
+    if !is_local {
+        return host.to_string();
+    }
+
+    match host.to_ascii_lowercase().as_str() {
+        "::" | "[::]" | "::1" | "[::1]" | "0.0.0.0" => "127.0.0.1".to_string(),
+        _ => host.to_string(),
+    }
+}
+
+fn is_tcp_endpoint_open(host: &str, port: u16) -> bool {
+    let timeout = Duration::from_millis(800);
+    let addr = format!("{}:{}", host, port);
+    let addrs = match addr.to_socket_addrs() {
+        Ok(addrs) => addrs,
+        Err(_) => return false,
     };
-    let h = host.to_lowercase();
-    h == "localhost" || h == "127.0.0.1" || h == "::1" || h == "0.0.0.0"
+
+    addrs
+        .into_iter()
+        .any(|sock_addr| TcpStream::connect_timeout(&sock_addr, timeout).is_ok())
+}
+
+fn wait_for_tcp_endpoint_ready(
+    host: &str,
+    port: u16,
+    max_attempts: usize,
+    poll_interval: Duration,
+) -> bool {
+    for _ in 0..max_attempts {
+        if is_tcp_endpoint_open(host, port) {
+            return true;
+        }
+        thread::sleep(poll_interval);
+    }
+    false
 }
 
 fn stop_dictation() -> Result<()> {
