@@ -151,7 +151,8 @@ check-deps:
     
     # Detect OS
     if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        # Linux: requires system sentencepiece to avoid protobuf conflicts
+        # Linux: requires system sentencepiece to avoid protobuf conflicts.
+        # Also requires X11 dev libraries for the rdev crate (input monitoring).
         if command -v apt-get &> /dev/null; then
             # Debian/Ubuntu
             if ! pkg-config --exists sentencepiece; then
@@ -161,6 +162,18 @@ check-deps:
             else
                 echo "✓ sentencepiece already installed"
             fi
+            if ! pkg-config --exists xi; then
+                echo "Installing libxi-dev (required by rdev)..."
+                sudo apt-get install -y libxi-dev
+            else
+                echo "✓ libxi-dev already installed"
+            fi
+            if ! pkg-config --exists xtst; then
+                echo "Installing libxtst-dev (required by rdev)..."
+                sudo apt-get install -y libxtst-dev
+            else
+                echo "✓ libxtst-dev already installed"
+            fi
         elif command -v dnf &> /dev/null; then
             # Fedora/RHEL
             if ! pkg-config --exists sentencepiece; then
@@ -168,6 +181,18 @@ check-deps:
                 sudo dnf install -y sentencepiece-devel
             else
                 echo "✓ sentencepiece already installed"
+            fi
+            if ! pkg-config --exists xi; then
+                echo "Installing libXi-devel (required by rdev)..."
+                sudo dnf install -y libXi-devel
+            else
+                echo "✓ libXi-devel already installed"
+            fi
+            if ! pkg-config --exists xtst; then
+                echo "Installing libXtst-devel (required by rdev)..."
+                sudo dnf install -y libXtst-devel
+            else
+                echo "✓ libXtst-devel already installed"
             fi
         elif command -v pacman &> /dev/null; then
             # Arch Linux
@@ -177,8 +202,23 @@ check-deps:
             else
                 echo "✓ sentencepiece already installed"
             fi
+            if ! pkg-config --exists xi; then
+                echo "Installing libxi (required by rdev)..."
+                sudo pacman -S --noconfirm libxi
+            else
+                echo "✓ libxi already installed"
+            fi
+            if ! pkg-config --exists xtst; then
+                echo "Installing libxtst (required by rdev)..."
+                sudo pacman -S --noconfirm libxtst
+            else
+                echo "✓ libxtst already installed"
+            fi
         else
-            echo "⚠ Unsupported Linux distribution. Please install sentencepiece manually."
+            echo "⚠ Unsupported Linux distribution. Please install manually:"
+            echo "  - sentencepiece dev library"
+            echo "  - libxi dev library   (xi.pc, required by rdev)"
+            echo "  - libxtst dev library (xtst.pc, required by rdev)"
             exit 1
         fi
     elif [[ "$OSTYPE" == "darwin"* ]]; then
