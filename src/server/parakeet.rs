@@ -255,12 +255,18 @@ fn run_parakeet_session(
     let mut buffer_24k: Vec<f32> = Vec::new();
     let mut buffer_offset_24k: usize = 0;
     let mut total_samples_24k: usize = 0;
-    let mut previous_words: Vec<WordTimestamp> = Vec::new();
+
+    // Accumulated committed words across all chunks (the full transcript so far)
+    let mut committed_words: Vec<WordTimestamp> = Vec::new();
+    // Track the audio time boundary: everything before this is "committed"
+    let mut committed_until: f64 = 0.0;
 
     let mut vad_state = VadState::new(config.options.vad);
     let vad_timeout = config.options.vad_timeout;
     let mut last_pause_sent: Option<Instant> = None;
     let mut stop_requested = false;
+
+    let overlap_duration_secs = config.overlap_samples_24k as f64 / SERVER_SAMPLE_RATE as f64;
 
     loop {
         let mut received_audio = false;
@@ -292,13 +298,21 @@ fn run_parakeet_session(
             }
         }
 
-        let should_transcribe = buffer_24k.len() >= config.chunk_samples_24k
-            || (stop_requested && !buffer_24k.is_empty());
+        let should_transcribe = (buffer_24k.len() >= config.chunk_samples_24k
+            || (stop_requested && !buffer_24k.is_empty()))
+            && buffer_24k.len() >= 1600; // minimum ~67ms at 24kHz, rubato resampler needs sufficient input
 
         if should_transcribe {
-            let start_time = buffer_offset_24k as f64 / SERVER_SAMPLE_RATE as f64;
+            let chunk_start_time = buffer_offset_24k as f64 / SERVER_SAMPLE_RATE as f64;
+
+            // Only transcribe up to chunk_samples_24k of audio. If the buffer grew
+            // beyond this (because previous transcription returned empty), just use
+            // the first chunk_samples_24k -- the model works best with ~3s chunks.
+            let transcribe_len = buffer_24k.len().min(config.chunk_samples_24k);
+            let to_transcribe = &buffer_24k[..transcribe_len];
+
             let resampled =
-                match kaudio::resample(&buffer_24k, SERVER_SAMPLE_RATE, PARAKEET_SAMPLE_RATE) {
+                match kaudio::resample(to_transcribe, SERVER_SAMPLE_RATE, PARAKEET_SAMPLE_RATE) {
                     Ok(res) => res,
                     Err(err) => {
                         eprintln!("[parakeet] resample failed: {err}");
@@ -307,10 +321,13 @@ fn run_parakeet_session(
                     }
                 };
 
+            let chunk_duration_secs = resampled.len() as f64 / PARAKEET_SAMPLE_RATE as f64;
+
             eprintln!(
-                "[parakeet] chunk {:.2}s rms {:.4}",
-                resampled.len() as f64 / PARAKEET_SAMPLE_RATE as f64,
-                rms(&resampled)
+                "[parakeet] chunk {:.2}s rms {:.4} (committed_until={:.2}s)",
+                chunk_duration_secs,
+                rms(&resampled),
+                committed_until,
             );
 
             let has_voice =
@@ -363,60 +380,170 @@ fn run_parakeet_session(
                             .into_iter()
                             .map(|w| WordTimestamp {
                                 word: w.word,
-                                start_time: start_time + w.start_time as f64,
-                                end_time: Some(start_time + w.end_time as f64),
+                                start_time: chunk_start_time + w.start_time as f64,
+                                end_time: Some(chunk_start_time + w.end_time as f64),
                             })
                             .collect::<Vec<_>>();
                         (result.text, shifted_words)
                     })
             };
 
+            let mut got_words = false;
             match transcription {
-                Ok((text, words)) => {
-                    let new_words = words.clone();
-                    let common_prefix = common_prefix_len(&previous_words, &new_words);
-                    for word in new_words.iter().skip(common_prefix) {
-                        sink.handle_message(WebSocketMessage::Word {
-                            word: word.word.clone(),
-                            start_time: word.start_time,
-                            end_time: None,
-                        });
+                Ok((_text, ref chunk_words)) => {
+                    // Parakeet is a non-streaming model: each transcription covers the ENTIRE buffer.
+                    // Strategy: REPLACE the full transcript on every chunk, but only emit the
+                    // delta (new words) to the client. The last chunk's output IS the final result.
+                    //
+                    // Overlap handling: since each chunk includes the last N seconds of previous audio,
+                    // the words in the overlap region should match what we already committed.
+                    // We skip any overlap words that match the tail of committed_words.
+
+                    if !chunk_words.is_empty() {
+                        got_words = true;
+                        let overlap_end = if committed_until > 0.0 {
+                            chunk_start_time + overlap_duration_secs
+                        } else {
+                            0.0 // First chunk: no overlap
+                        };
+
+                        eprintln!(
+                            "[parakeet] raw: {} words, overlap_end={:.2}s, words: {}",
+                            chunk_words.len(),
+                            overlap_end,
+                            chunk_words.iter().map(|w| w.word.as_str()).collect::<Vec<_>>().join(" "),
+                        );
+
+                        // Split into overlap (already-seen audio) and new audio
+                        let (overlap_words, new_words): (Vec<_>, Vec<_>) = chunk_words
+                            .iter()
+                            .partition(|w| w.start_time < overlap_end);
+
+                        let mut to_emit: Vec<WordTimestamp> = Vec::new();
+
+                        // For overlap words: deduplicate against committed tail
+                        if !overlap_words.is_empty() {
+                            if committed_words.is_empty() {
+                                // First chunk with overlap words (shouldn't happen normally)
+                                to_emit.extend(overlap_words.iter().cloned().cloned());
+                            } else {
+                                // Match against the tail of committed words
+                                let tail_start = if committed_words.len() > overlap_words.len() * 3 {
+                                    committed_words.len() - overlap_words.len() * 3
+                                } else {
+                                    0
+                                };
+                                let committed_tail: Vec<&str> = committed_words[tail_start..]
+                                    .iter()
+                                    .map(|w| w.word.as_str())
+                                    .collect();
+                                let overlap_strs: Vec<&str> = overlap_words
+                                    .iter()
+                                    .map(|w| w.word.as_str())
+                                    .collect();
+
+                                let ratio = word_match_ratio(&committed_tail, &overlap_strs);
+
+                                if ratio < 0.4 {
+                                    // Poor match: the new transcription corrected something.
+                                    // Trust the newer one: remove old committed words in overlap
+                                    // time range and emit the new ones instead.
+                                    let before: Vec<WordTimestamp> = committed_words
+                                        .iter()
+                                        .filter(|w| w.start_time < chunk_start_time)
+                                        .cloned()
+                                        .collect();
+                                    let removed = committed_words.len() - before.len();
+                                    if removed > 0 {
+                                        eprintln!(
+                                            "[parakeet] overlap correction (ratio={:.2}): -{} +{} words",
+                                            ratio, removed, overlap_words.len()
+                                        );
+                                    }
+                                    committed_words = before;
+                                    to_emit.extend(overlap_words.iter().cloned().cloned());
+                                }
+                                // else: good match, overlap words are duplicates -> skip
+                            }
+                        }
+
+                        // All new-region words are always emitted
+                        to_emit.extend(new_words.iter().cloned().cloned());
+
+                        // Send to client
+                        for word in &to_emit {
+                            sink.handle_message(WebSocketMessage::Word {
+                                word: word.word.clone(),
+                                start_time: word.start_time,
+                                end_time: None,
+                            });
+                        }
+
+                        committed_words.extend(to_emit);
+
+                        let chunk_end_time = chunk_start_time + chunk_duration_secs;
+                        committed_until = chunk_end_time - overlap_duration_secs;
+
+                        eprintln!(
+                            "[parakeet] chunk done: {} total committed words, committed_until={:.2}s",
+                            committed_words.len(),
+                            committed_until,
+                        );
+                    } else {
+                        eprintln!(
+                            "[parakeet] chunk produced 0 words (silence/garbage?), NOT trimming buffer"
+                        );
                     }
-                    previous_words = new_words.clone();
 
                     if stop_requested {
+                        let final_text = committed_words
+                            .iter()
+                            .map(|w| w.word.clone())
+                            .collect::<Vec<_>>()
+                            .join(" ");
                         sink.handle_message(WebSocketMessage::Final {
-                            text,
-                            words: new_words,
+                            text: final_text,
+                            words: committed_words.clone(),
                         });
                         sink.close();
                         break;
                     }
                 }
-                Err(err) => {
+                Err(ref err) => {
                     eprintln!("[parakeet] transcription failed: {err}");
                 }
             }
 
-            if buffer_24k.len() > config.overlap_samples_24k {
-                let keep = config.overlap_samples_24k;
-                buffer_offset_24k = total_samples_24k.saturating_sub(keep);
-                buffer_24k = buffer_24k.split_off(buffer_24k.len() - keep);
+            // Trim the transcribed portion from the buffer, keeping overlap for next chunk.
+            // We transcribed buffer[0..transcribe_len], so we remove transcribe_len - overlap
+            // samples from the front (or as much as we can).
+            // CRITICAL: Only trim if transcription produced words. If Parakeet returned empty,
+            // trimming would permanently discard untranscribed audio — the root cause of missing
+            // words in our v3 dedup results. Instead, keep the audio and retry on the next chunk
+            // (the overlap region naturally re-includes it).
+            if got_words {
+                let consumed = transcribe_len.saturating_sub(config.overlap_samples_24k);
+                if consumed > 0 && buffer_24k.len() > consumed {
+                    buffer_24k = buffer_24k.split_off(consumed);
+                    buffer_offset_24k = total_samples_24k.saturating_sub(buffer_24k.len());
+                }
             } else {
-                buffer_offset_24k = total_samples_24k.saturating_sub(buffer_24k.len());
+                eprintln!(
+                    "[parakeet] NOT trimming buffer: transcription produced 0 words, will retry same audio in next chunk"
+                );
             }
         }
 
         if !received_audio && stop_requested {
-            if !previous_words.is_empty() {
-                let final_text = previous_words
+            if !committed_words.is_empty() {
+                let final_text = committed_words
                     .iter()
                     .map(|w| w.word.clone())
                     .collect::<Vec<_>>()
                     .join(" ");
                 sink.handle_message(WebSocketMessage::Final {
                     text: final_text,
-                    words: previous_words.clone(),
+                    words: committed_words.clone(),
                 });
             }
             sink.close();
@@ -477,12 +604,45 @@ fn process_vad_frames(
     voice
 }
 
-fn common_prefix_len(a: &[WordTimestamp], b: &[WordTimestamp]) -> usize {
-    let mut idx = 0;
-    while idx < a.len() && idx < b.len() && a[idx].word == b[idx].word {
-        idx += 1;
+/// Word match ratio between two word sequences using LCS.
+/// Returns a value between 0.0 (no match) and 1.0 (perfect match).
+/// Used to determine if overlap words are duplicates of committed words.
+fn word_match_ratio(a: &[&str], b: &[&str]) -> f64 {
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
     }
-    idx
+    let lcs = lcs_len(a, b);
+    let shorter = a.len().min(b.len());
+    lcs as f64 / shorter as f64
+}
+
+/// Length of the Longest Common Subsequence between two word sequences.
+/// Space-optimized DP: O(min(m,n)) space.
+fn lcs_len(a: &[&str], b: &[&str]) -> usize {
+    if a.is_empty() || b.is_empty() {
+        return 0;
+    }
+    // Make b the shorter one for space optimization
+    let (longer, shorter) = if a.len() >= b.len() { (a, b) } else { (b, a) };
+    let m = longer.len();
+    let n = shorter.len();
+
+    let mut prev = vec![0usize; n + 1];
+    let mut curr = vec![0usize; n + 1];
+
+    for i in 1..=m {
+        for j in 1..=n {
+            if longer[i - 1] == shorter[j - 1] {
+                curr[j] = prev[j - 1] + 1;
+            } else {
+                curr[j] = curr[j - 1].max(prev[j]);
+            }
+        }
+        std::mem::swap(&mut prev, &mut curr);
+        curr.fill(0);
+    }
+
+    prev[n]
 }
 
 fn current_timestamp() -> f64 {

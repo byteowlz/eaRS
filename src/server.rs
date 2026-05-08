@@ -604,19 +604,29 @@ fn handle_client_message(
                         }
                     }
                     crate::WebSocketCommand::SetEngine { engine } => {
+                        eprintln!("[ears-server] SetEngine requested: {engine}, current: {:?}", *current_engine);
                         if let Some(kind) = EngineKind::from_str(&engine) {
                             if !engine_manager.has(kind) {
+                                eprintln!("[ears-server] SetEngine: engine {engine} not available");
                                 send_error(msg_tx, "engine not available");
                             } else if kind != *current_engine {
-                                if let Some(new_session) =
-                                    allocate_session(engine_manager, kind, sink.clone(), msg_tx)?
-                                {
-                                    if let Some(old) = session.take() {
-                                        old.request_stop();
+                                eprintln!("[ears-server] SetEngine: switching to {kind:?}...");
+                                match allocate_session(engine_manager, kind, sink.clone(), msg_tx) {
+                                    Ok(Some(new_session)) => {
+                                        if let Some(old) = session.take() {
+                                            old.request_stop();
+                                        }
+                                        *session = Some(new_session);
+                                        *current_engine = kind;
+                                        send_engine_changed(sink, kind);
+                                        eprintln!("[ears-server] SetEngine: successfully switched to {kind:?}");
                                     }
-                                    *session = Some(new_session);
-                                    *current_engine = kind;
-                                    send_engine_changed(sink, kind);
+                                    Ok(None) => {
+                                        eprintln!("[ears-server] SetEngine: allocate_session returned None (busy?)");
+                                    }
+                                    Err(err) => {
+                                        eprintln!("[ears-server] SetEngine: allocate_session error: {err}");
+                                    }
                                 }
                             } else {
                                 send_engine_changed(sink, kind);
