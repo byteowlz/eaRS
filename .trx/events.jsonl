@@ -1,0 +1,2 @@
+{"id":"evt_ezp34qft","issue_id":"trx-xv0t","action":"closed","timestamp":"2026-05-08T11:27:11.330204917Z","note":"Superseded by trx for sherpa-onnx engine. Moonshine is English-only and doesn't fit the multilingual streaming goal; sherpa-onnx covers the same lightweight-streaming use case with multilingual models (Zipformer2, Canary-180m-flash en/es/de/fr) and mature Rust bindings."}
+{"id":"evt_8dap14w0","issue_id":"trx-hv0w","action":"created","timestamp":"2026-05-08T11:27:45.810502544Z"}
