@@ -553,6 +553,12 @@ fn build_server_options(args: &ServerStartArgs) -> Result<server::ServerOptions>
         parakeet_overlap_seconds: args.parakeet_overlap_seconds,
         #[cfg(feature = "parakeet")]
         parakeet_noise_gate_rms: args.parakeet_noise_gate_rms,
+        #[cfg(feature = "sherpa")]
+        sherpa_models: Vec::new(),
+        #[cfg(feature = "sherpa")]
+        sherpa_num_threads: 1,
+        #[cfg(feature = "sherpa")]
+        sherpa_provider: "cpu".to_string(),
     })
 }
 

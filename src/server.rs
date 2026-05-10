@@ -13,12 +13,16 @@ use crate::{Model, TranscriptionOptions, TranscriptionSink, WebSocketMessage};
 use engine::{EngineManager, EngineSession, send_engine_changed};
 #[cfg(feature = "parakeet")]
 use parakeet::{ParakeetEngine, ParakeetEngineConfig};
+#[cfg(feature = "sherpa")]
+use sherpa::{SherpaEngine, SherpaEngineConfig};
 
 mod engine;
 pub mod listener;
 #[cfg(feature = "parakeet")]
 mod parakeet;
 mod parallel;
+#[cfg(feature = "sherpa")]
+mod sherpa;
 pub use engine::EngineKind;
 #[cfg(feature = "parakeet")]
 pub use parakeet::ParakeetDevice;
@@ -45,6 +49,12 @@ pub struct ServerOptions {
     pub parakeet_overlap_seconds: f32,
     #[cfg(feature = "parakeet")]
     pub parakeet_noise_gate_rms: f32,
+    #[cfg(feature = "sherpa")]
+    pub sherpa_models: Vec<(String, PathBuf)>,
+    #[cfg(feature = "sherpa")]
+    pub sherpa_num_threads: i32,
+    #[cfg(feature = "sherpa")]
+    pub sherpa_provider: String,
 }
 
 pub async fn run(options: ServerOptions) -> Result<()> {
@@ -111,6 +121,22 @@ pub async fn run(options: ServerOptions) -> Result<()> {
             }
             Err(err) => {
                 eprintln!("[ears-server] failed to initialize parakeet engine: {err:#}");
+            }
+        }
+    }
+
+    #[cfg(feature = "sherpa")]
+    {
+        if !options.sherpa_models.is_empty() {
+            let mut sherpa_cfg = SherpaEngineConfig::defaults_for(options.sherpa_models.clone());
+            sherpa_cfg.num_threads = options.sherpa_num_threads.max(1);
+            sherpa_cfg.provider = options.sherpa_provider.clone();
+
+            match SherpaEngine::load(sherpa_cfg, options.transcription.clone(), batch_size) {
+                Ok(engine) => engine_manager.register(Arc::new(engine)),
+                Err(err) => {
+                    eprintln!("[ears-server] failed to initialize sherpa engine: {err:#}");
+                }
             }
         }
     }
@@ -604,7 +630,10 @@ fn handle_client_message(
                         }
                     }
                     crate::WebSocketCommand::SetEngine { engine } => {
-                        eprintln!("[ears-server] SetEngine requested: {engine}, current: {:?}", *current_engine);
+                        eprintln!(
+                            "[ears-server] SetEngine requested: {engine}, current: {:?}",
+                            *current_engine
+                        );
                         if let Some(kind) = EngineKind::from_str(&engine) {
                             if !engine_manager.has(kind) {
                                 eprintln!("[ears-server] SetEngine: engine {engine} not available");
@@ -619,13 +648,19 @@ fn handle_client_message(
                                         *session = Some(new_session);
                                         *current_engine = kind;
                                         send_engine_changed(sink, kind);
-                                        eprintln!("[ears-server] SetEngine: successfully switched to {kind:?}");
+                                        eprintln!(
+                                            "[ears-server] SetEngine: successfully switched to {kind:?}"
+                                        );
                                     }
                                     Ok(None) => {
-                                        eprintln!("[ears-server] SetEngine: allocate_session returned None (busy?)");
+                                        eprintln!(
+                                            "[ears-server] SetEngine: allocate_session returned None (busy?)"
+                                        );
                                     }
                                     Err(err) => {
-                                        eprintln!("[ears-server] SetEngine: allocate_session error: {err}");
+                                        eprintln!(
+                                            "[ears-server] SetEngine: allocate_session error: {err}"
+                                        );
                                     }
                                 }
                             } else {

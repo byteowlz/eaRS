@@ -40,8 +40,8 @@ moshi = "0.6.4"
 # (both bundle protobuf-lite, and the linker uses the first definition)
 prkt = { path = "prkt", optional = true }
 # Pin ort to compatible version - prkt needs ort 2.0.0-rc.9/rc.10 API
-ort = { version = "=2.0.0-rc.10", optional = true }
-ort-sys = { version = "=2.0.0-rc.10", optional = true, features = ["download-binaries"] }
+ort = { version = "=2.0.0-rc.10", optional = true, features = ["load-dynamic"] }
+ort-sys = { version = "=2.0.0-rc.10", optional = true, features = ["download-binaries", "load-dynamic"] }
 serde = { version = "1.0.210", features = ["derive"] }
 serde_json = "1.0.115"
 toml = "0.9"
@@ -62,6 +62,7 @@ ctrlc = { version = "3.4", features = ["termination"] }
 cudarc = { version = "0.17", optional = true, features = ["cuda-version-from-build-system"] }
 notifica = "3.0.2"
 webrtc-vad = { version = "0.4", optional = true }
+sherpa-onnx = { version = "1.13", optional = true, default-features = false, features = ["shared"] }
 
 # Platform-specific sentencepiece configuration
 # All platforms: compile from source (static linking).
@@ -80,6 +81,7 @@ hooks = []
 
 # Engines
 parakeet = ["dep:prkt", "dep:ort", "dep:ort-sys", "dep:webrtc-vad"]
+sherpa = ["dep:sherpa-onnx"]
 
 # Acceleration (shared flags)
 nvidia = ["dep:cudarc", "candle/cuda", "candle-nn/cuda", "prkt/cuda"]

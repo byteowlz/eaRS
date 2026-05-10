@@ -132,20 +132,26 @@ async def stream_to_engine(
     ws_url: str,
     chunk_duration_ms: int = 80,
     language: Optional[str] = None,
+    switch_at: Optional[List[Tuple[float, str]]] = None,
 ) -> StreamResult:
-    """Stream audio to a specific engine and collect results."""
+    """Stream audio to a specific engine and collect results.
+
+    `switch_at` is a list of (audio_seconds, lang_code) — at each timestamp
+    (relative to start of audio) the script issues a `set_language` over the WS.
+    """
 
     result = StreamResult(engine=engine)
     chunk_samples = int(sr * chunk_duration_ms / 1000)
+    switches = sorted(switch_at or [], key=lambda x: x[0])
 
     try:
         async with websockets.connect(ws_url, max_size=None) as ws:
             # Switch to requested engine BEFORE any audio
-            await ws.send(json.dumps({"type": "set_engine", "engine": engine}))
-            
+            await ws.send(json.dumps({"type": "setengine", "engine": engine}))
+
             # Set language if specified
             if language:
-                await ws.send(json.dumps({"type": "set_language", "lang": language}))
+                await ws.send(json.dumps({"type": "setlanguage", "lang": language}))
 
             # Start streaming
             result.stream_start = time.time()
@@ -153,7 +159,14 @@ async def stream_to_engine(
 
             # Send audio and receive transcriptions concurrently
             async def send_audio():
+                next_switch_idx = 0
                 for i in range(0, len(audio), chunk_samples):
+                    audio_t = i / sr
+                    while next_switch_idx < len(switches) and switches[next_switch_idx][0] <= audio_t:
+                        t, lang = switches[next_switch_idx]
+                        print(f"  [bench] switch_language at audio t={audio_t:.2f}s -> {lang}")
+                        await ws.send(json.dumps({"type": "setlanguage", "lang": lang}))
+                        next_switch_idx += 1
                     chunk = audio[i:i+chunk_samples]
                     if len(chunk) == 0:
                         break
@@ -224,7 +237,7 @@ def print_result(result: StreamResult, reference: Optional[str], audio_duration:
         print(f"  ERRORS: {'; '.join(result.errors)}")
         return
 
-    print(f"  Transcript: {result.final_text[:200]}{'...' if len(result.final_text) > 200 else ''}")
+    print(f"  Transcript: {result.final_text}")
 
     # Duplication analysis
     dups = result.duplicated_words
@@ -296,8 +309,19 @@ async def main():
     parser.add_argument("--audio", required=True, help="Audio file to transcribe")
     parser.add_argument("--reference", default=None, help="Ground truth text (or file containing it)")
     parser.add_argument("--ws", default="ws://[::1]:8765", help="eaRS WebSocket URL")
-    parser.add_argument("--engine", choices=["both", "kyutai", "parakeet"], default="both")
+    parser.add_argument(
+        "--engine",
+        choices=["both", "kyutai", "parakeet", "sherpa"],
+        default="both",
+    )
     parser.add_argument("--language", default=None, help="Language code (de, en, fr, etc.)")
+    parser.add_argument(
+        "--switch-at",
+        action="append",
+        default=[],
+        metavar="T:LANG",
+        help="Switch language at audio timestamp T (seconds), e.g. --switch-at 25:de (repeatable)",
+    )
     parser.add_argument("--chunk-ms", type=int, default=80, help="Audio chunk size in ms (default 80)")
     args = parser.parse_args()
 
@@ -330,7 +354,25 @@ async def main():
         results["parakeet"] = r
         print_result(r, reference, duration)
 
-    if len(results) == 2:
+    # Parse --switch-at args
+    switches: List[Tuple[float, str]] = []
+    for s in args.switch_at:
+        if ":" not in s:
+            print(f"WARN: ignoring --switch-at '{s}' (expected T:LANG)")
+            continue
+        t, lang = s.split(":", 1)
+        switches.append((float(t), lang.strip()))
+
+    if args.engine == "sherpa":
+        print(f"\nStreaming to SHERPA...")
+        r = await stream_to_engine(
+            audio, sr, "sherpa", args.ws, args.chunk_ms, args.language,
+            switch_at=switches,
+        )
+        results["sherpa"] = r
+        print_result(r, reference, duration)
+
+    if "kyutai" in results and "parakeet" in results:
         compare_results(results["kyutai"], results["parakeet"], reference)
 
 
