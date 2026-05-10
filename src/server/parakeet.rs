@@ -266,6 +266,11 @@ fn run_parakeet_session(
     let mut last_pause_sent: Option<Instant> = None;
     let mut stop_requested = false;
 
+    // Safety: track consecutive empty transcriptions to prevent infinite loops
+    // when Parakeet returns 0 words for legitimate audio (~9s threshold at 3s/chunk).
+    let mut consecutive_empty_chunks: usize = 0;
+    const MAX_CONSECUTIVE_EMPTY: usize = 3;
+
     let overlap_duration_secs = config.overlap_samples_24k as f64 / SERVER_SAMPLE_RATE as f64;
 
     loop {
@@ -411,13 +416,16 @@ fn run_parakeet_session(
                             "[parakeet] raw: {} words, overlap_end={:.2}s, words: {}",
                             chunk_words.len(),
                             overlap_end,
-                            chunk_words.iter().map(|w| w.word.as_str()).collect::<Vec<_>>().join(" "),
+                            chunk_words
+                                .iter()
+                                .map(|w| w.word.as_str())
+                                .collect::<Vec<_>>()
+                                .join(" "),
                         );
 
                         // Split into overlap (already-seen audio) and new audio
-                        let (overlap_words, new_words): (Vec<_>, Vec<_>) = chunk_words
-                            .iter()
-                            .partition(|w| w.start_time < overlap_end);
+                        let (overlap_words, new_words): (Vec<_>, Vec<_>) =
+                            chunk_words.iter().partition(|w| w.start_time < overlap_end);
 
                         let mut to_emit: Vec<WordTimestamp> = Vec::new();
 
@@ -428,7 +436,8 @@ fn run_parakeet_session(
                                 to_emit.extend(overlap_words.iter().cloned().cloned());
                             } else {
                                 // Match against the tail of committed words
-                                let tail_start = if committed_words.len() > overlap_words.len() * 3 {
+                                let tail_start = if committed_words.len() > overlap_words.len() * 3
+                                {
                                     committed_words.len() - overlap_words.len() * 3
                                 } else {
                                     0
@@ -437,10 +446,8 @@ fn run_parakeet_session(
                                     .iter()
                                     .map(|w| w.word.as_str())
                                     .collect();
-                                let overlap_strs: Vec<&str> = overlap_words
-                                    .iter()
-                                    .map(|w| w.word.as_str())
-                                    .collect();
+                                let overlap_strs: Vec<&str> =
+                                    overlap_words.iter().map(|w| w.word.as_str()).collect();
 
                                 let ratio = word_match_ratio(&committed_tail, &overlap_strs);
 
@@ -457,7 +464,9 @@ fn run_parakeet_session(
                                     if removed > 0 {
                                         eprintln!(
                                             "[parakeet] overlap correction (ratio={:.2}): -{} +{} words",
-                                            ratio, removed, overlap_words.len()
+                                            ratio,
+                                            removed,
+                                            overlap_words.len()
                                         );
                                     }
                                     committed_words = before;
@@ -522,15 +531,38 @@ fn run_parakeet_session(
             // words in our v3 dedup results. Instead, keep the audio and retry on the next chunk
             // (the overlap region naturally re-includes it).
             if got_words {
+                consecutive_empty_chunks = 0;
                 let consumed = transcribe_len.saturating_sub(config.overlap_samples_24k);
                 if consumed > 0 && buffer_24k.len() > consumed {
                     buffer_24k = buffer_24k.split_off(consumed);
                     buffer_offset_24k = total_samples_24k.saturating_sub(buffer_24k.len());
                 }
             } else {
-                eprintln!(
-                    "[parakeet] NOT trimming buffer: transcription produced 0 words, will retry same audio in next chunk"
-                );
+                consecutive_empty_chunks += 1;
+
+                if consecutive_empty_chunks >= MAX_CONSECUTIVE_EMPTY {
+                    // Force-advance: assume the model is stuck on this region. Consume
+                    // the full chunk (no overlap retry) so we move forward instead of
+                    // looping on the same audio forever.
+                    eprintln!(
+                        "[parakeet] WARNING: {} consecutive empty chunks, force-advancing buffer",
+                        consecutive_empty_chunks
+                    );
+                    consecutive_empty_chunks = 0;
+                    let consumed = transcribe_len;
+                    if buffer_24k.len() > consumed {
+                        buffer_24k = buffer_24k.split_off(consumed);
+                        buffer_offset_24k = total_samples_24k.saturating_sub(buffer_24k.len());
+                    } else {
+                        buffer_24k.clear();
+                        buffer_offset_24k = total_samples_24k;
+                    }
+                } else {
+                    eprintln!(
+                        "[parakeet] NOT trimming buffer (chunk {}/{}): 0 words, will retry same audio",
+                        consecutive_empty_chunks, MAX_CONSECUTIVE_EMPTY
+                    );
+                }
             }
         }
 
