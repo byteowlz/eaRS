@@ -19,3 +19,16 @@ rustflags = [
     "-C", "link-arg=-Wl,--allow-multiple-definition",
     "-C", "link-arg=-Wl,-rpath,$ORIGIN",
 ]
+
+# macOS uses @executable_path instead of $ORIGIN for the rpath.
+# The Apple linker doesn't need --allow-multiple-definition; ort on
+# Apple Silicon uses CoreML and doesn't trigger the protobuf collision.
+[target.aarch64-apple-darwin]
+rustflags = [
+    "-C", "link-arg=-Wl,-rpath,@executable_path",
+]
+
+[target.x86_64-apple-darwin]
+rustflags = [
+    "-C", "link-arg=-Wl,-rpath,@executable_path",
+]

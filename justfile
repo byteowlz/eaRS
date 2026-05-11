@@ -339,19 +339,26 @@ install-all:
     esac
 
     # Copy sherpa-onnx shared libraries next to the installed binaries.
-    # With our $ORIGIN rpath, this lets ears/ears-server find libonnxruntime.so
-    # and libsherpa-onnx-c-api.so without LD_LIBRARY_PATH.
+    # The rpath (\$ORIGIN on Linux, @executable_path on macOS) lets the
+    # binaries find them without LD_LIBRARY_PATH / DYLD_LIBRARY_PATH.
     if [[ ",$FEATURE_STRING," == *",sherpa,"* ]]; then
         CARGO_BIN="${CARGO_HOME:-$HOME/.cargo}/bin"
         SO_SOURCE_DIR="target/release"
-        if [[ -d "$SO_SOURCE_DIR" ]] && compgen -G "$SO_SOURCE_DIR/libonnxruntime.so*" >/dev/null; then
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            LIB_GLOB="$SO_SOURCE_DIR/libonnxruntime*.dylib"
+            EXTRA_GLOB="$SO_SOURCE_DIR/libsherpa-onnx-*.dylib"
+        else
+            LIB_GLOB="$SO_SOURCE_DIR/libonnxruntime.so*"
+            EXTRA_GLOB="$SO_SOURCE_DIR/libsherpa-onnx-*.so*"
+        fi
+        if [[ -d "$SO_SOURCE_DIR" ]] && compgen -G "$LIB_GLOB" >/dev/null; then
             echo "Installing sherpa-onnx shared libraries to $CARGO_BIN..."
-            cp -P "$SO_SOURCE_DIR"/libonnxruntime.so* "$CARGO_BIN/" 2>/dev/null || true
-            cp -P "$SO_SOURCE_DIR"/libsherpa-onnx-*.so* "$CARGO_BIN/" 2>/dev/null || true
+            cp -P $LIB_GLOB "$CARGO_BIN/" 2>/dev/null || true
+            cp -P $EXTRA_GLOB "$CARGO_BIN/" 2>/dev/null || true
             echo "✓ Sherpa libraries installed"
         else
             echo "⚠ Sherpa libraries not found in $SO_SOURCE_DIR; sherpa engine may fail to load"
-            echo "  (set LD_LIBRARY_PATH or rerun this install command)"
+            echo "  (set LD_LIBRARY_PATH/DYLD_LIBRARY_PATH or rerun this install)"
         fi
     fi
 
