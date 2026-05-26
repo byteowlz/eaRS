@@ -1526,7 +1526,9 @@ fn stop_dictation() -> Result<()> {
                 }
 
                 let mut stopped = false;
-                for _ in 0..20 {
+                // Give ears-dictation enough time to handle SIGINT gracefully
+                // (cleanup + stop hooks) before falling back to SIGTERM.
+                for _ in 0..60 {
                     if !server::is_process_alive(pid) {
                         stopped = true;
                         break;

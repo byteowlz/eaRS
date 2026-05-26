@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use crossbeam_channel::{bounded, select, unbounded};
+use crossbeam_channel::{bounded, unbounded};
 use ears::audio;
 #[cfg(feature = "hooks")]
 use ears::config::DictationHooksConfig;
@@ -495,37 +495,42 @@ async fn main() -> Result<()> {
                 });
 
                 loop {
-                    select! {
-                        recv(stop_rx) -> _ => {
-                            break;
-                        }
-                        default => {
-                            if let Some(message) = read.next().await {
-                                match message {
-                                    Ok(Message::Text(text)) => {
-                                        eprintln!("[WS RECEIVED] {}", text);
-                                        if let Ok(json) = serde_json::from_str::<Value>(&text) {
-                                            handle_message(&json, &mut keyboard, &capturing)?;
-                                        } else {
-                                            eprintln!("[ERROR] Failed to parse JSON");
-                                        }
-                                    }
-                                    Ok(Message::Binary(data)) => {
-                                        eprintln!("[WS BINARY] {} bytes", data.len());
-                                    }
-                                    Ok(Message::Close(_)) => {
-                                        eprintln!("WebSocket closed");
-                                        break;
-                                    }
-                                    Err(e) => {
-                                        eprintln!("WebSocket error: {}", e);
-                                        break;
-                                    }
-                                    _ => {}
+                    if stop_rx.try_recv().is_ok() {
+                        break;
+                    }
+
+                    match tokio::time::timeout(
+                        std::time::Duration::from_millis(200),
+                        read.next(),
+                    )
+                    .await
+                    {
+                        Ok(Some(message)) => match message {
+                            Ok(Message::Text(text)) => {
+                                eprintln!("[WS RECEIVED] {}", text);
+                                if let Ok(json) = serde_json::from_str::<Value>(&text) {
+                                    handle_message(&json, &mut keyboard, &capturing)?;
+                                } else {
+                                    eprintln!("[ERROR] Failed to parse JSON");
                                 }
-                            } else {
+                            }
+                            Ok(Message::Binary(data)) => {
+                                eprintln!("[WS BINARY] {} bytes", data.len());
+                            }
+                            Ok(Message::Close(_)) => {
+                                eprintln!("WebSocket closed");
                                 break;
                             }
+                            Err(e) => {
+                                eprintln!("WebSocket error: {}", e);
+                                break;
+                            }
+                            _ => {}
+                        },
+                        Ok(None) => break,
+                        Err(_) => {
+                            // Timed out waiting for WS data; loop back so stop
+                            // signals are observed promptly.
                         }
                     }
                 }
