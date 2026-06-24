@@ -13,6 +13,13 @@ use super::SessionSink;
 
 const FRAME_SIZE: usize = 1920;
 
+/// Consecutive audio-consuming steps without a word boundary before logging a
+/// possible stall warning. 1920 samples / 24kHz = 80ms per step, so 75 steps ≈ 6s.
+const STALL_WARN_STEPS: usize = 75;
+/// Consecutive audio-consuming steps without a word boundary before forcibly
+/// resetting the model slot to recover from a permanent stall. 250 steps ≈ 20s.
+const STALL_RESET_STEPS: usize = 250;
+
 #[derive(Debug, Clone)]
 pub(crate) struct ParallelEngine {
     command_tx: Sender<EngineCommand>,
@@ -104,7 +111,6 @@ struct SessionState {
     control_rx: Receiver<SessionControl>,
     sink: SessionSink,
     sample_buffer: Vec<f32>,
-    all_audio: Vec<f32>,
     words: Vec<WordTimestamp>,
     current_text: String,
     last_word: Option<(String, f64)>,
@@ -116,6 +122,10 @@ struct SessionState {
     pending_language: Option<String>,
     closed: bool,
     flush_samples_remaining: usize,
+    /// Consecutive engine steps that consumed audio for this session but
+    /// emitted no `Word`/`EndWord`. Detects stalls where the LM keeps stepping
+    /// but stops emitting boundaries (trx-sm3r).
+    steps_without_words: usize,
 }
 
 impl SessionState {
@@ -137,11 +147,11 @@ impl SessionState {
             control_rx,
             sink,
             sample_buffer: Vec::with_capacity(FRAME_SIZE * 2),
-            all_audio: Vec::new(),
             words: Vec::new(),
             current_text: String::new(),
             last_word: None,
             word_sent: false,
+            steps_without_words: 0,
             last_voice_activity: None,
             vad_timeout,
             vad_enabled,
@@ -155,7 +165,6 @@ impl SessionState {
     fn process_inputs(&mut self) {
         while let Ok(chunk) = self.audio_rx.try_recv() {
             self.sample_buffer.extend_from_slice(&chunk);
-            self.all_audio.extend_from_slice(&chunk);
         }
 
         while let Ok(lang) = self.lang_rx.try_recv() {
@@ -258,6 +267,16 @@ impl SessionState {
 
     fn should_finalize(&self) -> bool {
         self.closed && self.sample_buffer.is_empty() && self.flush_samples_remaining == 0
+    }
+
+    /// Clear partial-word bookkeeping after the underlying model slot has been
+    /// reset. Keeps committed `words`/`current_text` so the final transcript is
+    /// intact; only drops the dangling in-flight partial word that would never
+    /// receive its `EndWord` from the pre-reset state.
+    fn reset_asr_state(&mut self) {
+        self.last_word = None;
+        self.word_sent = false;
+        self.steps_without_words = 0;
     }
 
     fn finalize(&mut self) {
@@ -424,16 +443,60 @@ fn run_parallel_loop(
             let mask = StreamMask::new(mask_vec.clone(), &dev)?;
             let pcm = Tensor::from_vec(pcm_batch.clone(), (capacity, 1, FRAME_SIZE), &dev)?;
             let msgs = model.step_pcm_with_mask(pcm, &mask)?;
+
+            // Track which slots produced word boundaries this step so we can
+            // detect stalls (audio consumed but no boundaries emitted).
+            let mut produced_word = vec![false; capacity];
             for msg in msgs {
                 match msg {
                     moshi::asr::AsrMsg::Step { .. } => {}
                     msg @ moshi::asr::AsrMsg::Word { batch_idx, .. }
                     | msg @ moshi::asr::AsrMsg::EndWord { batch_idx, .. } => {
-                        if let Some(session) = sessions.get_mut(batch_idx).and_then(Option::as_mut)
+                        produced_word[batch_idx] = true;
+                        if let Some(session) =
+                            sessions.get_mut(batch_idx).and_then(Option::as_mut)
                         {
                             session.handle_asr_msg(msg, model);
                         }
                     }
+                }
+            }
+
+            // Stall detection and recovery. A permanent stall is where the LM
+            // keeps stepping audio but never emits boundaries: the connection
+            // stays open, the server keeps burning CPU, yet no words are typed.
+            // Reset the model slot to recover instead of hanging silent forever.
+            for (idx, state) in sessions.iter_mut().enumerate() {
+                let Some(session) = state else {
+                    continue;
+                };
+                if !mask_vec[idx] || session.closed {
+                    continue;
+                }
+                if produced_word[idx] {
+                    session.steps_without_words = 0;
+                    continue;
+                }
+                session.steps_without_words += 1;
+                let secs =
+                    session.steps_without_words as f64 * FRAME_SIZE as f64 / 24_000.0;
+                if session.steps_without_words == STALL_WARN_STEPS {
+                    eprintln!(
+                        "[ears-server] session {} (slot {}): no words for {:.1}s of audio - possible stall",
+                        session.id, idx, secs
+                    );
+                } else if session.steps_without_words >= STALL_RESET_STEPS {
+                    eprintln!(
+                        "[ears-server] session {} (slot {}): stall confirmed at {:.1}s, resetting model slot to recover",
+                        session.id, idx, secs
+                    );
+                    if let Err(err) = model.reset_batch_slot(idx) {
+                        eprintln!(
+                            "[ears-server] failed to reset stalled slot {}: {}",
+                            idx, err
+                        );
+                    }
+                    session.reset_asr_state();
                 }
             }
         }
@@ -532,5 +595,55 @@ mod tests {
         assert_eq!(state.sample_buffer.len(), FRAME_SIZE);
         let frame = state.take_frame();
         assert_eq!(frame.map(|f| f.len()), Some(FRAME_SIZE));
+    }
+
+    #[test]
+    fn reset_asr_state_clears_partial_word_but_keeps_history() {
+        let (audio_tx, audio_rx) = unbounded();
+        let (_lang_tx, lang_rx) = unbounded();
+        let (_ctrl_tx, control_rx) = unbounded();
+        let mut state = SessionState::new(
+            1,
+            make_sink(),
+            audio_rx,
+            lang_rx,
+            control_rx,
+            false,
+            false,
+            None,
+            FRAME_SIZE / 2,
+        );
+        let _ = audio_tx;
+
+        // Simulate a partial word in flight plus accumulated stall steps, plus
+        // committed history that must survive a model-slot reset.
+        state.last_word = Some(("hello".to_string(), 1.0));
+        state.word_sent = true;
+        state.steps_without_words = STALL_RESET_STEPS;
+        state.words.push(WordTimestamp {
+            word: "committed".to_string(),
+            start_time: 0.0,
+            end_time: Some(0.5),
+        });
+        state.current_text = "committed".to_string();
+
+        state.reset_asr_state();
+
+        // Dangling in-flight partial word and counter are cleared...
+        assert!(state.last_word.is_none());
+        assert!(!state.word_sent);
+        assert_eq!(state.steps_without_words, 0);
+        // ...but committed transcript history is preserved.
+        assert_eq!(state.words.len(), 1);
+        assert_eq!(state.current_text, "committed");
+    }
+
+    #[test]
+    fn stall_thresholds_are_sane() {
+        // 1920 samples @ 24kHz = 80ms per step. Warn ~6s, reset ~20s.
+        let ms = |steps: usize| steps as f64 * FRAME_SIZE as f64 / 24_000.0 * 1000.0;
+        assert!(ms(STALL_WARN_STEPS) >= 5_000.0 && ms(STALL_WARN_STEPS) <= 7_000.0);
+        assert!(ms(STALL_RESET_STEPS) >= 18_000.0 && ms(STALL_RESET_STEPS) <= 22_000.0);
+        assert!(STALL_RESET_STEPS > STALL_WARN_STEPS);
     }
 }

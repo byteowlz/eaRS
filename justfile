@@ -355,7 +355,24 @@ install-all:
             echo "Installing sherpa-onnx shared libraries to $CARGO_BIN..."
             cp -P $LIB_GLOB "$CARGO_BIN/" 2>/dev/null || true
             cp -P $EXTRA_GLOB "$CARGO_BIN/" 2>/dev/null || true
-            echo "✓ Sherpa libraries installed"
+
+            # macOS: re-sign adhoc after copying. cargo/rustc adhoc-signs the
+            # build artifacts, but copying them next to the binary (or any
+            # rpath/ID rewrite) invalidates the embedded code-directory page
+            # hashes. With SIP + AMFI, dyld then SIGKILLs the process at launch
+            # with "Invalid Page" / CODESIGNING termination before main() runs.
+            # Re-sign the dylibs and the dependent executables so they load.
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                for lib in "$CARGO_BIN"/libonnxruntime*.dylib "$CARGO_BIN"/libsherpa-onnx-*.dylib; do
+                    [[ -e "$lib" ]] && codesign --force --sign - "$lib" 2>/dev/null || true
+                done
+                for bin in ears ears-server ears-dictation; do
+                    [[ -e "$CARGO_BIN/$bin" ]] && codesign --force --sign - "$CARGO_BIN/$bin" 2>/dev/null || true
+                done
+                echo "✓ Sherpa libraries installed and re-signed (macOS)"
+            else
+                echo "✓ Sherpa libraries installed"
+            fi
         else
             echo "⚠ Sherpa libraries not found in $SO_SOURCE_DIR; sherpa engine may fail to load"
             echo "  (set LD_LIBRARY_PATH/DYLD_LIBRARY_PATH or rerun this install)"

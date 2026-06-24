@@ -1054,8 +1054,38 @@ fn spawn_server_process(args: &ServerStartArgs) -> Result<u32> {
     cmd.arg("server").arg("run");
     append_server_args(&mut cmd, args);
     cmd.stdin(Stdio::null());
-    cmd.stdout(Stdio::null());
-    cmd.stderr(Stdio::null());
+
+    // Capture server logs to a file. Without this the parallel engine thread
+    // prints every error to stderr which is then discarded, making engine
+    // stalls completely invisible (see trx-sm3r). Falls back to null if the
+    // log file cannot be opened so server startup is never blocked.
+    let log_path = get_server_log_file();
+    if let Some(parent) = log_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&log_path)
+    {
+        Ok(log_file) => {
+            let log_file_err = log_file
+                .try_clone()
+                .context("failed to clone server log file handle")?;
+            cmd.stdout(Stdio::from(log_file));
+            cmd.stderr(Stdio::from(log_file_err));
+        }
+        Err(err) => {
+            eprintln!(
+                "warning: could not open server log at {}: {} (server logs will be lost)",
+                log_path.display(),
+                err
+            );
+            cmd.stdout(Stdio::null());
+            cmd.stderr(Stdio::null());
+        }
+    }
 
     let child = cmd.spawn().context("failed to spawn ears server process")?;
     Ok(child.id())
@@ -1150,6 +1180,21 @@ fn get_dictation_log_file() -> std::path::PathBuf {
         std::path::PathBuf::from(home).join(".local/state")
     };
     state_dir.join("ears").join("dictation.log")
+}
+
+fn get_server_log_file() -> std::path::PathBuf {
+    let state_dir = if let Ok(xdg_state) = std::env::var("XDG_STATE_HOME") {
+        if !xdg_state.is_empty() {
+            std::path::PathBuf::from(xdg_state)
+        } else {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            std::path::PathBuf::from(home).join(".local/state")
+        }
+    } else {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        std::path::PathBuf::from(home).join(".local/state")
+    };
+    state_dir.join("ears").join("server.log")
 }
 
 #[cfg(test)]
