@@ -7,3 +7,9 @@ target/
 !.env.example
 fake-main.go
 dist/
+
+# pi session state (per-session todos, not project config)
+.pi/todos/
+
+# generated demo audio (produced by scripts/generate_demo_audio.sh)
+test_audio/generated/
