@@ -178,6 +178,11 @@
           "default": true,
           "description": "Type words immediately as they arrive (true) or only when final transcription is ready (false)"
         },
+        "start_paused": {
+          "type": "boolean",
+          "default": false,
+          "description": "Start dictation in paused mode (true) or live mode (false)"
+        },
         "default_server": {
           "type": "string",
           "default": "local",
@@ -277,10 +282,16 @@
           "default": true,
           "description": "Enable internal global hotkeys for dictation control (disable if using WM binds like Hyprland)"
         },
+        "mode": {
+          "type": "string",
+          "enum": ["toggle", "push_to_talk", "hybrid"],
+          "default": "hybrid",
+          "description": "Dictation control mode: toggle, hold-to-talk, or hybrid"
+        },
         "toggle": {
           "type": "string",
           "default": "ctrl+shift+v",
-          "description": "Toggle dictation pause/resume"
+          "description": "Dictation control hotkey"
         },
         "language_cycle": {
           "type": "string",

@@ -86,6 +86,8 @@ impl DictationServerConfig {
 pub struct DictationConfig {
     pub enabled: bool,
     pub type_live_words: bool,
+    #[serde(default)]
+    pub start_paused: bool,
     /// Default server alias to use when none is specified (defaults to "local")
     #[serde(default = "default_server_alias")]
     pub default_server: String,
@@ -131,10 +133,26 @@ impl DictationConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DictationHotkeyMode {
+    Toggle,
+    PushToTalk,
+    Hybrid,
+}
+
+impl Default for DictationHotkeyMode {
+    fn default() -> Self {
+        Self::Hybrid
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HotkeyConfig {
     pub enable_internal: bool,
     pub toggle: String,
+    #[serde(default)]
+    pub mode: DictationHotkeyMode,
     pub language_cycle: String,
 }
 
@@ -202,6 +220,7 @@ impl Default for HotkeyConfig {
         Self {
             enable_internal: true,
             toggle: "ctrl+shift+v".to_string(),
+            mode: DictationHotkeyMode::Toggle,
             language_cycle: "ctrl+shift+l".to_string(),
         }
     }
@@ -223,6 +242,7 @@ impl Default for DictationConfig {
         Self {
             enabled: false,
             type_live_words: true,
+            start_paused: false,
             default_server: default_server_alias(),
             servers: default_servers(),
             notifications: DictationNotificationConfig::default(),

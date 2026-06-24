@@ -63,6 +63,8 @@ listener_tokens = []
 enabled = false
 # Type words immediately as they arrive (true) or only when final transcription is ready (false)
 type_live_words = true
+# Start dictation in paused mode (true) or live mode (false)
+start_paused = false
 # Default server alias to connect to (use with: ears-dictation or ears-dictation --server local)
 default_server = "local"
 
@@ -109,7 +111,12 @@ stop_command = ""
 [hotkeys]
 # Enable internal global hotkeys for dictation control (disable if using WM binds like Hyprland)
 enable_internal = true
-# Toggle dictation pause/resume (default: ctrl+shift+v)
+# Dictation hotkey mode:
+# - "toggle": tap hotkey to pause/resume
+# - "push_to_talk": only transcribe while holding hotkey
+# - "hybrid": tap to toggle, hold while paused for temporary push-to-talk
+mode = "hybrid"
+# Dictation control hotkey (default: ctrl+shift+v)
 toggle = "ctrl+shift+v"
 # Cycle language among en, de, fr, es, ja (default: ctrl+shift+l)
 language_cycle = "ctrl+shift+l"

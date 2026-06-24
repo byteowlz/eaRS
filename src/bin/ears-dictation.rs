@@ -4,7 +4,7 @@ use crossbeam_channel::{bounded, unbounded};
 use ears::audio;
 #[cfg(feature = "hooks")]
 use ears::config::DictationHooksConfig;
-use ears::config::{AppConfig, DictationNotificationConfig};
+use ears::config::{AppConfig, DictationHotkeyMode, DictationNotificationConfig};
 use ears::server;
 use ears::virtual_keyboard::{SpecialKey, VirtualKeyboard, create_virtual_keyboard};
 use futures_util::{SinkExt, StreamExt};
@@ -18,7 +18,7 @@ use std::process::Command as ProcessCommand;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
@@ -286,7 +286,8 @@ async fn main() -> Result<()> {
     write_pid_file(&url)?;
 
     let running = Arc::new(Mutex::new(true));
-    let capturing = Arc::new(Mutex::new(true));
+    let starts_listening = !config.dictation.start_paused;
+    let capturing = Arc::new(Mutex::new(starts_listening));
     let dictation_state = Arc::new(Mutex::new(DictationState::Inactive));
 
     let (stop_tx, stop_rx) = bounded::<()>(1);
@@ -313,16 +314,21 @@ async fn main() -> Result<()> {
         let notification_config_thread = notification_config.clone();
         thread::spawn(move || {
             let toggle_combo = hotkey_config.toggle.to_lowercase();
+            let hotkey_mode = hotkey_config.mode;
             let (t_ctrl, t_shift, t_alt, t_key) = parse_combo(&toggle_combo);
             eprintln!(
-                "Parsed combo - ctrl:{} shift:{} alt:{} key:{:?}",
-                t_ctrl, t_shift, t_alt, t_key
+                "Parsed combo - ctrl:{} shift:{} alt:{} key:{:?} mode:{:?}",
+                t_ctrl, t_shift, t_alt, t_key, hotkey_mode
             );
+
+            const TAP_THRESHOLD_MS: u128 = 220;
 
             if let Err(e) = listen(move |event| -> () {
                 static mut CTRL: bool = false;
                 static mut SHIFT: bool = false;
                 static mut ALT: bool = false;
+                static mut HOTKEY_HELD_FROM_PAUSED: bool = false;
+                static mut HOTKEY_DOWN_AT: Option<Instant> = None;
 
                 match event.event_type {
                     EventType::KeyPress(rdev::Key::ControlLeft)
@@ -348,37 +354,151 @@ async fn main() -> Result<()> {
                     | EventType::KeyRelease(rdev::Key::AltGr) => unsafe {
                         ALT = false;
                     },
+                    EventType::KeyPress(k) => unsafe {
+                        if !*hotkey_running.lock().unwrap() {
+                            return;
+                        }
+
+                        if CTRL == t_ctrl && SHIFT == t_shift && ALT == t_alt && k == t_key {
+                            HOTKEY_DOWN_AT = Some(Instant::now());
+
+                            if matches!(
+                                hotkey_mode,
+                                DictationHotkeyMode::PushToTalk | DictationHotkeyMode::Hybrid
+                            ) {
+                                let mut c = hotkey_capturing.lock().unwrap();
+                                if !*c {
+                                    *c = true;
+                                    HOTKEY_HELD_FROM_PAUSED = true;
+                                    eprintln!("Audio capture started (hold)");
+                                    drop(c);
+                                    #[cfg(feature = "hooks")]
+                                    apply_state_change(
+                                        &dictation_state_thread,
+                                        DictationState::Listening,
+                                        &notification_config_thread,
+                                        &hook_config_thread,
+                                    );
+                                    #[cfg(not(feature = "hooks"))]
+                                    apply_state_change(
+                                        &dictation_state_thread,
+                                        DictationState::Listening,
+                                        &notification_config_thread,
+                                    );
+                                } else {
+                                    HOTKEY_HELD_FROM_PAUSED = false;
+                                }
+                            }
+                        }
+                    },
                     EventType::KeyRelease(k) => unsafe {
                         if !*hotkey_running.lock().unwrap() {
                             return;
                         }
                         if CTRL == t_ctrl && SHIFT == t_shift && ALT == t_alt && k == t_key {
-                            let mut c = hotkey_capturing.lock().unwrap();
-                            *c = !*c;
-                            let is_active = *c;
-                            eprintln!(
-                                "Audio capture {}",
-                                if is_active { "started" } else { "stopped" }
-                            );
-                            drop(c);
-                            let event = if is_active {
-                                DictationState::Listening
-                            } else {
-                                DictationState::Suspended
-                            };
-                            #[cfg(feature = "hooks")]
-                            apply_state_change(
-                                &dictation_state_thread,
-                                event,
-                                &notification_config_thread,
-                                &hook_config_thread,
-                            );
-                            #[cfg(not(feature = "hooks"))]
-                            apply_state_change(
-                                &dictation_state_thread,
-                                event,
-                                &notification_config_thread,
-                            );
+                            let press_duration_ms = HOTKEY_DOWN_AT
+                                .map(|ts| ts.elapsed().as_millis())
+                                .unwrap_or(0);
+                            HOTKEY_DOWN_AT = None;
+
+                            match hotkey_mode {
+                                DictationHotkeyMode::Toggle => {
+                                    let mut c = hotkey_capturing.lock().unwrap();
+                                    *c = !*c;
+                                    let is_active = *c;
+                                    drop(c);
+                                    #[cfg(feature = "hooks")]
+                                    apply_state_change(
+                                        &dictation_state_thread,
+                                        if is_active {
+                                            DictationState::Listening
+                                        } else {
+                                            DictationState::Suspended
+                                        },
+                                        &notification_config_thread,
+                                        &hook_config_thread,
+                                    );
+                                    #[cfg(not(feature = "hooks"))]
+                                    apply_state_change(
+                                        &dictation_state_thread,
+                                        if is_active {
+                                            DictationState::Listening
+                                        } else {
+                                            DictationState::Suspended
+                                        },
+                                        &notification_config_thread,
+                                    );
+                                }
+                                DictationHotkeyMode::PushToTalk => {
+                                    if HOTKEY_HELD_FROM_PAUSED {
+                                        let mut c = hotkey_capturing.lock().unwrap();
+                                        if *c {
+                                            *c = false;
+                                            drop(c);
+                                            #[cfg(feature = "hooks")]
+                                            apply_state_change(
+                                                &dictation_state_thread,
+                                                DictationState::Suspended,
+                                                &notification_config_thread,
+                                                &hook_config_thread,
+                                            );
+                                            #[cfg(not(feature = "hooks"))]
+                                            apply_state_change(
+                                                &dictation_state_thread,
+                                                DictationState::Suspended,
+                                                &notification_config_thread,
+                                            );
+                                        }
+                                    }
+                                    HOTKEY_HELD_FROM_PAUSED = false;
+                                }
+                                DictationHotkeyMode::Hybrid => {
+                                    if HOTKEY_HELD_FROM_PAUSED {
+                                        if press_duration_ms <= TAP_THRESHOLD_MS {
+                                            eprintln!("Audio capture latched on (tap)");
+                                        } else {
+                                            let mut c = hotkey_capturing.lock().unwrap();
+                                            if *c {
+                                                *c = false;
+                                                drop(c);
+                                                #[cfg(feature = "hooks")]
+                                                apply_state_change(
+                                                    &dictation_state_thread,
+                                                    DictationState::Suspended,
+                                                    &notification_config_thread,
+                                                    &hook_config_thread,
+                                                );
+                                                #[cfg(not(feature = "hooks"))]
+                                                apply_state_change(
+                                                    &dictation_state_thread,
+                                                    DictationState::Suspended,
+                                                    &notification_config_thread,
+                                                );
+                                                eprintln!("Audio capture stopped (hold release)");
+                                            }
+                                        }
+                                    } else {
+                                        let mut c = hotkey_capturing.lock().unwrap();
+                                        *c = false;
+                                        drop(c);
+                                        #[cfg(feature = "hooks")]
+                                        apply_state_change(
+                                            &dictation_state_thread,
+                                            DictationState::Suspended,
+                                            &notification_config_thread,
+                                            &hook_config_thread,
+                                        );
+                                        #[cfg(not(feature = "hooks"))]
+                                        apply_state_change(
+                                            &dictation_state_thread,
+                                            DictationState::Suspended,
+                                            &notification_config_thread,
+                                        );
+                                        eprintln!("Audio capture stopped (toggle off)");
+                                    }
+                                    HOTKEY_HELD_FROM_PAUSED = false;
+                                }
+                            }
                         }
                     },
                     _ => {}
@@ -392,14 +512,22 @@ async fn main() -> Result<()> {
     #[cfg(feature = "hooks")]
     apply_state_change(
         &dictation_state,
-        DictationState::Listening,
+        if starts_listening {
+            DictationState::Listening
+        } else {
+            DictationState::Suspended
+        },
         &notification_config,
         &hook_config,
     );
     #[cfg(not(feature = "hooks"))]
     apply_state_change(
         &dictation_state,
-        DictationState::Listening,
+        if starts_listening {
+            DictationState::Listening
+        } else {
+            DictationState::Suspended
+        },
         &notification_config,
     );
 
@@ -414,7 +542,23 @@ async fn main() -> Result<()> {
 
     eprintln!("ears-dictation started");
     eprintln!("Connecting to {}...", url);
-    eprintln!("Hotkey: {} to toggle pause/resume", config.hotkeys.toggle);
+    eprintln!(
+        "Hotkey: {} ({})",
+        config.hotkeys.toggle,
+        match config.hotkeys.mode {
+            DictationHotkeyMode::Toggle => "toggle pause/resume",
+            DictationHotkeyMode::PushToTalk => "hold to talk",
+            DictationHotkeyMode::Hybrid => "tap to toggle, hold to talk while paused",
+        }
+    );
+    eprintln!(
+        "Startup state: {}",
+        if config.dictation.start_paused {
+            "paused"
+        } else {
+            "live"
+        }
+    );
     eprintln!("Press Ctrl+C to stop\n");
 
     loop {

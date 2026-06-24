@@ -328,6 +328,8 @@ Key sections:
 - `[whisper]`: Configure optional Whisper enhancement defaults (model, quantization, languages, sentence detection thresholds).
 - `[server]`: Default WebSocket port used by `ears server start` and the capture client.
 - `[dictation]`: Enable live typing and configure in-app hotkeys.
+- `[hotkeys]`: Set hotkey bindings and mode (`toggle`, `push_to_talk`, or `hybrid`).
+- `[dictation]`: `start_paused = true|false` controls whether dictation starts paused or live.
 - `[dictation.notifications]`: Toggle desktop popups and customise start/pause/stop messages shown for dictation state changes.
 - `[dictation.hooks]` (requires `cargo build --features hooks`): Run shell commands on start, pause, or stop transitions (e.g., change colours in status bars).
 
