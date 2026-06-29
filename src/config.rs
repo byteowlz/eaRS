@@ -1,3 +1,4 @@
+use crate::replacement::{ReplacementConfig, TranscriptHistoryConfig};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -19,6 +20,10 @@ pub struct AppConfig {
     pub hotkeys: HotkeyConfig,
     #[serde(default)]
     pub subs: SubsConfig,
+    #[serde(default)]
+    pub replacement: ReplacementConfig,
+    #[serde(default)]
+    pub transcripts: TranscriptHistoryConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -279,6 +284,8 @@ impl Default for AppConfig {
             dictation: DictationConfig::default(),
             hotkeys: HotkeyConfig::default(),
             subs: SubsConfig::default(),
+            replacement: ReplacementConfig::default(),
+            transcripts: TranscriptHistoryConfig::default(),
         }
     }
 }
@@ -352,6 +359,8 @@ impl AppConfig {
                             dictation: DictationConfig::default(),
                             hotkeys: HotkeyConfig::default(),
                             subs: SubsConfig::default(),
+                            replacement: ReplacementConfig::default(),
+                            transcripts: TranscriptHistoryConfig::default(),
                         };
 
                         // Save the updated config

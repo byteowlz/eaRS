@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub mod config;
+pub mod replacement;
 pub mod virtual_keyboard;
 pub use kaudio;
 #[cfg(feature = "whisper")]

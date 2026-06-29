@@ -5,20 +5,25 @@ use ears::audio;
 #[cfg(feature = "hooks")]
 use ears::config::DictationHooksConfig;
 use ears::config::{AppConfig, DictationHotkeyMode, DictationNotificationConfig};
+use ears::replacement::{
+    ReplacementConfig, ReplacementDictionary, ReplacementEngine, TranscriptHistoryConfig,
+    dictionary_paths, transcript_history_dir,
+};
 use ears::server;
 use ears::virtual_keyboard::{SpecialKey, VirtualKeyboard, create_virtual_keyboard};
 use futures_util::{SinkExt, StreamExt};
 use notifica::notify;
 use rdev::{EventType, listen};
-use serde_json::Value;
-use std::fs;
+use serde_json::{Value, json};
+use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::path::PathBuf;
 #[cfg(feature = "hooks")]
 use std::process::Command as ProcessCommand;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
@@ -246,6 +251,13 @@ fn wait_for_server_ready(port: u16, max_attempts: usize, poll_interval: Duration
 async fn main() -> Result<()> {
     let args = Args::parse();
     let config = AppConfig::load().unwrap_or_default();
+    if config.replacement.enabled {
+        if let Some(path) = dictionary_paths(&config.replacement).first() {
+            let _ = ReplacementDictionary::load_or_create(path);
+        }
+    }
+    let mut replacement_reloader = ReplacementReloader::new(config.replacement.clone());
+    let mut transcript_recorder = TranscriptRecorder::new(config.transcripts.clone());
 
     // Handle --list-servers flag
     if args.list_servers {
@@ -643,17 +655,20 @@ async fn main() -> Result<()> {
                         break;
                     }
 
-                    match tokio::time::timeout(
-                        std::time::Duration::from_millis(200),
-                        read.next(),
-                    )
-                    .await
+                    match tokio::time::timeout(std::time::Duration::from_millis(200), read.next())
+                        .await
                     {
                         Ok(Some(message)) => match message {
                             Ok(Message::Text(text)) => {
                                 eprintln!("[WS RECEIVED] {}", text);
                                 if let Ok(json) = serde_json::from_str::<Value>(&text) {
-                                    handle_message(&json, &mut keyboard, &capturing)?;
+                                    handle_message(
+                                        &json,
+                                        &mut keyboard,
+                                        &capturing,
+                                        &mut replacement_reloader,
+                                        &mut transcript_recorder,
+                                    )?;
                                 } else {
                                     eprintln!("[ERROR] Failed to parse JSON");
                                 }
@@ -674,13 +689,16 @@ async fn main() -> Result<()> {
                         Ok(None) => break,
                         Err(_) => {
                             // Timed out waiting for WS data; loop back so stop
-                            // signals are observed promptly.
+                            // signals are observed promptly and transcript buffers
+                            // can flush without writing on every word.
+                            transcript_recorder.flush_if_due()?;
                         }
                     }
                 }
 
                 let _ = writer_tx.send(WriterCommand::Stop);
                 let _ = writer_handle.await;
+                transcript_recorder.flush()?;
 
                 let is_running = *running.lock().unwrap();
                 if !is_running {
@@ -697,6 +715,7 @@ async fn main() -> Result<()> {
         }
     }
 
+    transcript_recorder.flush()?;
     remove_pid_file();
     #[cfg(feature = "hooks")]
     apply_state_change(
@@ -715,10 +734,65 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+struct ReplacementReloader {
+    config: ReplacementConfig,
+    engine: ReplacementEngine,
+    stamp: Vec<(PathBuf, Option<SystemTime>)>,
+}
+
+impl ReplacementReloader {
+    fn new(config: ReplacementConfig) -> Self {
+        let engine = ReplacementEngine::from_config(&config).unwrap_or_else(|err| {
+            eprintln!("warning: failed to load replacement dictionary: {err}");
+            ReplacementEngine::empty()
+        });
+        let stamp = dictionary_stamp(&config);
+        Self {
+            config,
+            engine,
+            stamp,
+        }
+    }
+
+    fn replace(&mut self, text: &str) -> String {
+        self.reload_if_changed();
+        self.engine.replace(text)
+    }
+
+    fn reload_if_changed(&mut self) {
+        let stamp = dictionary_stamp(&self.config);
+        if stamp == self.stamp {
+            return;
+        }
+        match ReplacementEngine::from_config(&self.config) {
+            Ok(engine) => {
+                self.engine = engine;
+                self.stamp = stamp;
+                eprintln!("[dictionary] reloaded replacement dictionary");
+            }
+            Err(err) => {
+                eprintln!("warning: failed to hot-reload replacement dictionary: {err}");
+            }
+        }
+    }
+}
+
+fn dictionary_stamp(config: &ReplacementConfig) -> Vec<(PathBuf, Option<SystemTime>)> {
+    dictionary_paths(config)
+        .into_iter()
+        .map(|path| {
+            let modified = fs::metadata(&path).and_then(|meta| meta.modified()).ok();
+            (path, modified)
+        })
+        .collect()
+}
+
 fn handle_message(
     json: &Value,
     keyboard: &mut Box<dyn VirtualKeyboard>,
     capturing: &Arc<Mutex<bool>>,
+    replacement_reloader: &mut ReplacementReloader,
+    transcript_recorder: &mut TranscriptRecorder,
 ) -> Result<()> {
     let is_capturing = *capturing.lock().unwrap();
 
@@ -727,18 +801,22 @@ fn handle_message(
             "word" if is_capturing => {
                 if let Some(word) = json.get("word").and_then(|v| v.as_str()) {
                     if !word.is_empty() {
-                        eprintln!("[TYPING WORD] {}", word);
-                        keyboard.type_text(word)?;
+                        let replaced = replacement_reloader.replace(word);
+                        eprintln!("[TYPING WORD] {}", replaced);
+                        keyboard.type_text(&replaced)?;
                         keyboard.press_key(SpecialKey::Space)?;
+                        transcript_recorder.record("word", word, &replaced)?;
                     }
                 }
             }
             "final" if is_capturing => {
                 if let Some(text) = json.get("text").and_then(|v| v.as_str()) {
                     if !text.is_empty() {
-                        eprintln!("[TYPING FINAL] {}", text);
-                        keyboard.type_text(text)?;
+                        let replaced = replacement_reloader.replace(text);
+                        eprintln!("[TYPING FINAL] {}", replaced);
+                        keyboard.type_text(&replaced)?;
                         keyboard.press_key(SpecialKey::Space)?;
+                        transcript_recorder.record("final", text, &replaced)?;
                     }
                 }
             }
@@ -746,6 +824,68 @@ fn handle_message(
         }
     }
     Ok(())
+}
+
+struct TranscriptRecorder {
+    config: TranscriptHistoryConfig,
+    pending: Vec<String>,
+    last_flush: Instant,
+}
+
+impl TranscriptRecorder {
+    fn new(config: TranscriptHistoryConfig) -> Self {
+        Self {
+            config,
+            pending: Vec::new(),
+            last_flush: Instant::now(),
+        }
+    }
+
+    fn record(&mut self, event_type: &str, raw: &str, replaced: &str) -> Result<()> {
+        if !self.config.enabled {
+            return Ok(());
+        }
+        let now = time::OffsetDateTime::now_utc();
+        let changed = raw != replaced;
+        let mut event = serde_json::Map::new();
+        event.insert("ts".to_string(), json!(now.unix_timestamp()));
+        event.insert("type".to_string(), json!(event_type));
+        event.insert("changed".to_string(), json!(changed));
+        if self.config.store_raw {
+            event.insert("raw".to_string(), json!(raw));
+        }
+        if self.config.store_replaced && (changed || self.config.store_unchanged_replaced) {
+            event.insert("replaced".to_string(), json!(replaced));
+        }
+        self.pending.push(Value::Object(event).to_string());
+        if self.pending.len() >= self.config.flush_max_events.max(1) {
+            self.flush()?;
+        }
+        Ok(())
+    }
+
+    fn flush_if_due(&mut self) -> Result<()> {
+        if self.last_flush.elapsed() >= Duration::from_millis(self.config.flush_interval_ms) {
+            self.flush()?;
+        }
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        if self.pending.is_empty() || !self.config.enabled {
+            return Ok(());
+        }
+        let dir = transcript_history_dir(&self.config.path);
+        fs::create_dir_all(&dir)?;
+        let date = time::OffsetDateTime::now_utc().date().to_string();
+        let path = dir.join(format!("{date}.jsonl"));
+        let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+        for line in self.pending.drain(..) {
+            writeln!(file, "{}", line)?;
+        }
+        self.last_flush = Instant::now();
+        Ok(())
+    }
 }
 
 #[cfg(not(feature = "hooks"))]

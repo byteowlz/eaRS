@@ -453,8 +453,7 @@ fn run_parallel_loop(
                     msg @ moshi::asr::AsrMsg::Word { batch_idx, .. }
                     | msg @ moshi::asr::AsrMsg::EndWord { batch_idx, .. } => {
                         produced_word[batch_idx] = true;
-                        if let Some(session) =
-                            sessions.get_mut(batch_idx).and_then(Option::as_mut)
+                        if let Some(session) = sessions.get_mut(batch_idx).and_then(Option::as_mut)
                         {
                             session.handle_asr_msg(msg, model);
                         }
@@ -478,8 +477,7 @@ fn run_parallel_loop(
                     continue;
                 }
                 session.steps_without_words += 1;
-                let secs =
-                    session.steps_without_words as f64 * FRAME_SIZE as f64 / 24_000.0;
+                let secs = session.steps_without_words as f64 * FRAME_SIZE as f64 / 24_000.0;
                 if session.steps_without_words == STALL_WARN_STEPS {
                     eprintln!(
                         "[ears-server] session {} (slot {}): no words for {:.1}s of audio - possible stall",

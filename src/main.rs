@@ -2,7 +2,10 @@ use anyhow::{Context, Result, anyhow};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use crossbeam_channel::unbounded;
 use ears::{
-    TranscriptionOptions, WebSocketMessage, WordTimestamp, audio, config::AppConfig, server,
+    TranscriptionOptions, WebSocketMessage, WordTimestamp, audio,
+    config::AppConfig,
+    replacement::{ReplacementDictionary, ReplacementEngine, dictionary_paths},
+    server,
 };
 use futures::{SinkExt, StreamExt};
 use serde_json::json;
@@ -50,6 +53,8 @@ enum Commands {
     Server(ServerCommand),
     #[command(subcommand)]
     Dictation(DictationCommand),
+    #[command(subcommand)]
+    Dictionary(DictionaryCommand),
 }
 
 #[derive(Subcommand)]
@@ -68,6 +73,33 @@ enum DictationCommand {
     Status,
     #[command(about = "Run dictation in foreground with debug output")]
     Debug(DictationStartArgs),
+}
+
+#[derive(Subcommand)]
+enum DictionaryCommand {
+    #[command(about = "List replacement dictionary entries")]
+    List,
+    #[command(about = "Add observed phrases for a canonical replacement")]
+    Add(DictionaryAddArgs),
+    #[command(about = "Test dictionary replacement on text")]
+    Test(DictionaryTestArgs),
+}
+
+#[derive(Args)]
+struct DictionaryAddArgs {
+    /// Canonical replacement text to type instead of the observed phrase(s)
+    #[arg(short, long, value_name = "TEXT")]
+    replacement: String,
+
+    /// Observed phrase to replace. Repeat this flag to add multiple phrases.
+    #[arg(short, long = "phrase", value_name = "TEXT", required = true)]
+    phrases: Vec<String>,
+}
+
+#[derive(Args)]
+struct DictionaryTestArgs {
+    /// Text to run through the replacement engine
+    text: Vec<String>,
 }
 
 #[derive(Args, Clone)]
@@ -323,6 +355,10 @@ async fn main() -> Result<()> {
             handle_dictation_command(dictation_cmd)?;
             return Ok(());
         }
+        Some(Commands::Dictionary(dictionary_cmd)) => {
+            handle_dictionary_command(dictionary_cmd)?;
+            return Ok(());
+        }
         None => {}
     }
 
@@ -345,6 +381,56 @@ fn handle_dictation_command(command: DictationCommand) -> Result<()> {
         DictationCommand::Status => check_dictation_status(),
         DictationCommand::Debug(args) => run_dictation_foreground(&args),
     }
+}
+
+fn handle_dictionary_command(command: DictionaryCommand) -> Result<()> {
+    match command {
+        DictionaryCommand::List => list_dictionary(),
+        DictionaryCommand::Add(args) => add_dictionary_entry(args),
+        DictionaryCommand::Test(args) => test_dictionary(args),
+    }
+}
+
+fn primary_dictionary_path(config: &AppConfig) -> std::path::PathBuf {
+    dictionary_paths(&config.replacement)
+        .into_iter()
+        .next()
+        .unwrap_or_else(ears::replacement::default_dictionary_path)
+}
+
+fn list_dictionary() -> Result<()> {
+    let config = AppConfig::load()?;
+    let path = primary_dictionary_path(&config);
+    let dictionary = ReplacementDictionary::load_or_create(&path)?;
+    println!("Dictionary: {}", path.display());
+    for entry in dictionary.entries {
+        println!("{}", entry.replace);
+        for phrase in entry.phrases {
+            println!("  - {}", phrase);
+        }
+    }
+    Ok(())
+}
+
+fn add_dictionary_entry(args: DictionaryAddArgs) -> Result<()> {
+    if args.phrases.is_empty() {
+        return Err(anyhow!("at least one observed phrase is required"));
+    }
+    let config = AppConfig::load()?;
+    let path = primary_dictionary_path(&config);
+    let mut dictionary = ReplacementDictionary::load_or_create(&path)?;
+    dictionary.add_entry(args.replacement.clone(), args.phrases);
+    dictionary.save(&path)?;
+    println!("updated {}", path.display());
+    Ok(())
+}
+
+fn test_dictionary(args: DictionaryTestArgs) -> Result<()> {
+    let config = AppConfig::load()?;
+    let text = args.text.join(" ");
+    let engine = ReplacementEngine::from_config(&config.replacement)?;
+    println!("{}", engine.replace(&text));
+    Ok(())
 }
 
 fn run_dictation_foreground(args: &DictationStartArgs) -> Result<()> {
