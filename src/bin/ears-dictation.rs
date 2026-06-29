@@ -258,6 +258,7 @@ async fn main() -> Result<()> {
     }
     let mut replacement_reloader = ReplacementReloader::new(config.replacement.clone());
     let mut transcript_recorder = TranscriptRecorder::new(config.transcripts.clone());
+    let mut live_word_buffer = LiveWordBuffer::new(3);
 
     // Handle --list-servers flag
     if args.list_servers {
@@ -668,6 +669,7 @@ async fn main() -> Result<()> {
                                         &capturing,
                                         &mut replacement_reloader,
                                         &mut transcript_recorder,
+                                        &mut live_word_buffer,
                                     )?;
                                 } else {
                                     eprintln!("[ERROR] Failed to parse JSON");
@@ -689,8 +691,14 @@ async fn main() -> Result<()> {
                         Ok(None) => break,
                         Err(_) => {
                             // Timed out waiting for WS data; loop back so stop
-                            // signals are observed promptly and transcript buffers
-                            // can flush without writing on every word.
+                            // signals are observed promptly. A timeout also acts
+                            // as a small speech pause, so flush the live holdback
+                            // buffer and transcript buffer.
+                            live_word_buffer.flush_all(
+                                &mut keyboard,
+                                &mut replacement_reloader,
+                                &mut transcript_recorder,
+                            )?;
                             transcript_recorder.flush_if_due()?;
                         }
                     }
@@ -698,6 +706,11 @@ async fn main() -> Result<()> {
 
                 let _ = writer_tx.send(WriterCommand::Stop);
                 let _ = writer_handle.await;
+                live_word_buffer.flush_all(
+                    &mut keyboard,
+                    &mut replacement_reloader,
+                    &mut transcript_recorder,
+                )?;
                 transcript_recorder.flush()?;
 
                 let is_running = *running.lock().unwrap();
@@ -793,6 +806,7 @@ fn handle_message(
     capturing: &Arc<Mutex<bool>>,
     replacement_reloader: &mut ReplacementReloader,
     transcript_recorder: &mut TranscriptRecorder,
+    live_word_buffer: &mut LiveWordBuffer,
 ) -> Result<()> {
     let is_capturing = *capturing.lock().unwrap();
 
@@ -801,17 +815,23 @@ fn handle_message(
             "word" if is_capturing => {
                 if let Some(word) = json.get("word").and_then(|v| v.as_str()) {
                     if !word.is_empty() {
-                        let replaced = replacement_reloader.replace(word);
-                        eprintln!("[TYPING WORD] {}", replaced);
-                        keyboard.type_text(&replaced)?;
-                        keyboard.press_key(SpecialKey::Space)?;
-                        transcript_recorder.record("word", word, &replaced)?;
+                        live_word_buffer.push(word.to_string());
+                        live_word_buffer.flush_ready(
+                            keyboard,
+                            replacement_reloader,
+                            transcript_recorder,
+                        )?;
                     }
                 }
             }
             "final" if is_capturing => {
                 if let Some(text) = json.get("text").and_then(|v| v.as_str()) {
                     if !text.is_empty() {
+                        live_word_buffer.flush_all(
+                            keyboard,
+                            replacement_reloader,
+                            transcript_recorder,
+                        )?;
                         let replaced = replacement_reloader.replace(text);
                         eprintln!("[TYPING FINAL] {}", replaced);
                         keyboard.type_text(&replaced)?;
@@ -824,6 +844,72 @@ fn handle_message(
         }
     }
     Ok(())
+}
+
+struct LiveWordBuffer {
+    holdback_chunks: usize,
+    chunks: Vec<String>,
+}
+
+impl LiveWordBuffer {
+    fn new(holdback_chunks: usize) -> Self {
+        Self {
+            holdback_chunks,
+            chunks: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, chunk: String) {
+        self.chunks.push(chunk);
+    }
+
+    fn flush_ready(
+        &mut self,
+        keyboard: &mut Box<dyn VirtualKeyboard>,
+        replacement_reloader: &mut ReplacementReloader,
+        transcript_recorder: &mut TranscriptRecorder,
+    ) -> Result<()> {
+        if self.chunks.len() < self.holdback_chunks {
+            return Ok(());
+        }
+        self.flush_all(keyboard, replacement_reloader, transcript_recorder)
+    }
+
+    fn flush_all(
+        &mut self,
+        keyboard: &mut Box<dyn VirtualKeyboard>,
+        replacement_reloader: &mut ReplacementReloader,
+        transcript_recorder: &mut TranscriptRecorder,
+    ) -> Result<()> {
+        self.flush_count(
+            self.chunks.len(),
+            keyboard,
+            replacement_reloader,
+            transcript_recorder,
+        )
+    }
+
+    fn flush_count(
+        &mut self,
+        count: usize,
+        keyboard: &mut Box<dyn VirtualKeyboard>,
+        replacement_reloader: &mut ReplacementReloader,
+        transcript_recorder: &mut TranscriptRecorder,
+    ) -> Result<()> {
+        if count == 0 {
+            return Ok(());
+        }
+        let raw = self.chunks.drain(..count).collect::<Vec<_>>().join(" ");
+        if raw.trim().is_empty() {
+            return Ok(());
+        }
+        let replaced = replacement_reloader.replace(&raw);
+        eprintln!("[TYPING WORD] {}", replaced);
+        keyboard.type_text(&replaced)?;
+        keyboard.press_key(SpecialKey::Space)?;
+        transcript_recorder.record("word", &raw, &replaced)?;
+        Ok(())
+    }
 }
 
 struct TranscriptRecorder {
