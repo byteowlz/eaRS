@@ -107,9 +107,19 @@ sudo pacman -S sentencepiece
 
 > **Note:** The `just install-*` commands automatically check for and install sentencepiece.
 
-### macOS and Windows
+### macOS
 
-On macOS and Windows, `sentencepiece` is compiled from source and statically linked during the build process. No manual installation required.
+On macOS, `sentencepiece` is compiled from source and statically linked during the build process. eaRS also depends on Opus through `kaudio`; install the system Opus package so `audiopus_sys` does not fall back to its bundled CMake build:
+
+```bash
+brew install pkg-config opus cmake
+```
+
+If you see an `audiopus_sys` error mentioning `Compatibility with CMake < 3.5 has been removed from CMake`, Opus was not found by `pkg-config`. Install the packages above and rebuild. The `just check-deps` and `just install-*` recipes install these Homebrew dependencies automatically.
+
+### Windows
+
+On Windows, `sentencepiece` is compiled from source and statically linked during the build process. No manual installation required.
 
 ## Wayland/Linux Keyboard Emulation
 

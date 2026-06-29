@@ -182,7 +182,27 @@ check-deps:
             exit 1
         fi
     elif [[ "$OSTYPE" == "darwin"* ]]; then
-        # macOS: sentencepiece is compiled from source (static linking)
+        # macOS: sentencepiece is compiled from source (static linking), but
+        # kaudio's opus dependency should use Homebrew's libopus. If opus is
+        # missing, audiopus_sys falls back to its bundled Opus CMake project,
+        # which fails with CMake 4 because that upstream project still declares
+        # an ancient cmake_minimum_required version.
+        if ! command -v brew &> /dev/null; then
+            echo "⚠ Homebrew not found. Please install Homebrew, then run: brew install pkg-config opus cmake"
+            exit 1
+        fi
+        missing=()
+        for dep in pkg-config opus cmake; do
+            if ! brew list "$dep" &> /dev/null; then
+                missing+=("$dep")
+            fi
+        done
+        if ((${#missing[@]} > 0)); then
+            echo "Installing macOS build dependencies: ${missing[*]}"
+            brew install "${missing[@]}"
+        else
+            echo "✓ macOS build dependencies already installed"
+        fi
         echo "✓ macOS detected - sentencepiece will be compiled from source"
     elif [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
         # Windows: sentencepiece is compiled from source (static linking)
