@@ -6,7 +6,7 @@
 
 - **Server management**: `ears server start|stop` launches and controls the inference backend.
 - **Client capture**: Running `ears` without subcommands streams microphone audio to the server and prints live transcripts.
-- **Dictation**: `ears dictation start|stop` enables system-wide dictation with hotkey control.
+- **Dictation**: `ears dictation start|stop` enables system-wide dictation with hotkey control, dictionary replacements, and transcript history.
 
 ## Installation
 
@@ -262,6 +262,12 @@ All binaries are emitted into `./target/release/`.
 
 # 3. (Optional) Enable system-wide dictation
 ./target/release/ears dictation start
+
+# 4. (Optional) Add speech-specific replacements
+./target/release/ears dictionary add \
+  --replacement "Kyutai" \
+  --phrase "cute eye" \
+  --phrase "q tie"
 ```
 
 Press `Ctrl+C` in the client to stop streaming. When you are done with the backend:
@@ -313,6 +319,61 @@ The server writes a PID file to `$XDG_STATE_HOME/ears/server.pid` (or `~/.local/
 
 The client streams raw 24 kHz mono PCM to the server and displays each live word as it appears. When the backend signals completion, the final transcript (and optional timestamps) is printed.
 
+## Dictionary replacements
+
+eaRS can apply a fast dictionary pass to dictation output before typing. This is useful for project names, product names, acronyms, and words that speech-to-text engines consistently mishear.
+
+Dictionary entries map multiple observed phrases to one canonical replacement:
+
+```toml
+version = 1
+
+[[entries]]
+replace = "Kyutai"
+phrases = ["cute eye", "q tie", "kyu tai"]
+
+[[entries]]
+replace = "byteowlz"
+phrases = ["byte owls", "bite owls", "by alts"]
+```
+
+The default global dictionary lives at:
+
+```text
+$XDG_CONFIG_HOME/ears/dictionaries/global.toml
+# or ~/.config/ears/dictionaries/global.toml
+```
+
+Manage it with:
+
+```bash
+ears dictionary list
+ears dictionary add --replacement "oqto" --phrase "octo" --phrase "O Q T O"
+ears dictionary test "cute eye inside pie agent"
+```
+
+`dictionary add` is flag-based on purpose: `--replacement` is the canonical text, and each `--phrase` is an observed phrase to replace. Repeated adds for the same replacement merge into the existing entry. If a phrase already belongs to another entry, it is moved so each phrase has one owner.
+
+`ears-dictation` hot-reloads dictionary files when they change. After installing a new eaRS binary you still need to restart `ears-dictation` once; after that, dictionary edits are picked up automatically.
+
+## Transcript history
+
+Dictation transcript history is enabled by default. Live word events and final events are buffered in memory and periodically appended to JSONL files:
+
+```text
+$XDG_STATE_HOME/ears/transcripts/YYYY-MM-DD.jsonl
+# or ~/.local/state/ears/transcripts/YYYY-MM-DD.jsonl
+```
+
+Unchanged live words omit the `replaced` field by default:
+
+```json
+{"ts":1782720576,"type":"word","raw":"and","changed":false}
+{"ts":1782720576,"type":"word","raw":"cute eye","replaced":"Kyutai","changed":true}
+```
+
+Buffers flush every few seconds, after enough events, on disconnect, and on shutdown. This avoids writing to disk for every live word while keeping recent dictation persisted.
+
 ## Configuration
 
 Runtime configuration lives at:
@@ -332,6 +393,26 @@ Key sections:
 - `[dictation]`: `start_paused = true|false` controls whether dictation starts paused or live.
 - `[dictation.notifications]`: Toggle desktop popups and customise start/pause/stop messages shown for dictation state changes.
 - `[dictation.hooks]` (requires `cargo build --features hooks`): Run shell commands on start, pause, or stop transitions (e.g., change colours in status bars).
+- `[replacement]`: Enable dictionary replacement, configure dictionary paths, and choose case-sensitive matching.
+- `[transcripts]`: Enable transcript JSONL history and configure buffering.
+
+Example replacement and transcript settings:
+
+```toml
+[replacement]
+enabled = true
+dictionary_paths = ["~/.config/ears/dictionaries/global.toml"]
+case_sensitive = false
+
+[transcripts]
+enabled = true
+path = "default"
+store_raw = true
+store_replaced = true
+store_unchanged_replaced = false
+flush_interval_ms = 2000
+flush_max_events = 50
+```
 
 If the file does not exist, it is created on first run together with the reference audio bundle.
 
