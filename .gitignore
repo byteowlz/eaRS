@@ -13,3 +13,6 @@ dist/
 
 # generated demo audio (produced by scripts/generate_demo_audio.sh)
 test_audio/generated/
+
+# Local test audio assets
+/test_audio/
