@@ -359,10 +359,12 @@ Manage it with:
 ```bash
 ears dictionary list
 ears dictionary add --replacement "oqto" --phrase "octo" --phrase "O Q T O"
+ears dictionary remove --phrase "octo"
+ears dictionary remove --replacement "oqto"
 ears dictionary test "cute eye inside pie agent"
 ```
 
-`dictionary add` is flag-based on purpose: `--replacement` is the canonical text, and each `--phrase` is an observed phrase to replace. Repeated adds for the same replacement merge into the existing entry. If a phrase already belongs to another entry, it is moved so each phrase has one owner.
+`dictionary add` is flag-based on purpose: `--replacement` is the canonical text, and each `--phrase` is an observed phrase to replace. Repeated adds for the same replacement merge into the existing entry. If a phrase already belongs to another entry, it is moved so each phrase has one owner. Use `dictionary remove --phrase "..."` to remove observed phrases, or `dictionary remove --replacement "..."` to remove an entire canonical entry.
 
 `ears-dictation` hot-reloads dictionary files when they change. After installing a new eaRS binary you still need to restart `ears-dictation` once; after that, dictionary edits are picked up automatically.
 

@@ -81,6 +81,8 @@ enum DictionaryCommand {
     List,
     #[command(about = "Add observed phrases for a canonical replacement")]
     Add(DictionaryAddArgs),
+    #[command(about = "Remove observed phrases or a canonical replacement")]
+    Remove(DictionaryRemoveArgs),
     #[command(about = "Test dictionary replacement on text")]
     Test(DictionaryTestArgs),
 }
@@ -93,6 +95,17 @@ struct DictionaryAddArgs {
 
     /// Observed phrase to replace. Repeat this flag to add multiple phrases.
     #[arg(short, long = "phrase", value_name = "TEXT", required = true)]
+    phrases: Vec<String>,
+}
+
+#[derive(Args)]
+struct DictionaryRemoveArgs {
+    /// Remove an entire canonical replacement entry, or limit phrase removal to this replacement.
+    #[arg(short, long, value_name = "TEXT")]
+    replacement: Option<String>,
+
+    /// Observed phrase to remove. Repeat this flag to remove multiple phrases.
+    #[arg(short, long = "phrase", value_name = "TEXT")]
     phrases: Vec<String>,
 }
 
@@ -387,6 +400,7 @@ fn handle_dictionary_command(command: DictionaryCommand) -> Result<()> {
     match command {
         DictionaryCommand::List => list_dictionary(),
         DictionaryCommand::Add(args) => add_dictionary_entry(args),
+        DictionaryCommand::Remove(args) => remove_dictionary_entry(args),
         DictionaryCommand::Test(args) => test_dictionary(args),
     }
 }
@@ -422,6 +436,25 @@ fn add_dictionary_entry(args: DictionaryAddArgs) -> Result<()> {
     dictionary.add_entry(args.replacement.clone(), args.phrases);
     dictionary.save(&path)?;
     println!("updated {}", path.display());
+    Ok(())
+}
+
+fn remove_dictionary_entry(args: DictionaryRemoveArgs) -> Result<()> {
+    if args.replacement.is_none() && args.phrases.is_empty() {
+        return Err(anyhow!(
+            "provide --phrase to remove observed phrase(s), --replacement to remove an entry, or both to remove phrase(s) from one entry"
+        ));
+    }
+    let config = AppConfig::load()?;
+    let path = primary_dictionary_path(&config);
+    let mut dictionary = ReplacementDictionary::load_or_create(&path)?;
+    let removed = if args.phrases.is_empty() {
+        dictionary.remove_replacement(args.replacement.as_deref().unwrap())
+    } else {
+        dictionary.remove_phrases(args.phrases, args.replacement.as_deref())
+    };
+    dictionary.save(&path)?;
+    println!("removed {removed} item(s) from {}", path.display());
     Ok(())
 }
 

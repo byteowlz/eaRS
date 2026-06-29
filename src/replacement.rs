@@ -177,11 +177,7 @@ impl ReplacementDictionary {
     }
 
     pub fn add_entry(&mut self, replacement: String, phrases: Vec<String>) {
-        let normalized_phrases: Vec<String> = phrases
-            .into_iter()
-            .map(|phrase| phrase.trim().to_string())
-            .filter(|phrase| !phrase.is_empty())
-            .collect();
+        let normalized_phrases = normalize_phrases(phrases);
 
         // A phrase must only have one owner. If the user explicitly adds
         // `-r "Octo" -p "oqto"`, remove `oqto` from any previous replacement
@@ -220,6 +216,42 @@ impl ReplacementDictionary {
             phrases: normalized_phrases,
         });
     }
+
+    pub fn remove_replacement(&mut self, replacement: &str) -> usize {
+        let before = self.entries.len();
+        self.entries
+            .retain(|entry| !entry.replace.eq_ignore_ascii_case(replacement));
+        before - self.entries.len()
+    }
+
+    pub fn remove_phrases(&mut self, phrases: Vec<String>, replacement: Option<&str>) -> usize {
+        let normalized_phrases = normalize_phrases(phrases);
+        let mut removed = 0;
+        for entry in &mut self.entries {
+            if replacement
+                .is_some_and(|replacement| !entry.replace.eq_ignore_ascii_case(replacement))
+            {
+                continue;
+            }
+            let before = entry.phrases.len();
+            entry.phrases.retain(|existing| {
+                !normalized_phrases
+                    .iter()
+                    .any(|phrase| phrase.eq_ignore_ascii_case(existing))
+            });
+            removed += before - entry.phrases.len();
+        }
+        self.entries.retain(|entry| !entry.phrases.is_empty());
+        removed
+    }
+}
+
+fn normalize_phrases(phrases: Vec<String>) -> Vec<String> {
+    phrases
+        .into_iter()
+        .map(|phrase| phrase.trim().to_string())
+        .filter(|phrase| !phrase.is_empty())
+        .collect()
 }
 
 pub fn dictionary_paths(config: &ReplacementConfig) -> Vec<PathBuf> {
