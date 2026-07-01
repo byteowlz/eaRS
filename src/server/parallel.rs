@@ -1,5 +1,8 @@
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use candle::Tensor;
@@ -19,6 +22,7 @@ const STALL_WARN_STEPS: usize = 75;
 /// Consecutive audio-consuming steps without a word boundary before forcibly
 /// resetting the model slot to recover from a permanent stall. 250 steps ≈ 20s.
 const STALL_RESET_STEPS: usize = 250;
+const DEBUG_LOG_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone)]
 pub(crate) struct ParallelEngine {
@@ -126,6 +130,157 @@ struct SessionState {
     /// emitted no `Word`/`EndWord`. Detects stalls where the LM keeps stepping
     /// but stops emitting boundaries (trx-sm3r).
     steps_without_words: usize,
+    debug: DebugCounters,
+}
+
+#[derive(Debug, Clone)]
+struct DebugCounters {
+    last_log: Instant,
+    audio_samples: usize,
+    audio_sum_squares: f64,
+    model_steps: usize,
+    step_msgs: usize,
+    word_msgs: usize,
+    endword_msgs: usize,
+}
+
+struct EngineDebugLog {
+    file: File,
+}
+
+impl EngineDebugLog {
+    fn from_env() -> Option<Self> {
+        let enabled = std::env::var("EARS_DEBUG_ENGINE")
+            .ok()
+            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+            .unwrap_or(false);
+        if !enabled {
+            return None;
+        }
+
+        let dir = std::env::var("EARS_DEBUG_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| default_debug_dir());
+        if let Err(err) = fs::create_dir_all(&dir) {
+            eprintln!(
+                "[ears-server] EARS_DEBUG_ENGINE=1 but failed to create {}: {}",
+                dir.display(),
+                err
+            );
+            return None;
+        }
+
+        let path = dir.join("kyutai-engine.log");
+        match OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&path)
+        {
+            Ok(file) => {
+                eprintln!("[ears-server] kyutai debug log: {}", path.display());
+                Some(Self { file })
+            }
+            Err(err) => {
+                eprintln!(
+                    "[ears-server] EARS_DEBUG_ENGINE=1 but failed to open {}: {}",
+                    path.display(),
+                    err
+                );
+                None
+            }
+        }
+    }
+
+    fn maybe_log_session(&mut self, session: &mut SessionState, slot: usize, now: Instant) {
+        if now.duration_since(session.debug.last_log) < DEBUG_LOG_INTERVAL {
+            return;
+        }
+
+        let last_word_ms = session
+            .last_voice_activity
+            .map(|last| last.elapsed().as_millis() as u64)
+            .unwrap_or(u64::MAX);
+        let line = format!(
+            "{{\"ts_ms\":{},\"session\":{},\"slot\":{},\"closed\":{},\"audio_samples\":{},\"rms\":{:.6},\"queued_samples\":{},\"model_steps\":{},\"step_msgs\":{},\"word_msgs\":{},\"endword_msgs\":{},\"last_word_ms\":{},\"no_word_steps\":{}}}",
+            unix_ms(),
+            session.id,
+            slot,
+            session.closed,
+            session.debug.audio_samples,
+            session.debug.rms(),
+            session.sample_buffer.len(),
+            session.debug.model_steps,
+            session.debug.step_msgs,
+            session.debug.word_msgs,
+            session.debug.endword_msgs,
+            last_word_ms,
+            session.steps_without_words,
+        );
+        eprintln!("[kyutai-debug] {line}");
+        let _ = writeln!(self.file, "{line}");
+        let _ = self.file.flush();
+        session.debug.reset_period(now);
+    }
+}
+
+fn default_debug_dir() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".local")
+        .join("state")
+        .join("ears")
+        .join("debug")
+}
+
+fn unix_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
+}
+
+impl DebugCounters {
+    fn new() -> Self {
+        Self {
+            last_log: Instant::now(),
+            audio_samples: 0,
+            audio_sum_squares: 0.0,
+            model_steps: 0,
+            step_msgs: 0,
+            word_msgs: 0,
+            endword_msgs: 0,
+        }
+    }
+
+    fn observe_audio(&mut self, chunk: &[f32]) {
+        self.audio_samples += chunk.len();
+        self.audio_sum_squares += chunk
+            .iter()
+            .map(|sample| {
+                let sample = f64::from(*sample);
+                sample * sample
+            })
+            .sum::<f64>();
+    }
+
+    fn rms(&self) -> f64 {
+        if self.audio_samples == 0 {
+            0.0
+        } else {
+            (self.audio_sum_squares / self.audio_samples as f64).sqrt()
+        }
+    }
+
+    fn reset_period(&mut self, now: Instant) {
+        self.last_log = now;
+        self.audio_samples = 0;
+        self.audio_sum_squares = 0.0;
+        self.model_steps = 0;
+        self.step_msgs = 0;
+        self.word_msgs = 0;
+        self.endword_msgs = 0;
+    }
 }
 
 impl SessionState {
@@ -152,6 +307,7 @@ impl SessionState {
             last_word: None,
             word_sent: false,
             steps_without_words: 0,
+            debug: DebugCounters::new(),
             last_voice_activity: None,
             vad_timeout,
             vad_enabled,
@@ -164,6 +320,7 @@ impl SessionState {
 
     fn process_inputs(&mut self) {
         while let Ok(chunk) = self.audio_rx.try_recv() {
+            self.debug.observe_audio(&chunk);
             self.sample_buffer.extend_from_slice(&chunk);
         }
 
@@ -369,6 +526,7 @@ fn run_parallel_loop(
     let vad_enabled = model.vad_enabled();
     let vad_timeout = model.vad_timeout_seconds();
     let dev = model.device().clone();
+    let mut debug_log = EngineDebugLog::from_env();
 
     loop {
         while let Ok(cmd) = command_rx.try_recv() {
@@ -433,6 +591,7 @@ fn run_parallel_loop(
                     let start = idx * FRAME_SIZE;
                     pcm_batch[start..start + FRAME_SIZE].copy_from_slice(&frame);
                     mask_vec[idx] = true;
+                    session.debug.model_steps += 1;
                 }
             }
         }
@@ -449,12 +608,28 @@ fn run_parallel_loop(
             let mut produced_word = vec![false; capacity];
             for msg in msgs {
                 match msg {
-                    moshi::asr::AsrMsg::Step { .. } => {}
-                    msg @ moshi::asr::AsrMsg::Word { batch_idx, .. }
-                    | msg @ moshi::asr::AsrMsg::EndWord { batch_idx, .. } => {
+                    moshi::asr::AsrMsg::Step { .. } => {
+                        for (idx, state) in sessions.iter_mut().enumerate() {
+                            if mask_vec[idx] {
+                                if let Some(session) = state {
+                                    session.debug.step_msgs += 1;
+                                }
+                            }
+                        }
+                    }
+                    msg @ moshi::asr::AsrMsg::Word { batch_idx, .. } => {
                         produced_word[batch_idx] = true;
                         if let Some(session) = sessions.get_mut(batch_idx).and_then(Option::as_mut)
                         {
+                            session.debug.word_msgs += 1;
+                            session.handle_asr_msg(msg, model);
+                        }
+                    }
+                    msg @ moshi::asr::AsrMsg::EndWord { batch_idx, .. } => {
+                        produced_word[batch_idx] = true;
+                        if let Some(session) = sessions.get_mut(batch_idx).and_then(Option::as_mut)
+                        {
+                            session.debug.endword_msgs += 1;
                             session.handle_asr_msg(msg, model);
                         }
                     }
@@ -495,6 +670,15 @@ fn run_parallel_loop(
                         );
                     }
                     session.reset_asr_state();
+                }
+            }
+        }
+
+        if let Some(debug_log) = debug_log.as_mut() {
+            let now = Instant::now();
+            for (idx, state) in sessions.iter_mut().enumerate() {
+                if let Some(session) = state {
+                    debug_log.maybe_log_session(session, idx, now);
                 }
             }
         }
