@@ -3,7 +3,13 @@ use futures::{SinkExt, StreamExt};
 #[cfg(unix)]
 use libc::{EPERM, ESRCH, kill};
 use serde_json::json;
-use std::{fs, io, path::PathBuf, sync::Arc};
+use std::{
+    fs::{self, File, OpenOptions},
+    io::{self, Write},
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
@@ -26,6 +32,204 @@ mod sherpa;
 pub use engine::EngineKind;
 #[cfg(feature = "parakeet")]
 pub use parakeet::ParakeetDevice;
+
+#[derive(Debug, Clone)]
+struct WsMessageDebug {
+    is_audio: bool,
+    audio_samples: usize,
+    audio_sum_squares: f64,
+    is_text: bool,
+    is_close: bool,
+}
+
+impl WsMessageDebug {
+    fn from_message(msg: &Message) -> Self {
+        match msg {
+            Message::Binary(data) => {
+                let mut audio_samples = 0usize;
+                let mut audio_sum_squares = 0.0f64;
+                for bytes in data.chunks_exact(4) {
+                    let sample = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                    let sample = f64::from(sample);
+                    audio_sum_squares += sample * sample;
+                    audio_samples += 1;
+                }
+                Self {
+                    is_audio: !data.is_empty(),
+                    audio_samples,
+                    audio_sum_squares,
+                    is_text: false,
+                    is_close: false,
+                }
+            }
+            Message::Text(_) => Self {
+                is_audio: false,
+                audio_samples: 0,
+                audio_sum_squares: 0.0,
+                is_text: true,
+                is_close: false,
+            },
+            Message::Close(_) => Self {
+                is_audio: false,
+                audio_samples: 0,
+                audio_sum_squares: 0.0,
+                is_text: false,
+                is_close: true,
+            },
+            _ => Self {
+                is_audio: false,
+                audio_samples: 0,
+                audio_sum_squares: 0.0,
+                is_text: false,
+                is_close: false,
+            },
+        }
+    }
+}
+
+struct WsDebugLog {
+    file: File,
+    session_id: u64,
+    last_log: Instant,
+    audio_msgs: usize,
+    audio_samples: usize,
+    audio_sum_squares: f64,
+    send_audio_ok: usize,
+    send_audio_err: usize,
+    text_msgs: usize,
+    close_msgs: usize,
+    last_audio: Option<Instant>,
+}
+
+impl WsDebugLog {
+    fn from_env(session_id: u64) -> Option<Self> {
+        let enabled = std::env::var("EARS_DEBUG_ENGINE")
+            .ok()
+            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+            .unwrap_or(false);
+        if !enabled {
+            return None;
+        }
+
+        let dir = std::env::var("EARS_DEBUG_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| default_debug_dir());
+        if let Err(err) = fs::create_dir_all(&dir) {
+            eprintln!(
+                "[ears-server] EARS_DEBUG_ENGINE=1 but failed to create {}: {}",
+                dir.display(),
+                err
+            );
+            return None;
+        }
+
+        let path = dir.join("ws-sessions.log");
+        match OpenOptions::new().create(true).append(true).open(&path) {
+            Ok(file) => {
+                eprintln!("[ears-server] websocket debug log: {}", path.display());
+                Some(Self {
+                    file,
+                    session_id,
+                    last_log: Instant::now(),
+                    audio_msgs: 0,
+                    audio_samples: 0,
+                    audio_sum_squares: 0.0,
+                    send_audio_ok: 0,
+                    send_audio_err: 0,
+                    text_msgs: 0,
+                    close_msgs: 0,
+                    last_audio: None,
+                })
+            }
+            Err(err) => {
+                eprintln!(
+                    "[ears-server] EARS_DEBUG_ENGINE=1 but failed to open {}: {}",
+                    path.display(),
+                    err
+                );
+                None
+            }
+        }
+    }
+
+    fn observe(&mut self, engine: EngineKind, msg: &WsMessageDebug, ok: bool) {
+        if msg.is_audio {
+            self.audio_msgs += 1;
+            self.audio_samples += msg.audio_samples;
+            self.audio_sum_squares += msg.audio_sum_squares;
+            self.last_audio = Some(Instant::now());
+            if ok {
+                self.send_audio_ok += 1;
+            } else {
+                self.send_audio_err += 1;
+            }
+        }
+        if msg.is_text {
+            self.text_msgs += 1;
+        }
+        if msg.is_close {
+            self.close_msgs += 1;
+        }
+        self.maybe_log(engine);
+    }
+
+    fn maybe_log(&mut self, engine: EngineKind) {
+        if self.last_log.elapsed() < Duration::from_secs(1) {
+            return;
+        }
+        let rms = if self.audio_samples == 0 {
+            0.0
+        } else {
+            (self.audio_sum_squares / self.audio_samples as f64).sqrt()
+        };
+        let last_audio_ms = self
+            .last_audio
+            .map(|last| last.elapsed().as_millis() as u64)
+            .unwrap_or(u64::MAX);
+        let line = format!(
+            "{{\"ts_ms\":{},\"kind\":\"ws\",\"session\":{},\"engine\":\"{}\",\"audio_msgs\":{},\"audio_samples\":{},\"rms\":{:.6},\"send_audio_ok\":{},\"send_audio_err\":{},\"text_msgs\":{},\"close_msgs\":{},\"last_audio_ms\":{}}}",
+            unix_ms(),
+            self.session_id,
+            engine.as_str(),
+            self.audio_msgs,
+            self.audio_samples,
+            rms,
+            self.send_audio_ok,
+            self.send_audio_err,
+            self.text_msgs,
+            self.close_msgs,
+            last_audio_ms,
+        );
+        eprintln!("[ws-debug] {line}");
+        let _ = writeln!(self.file, "{line}");
+        let _ = self.file.flush();
+
+        self.last_log = Instant::now();
+        self.audio_msgs = 0;
+        self.audio_samples = 0;
+        self.audio_sum_squares = 0.0;
+        self.send_audio_ok = 0;
+        self.send_audio_err = 0;
+        self.text_msgs = 0;
+        self.close_msgs = 0;
+    }
+}
+
+fn default_debug_dir() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".local")
+        .join("state")
+        .join("ears")
+        .join("debug")
+}
+
+fn unix_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
+}
 
 #[derive(Debug, Clone)]
 pub struct ServerOptions {
@@ -282,8 +486,10 @@ async fn handle_connection(
     let transcription_options = transcription.clone();
 
     let reader = tokio::spawn(async move {
+        let mut ws_debug = WsDebugLog::from_env(session_id);
         if let Some(msg) = first_msg {
-            if let Err(err) = handle_client_message(
+            let msg_debug = WsMessageDebug::from_message(&msg);
+            let result = handle_client_message(
                 msg,
                 &mut session_opt,
                 &mut sink_for_reader,
@@ -291,16 +497,21 @@ async fn handle_connection(
                 &msg_tx,
                 &mut current_engine,
                 &transcription_options,
-            ) {
+            );
+            if let Some(debug) = ws_debug.as_mut() {
+                debug.observe(current_engine, &msg_debug, result.is_ok());
+            }
+            if let Err(err) = result {
                 eprintln!("[ears-server] failed to process initial message: {err}");
                 return;
             }
         }
 
-        while let Some(msg) = ws_reader.next().await {
-            match msg {
-                Ok(message) => {
-                    if let Err(err) = handle_client_message(
+        loop {
+            match tokio::time::timeout(Duration::from_secs(1), ws_reader.next()).await {
+                Ok(Some(Ok(message))) => {
+                    let msg_debug = WsMessageDebug::from_message(&message);
+                    let result = handle_client_message(
                         message,
                         &mut session_opt,
                         &mut sink_for_reader,
@@ -308,17 +519,27 @@ async fn handle_connection(
                         &msg_tx,
                         &mut current_engine,
                         &transcription_options,
-                    ) {
+                    );
+                    if let Some(debug) = ws_debug.as_mut() {
+                        debug.observe(current_engine, &msg_debug, result.is_ok());
+                    }
+                    if let Err(err) = result {
                         eprintln!("[ears-server] reader error: {err}");
                         break;
                     }
                 }
-                Err(e) => {
+                Ok(Some(Err(e))) => {
                     eprintln!("[ears-server] WebSocket error: {e}");
                     if let Some(sess) = session_opt.take() {
                         sess.request_stop();
                     }
                     break;
+                }
+                Ok(None) => break,
+                Err(_) => {
+                    if let Some(debug) = ws_debug.as_mut() {
+                        debug.maybe_log(current_engine);
+                    }
                 }
             }
         }
