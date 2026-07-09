@@ -26,7 +26,7 @@ use tokio_tungstenite::{
 use ears::server::EngineKind;
 #[cfg(feature = "parakeet")]
 use ears::server::ParakeetDevice;
-#[cfg(any(feature = "parakeet", feature = "sherpa"))]
+#[cfg(any(feature = "parakeet", feature = "sherpa", feature = "parakeet-rs"))]
 use std::path::PathBuf;
 
 #[cfg(unix)]
@@ -137,6 +137,8 @@ enum EngineArg {
     Parakeet,
     #[cfg(feature = "sherpa")]
     Sherpa,
+    #[cfg(feature = "parakeet-rs")]
+    ParakeetRs,
 }
 
 impl EngineArg {
@@ -147,6 +149,8 @@ impl EngineArg {
             EngineArg::Parakeet => EngineKind::Parakeet,
             #[cfg(feature = "sherpa")]
             EngineArg::Sherpa => EngineKind::Sherpa,
+            #[cfg(feature = "parakeet-rs")]
+            EngineArg::ParakeetRs => EngineKind::ParakeetRs,
         }
     }
 }
@@ -316,6 +320,17 @@ struct ServerStartArgs {
     #[cfg(feature = "sherpa")]
     #[arg(long, default_value = "cpu")]
     sherpa_provider: String,
+
+    /// parakeet-rs (Nemotron) model directory containing encoder.onnx,
+    /// decoder_joint.onnx, tokenizer.model. Enables `--engine parakeet-rs`.
+    #[cfg(feature = "parakeet-rs")]
+    #[arg(long)]
+    parakeet_rs_model: Option<String>,
+
+    /// Target language for the multilingual parakeet-rs model (e.g. "de", "auto").
+    #[cfg(feature = "parakeet-rs")]
+    #[arg(long)]
+    parakeet_rs_lang: Option<String>,
 }
 
 impl Default for ServerStartArgs {
@@ -350,6 +365,10 @@ impl Default for ServerStartArgs {
             sherpa_num_threads: 1,
             #[cfg(feature = "sherpa")]
             sherpa_provider: "cpu".to_string(),
+            #[cfg(feature = "parakeet-rs")]
+            parakeet_rs_model: None,
+            #[cfg(feature = "parakeet-rs")]
+            parakeet_rs_lang: None,
         }
     }
 }
@@ -739,6 +758,10 @@ fn build_server_options(args: &ServerStartArgs) -> Result<server::ServerOptions>
         sherpa_num_threads: args.sherpa_num_threads,
         #[cfg(feature = "sherpa")]
         sherpa_provider: args.sherpa_provider.clone(),
+        #[cfg(feature = "parakeet-rs")]
+        parakeet_rs_model_dir: args.parakeet_rs_model.as_ref().map(PathBuf::from),
+        #[cfg(feature = "parakeet-rs")]
+        parakeet_rs_lang: args.parakeet_rs_lang.clone(),
     })
 }
 

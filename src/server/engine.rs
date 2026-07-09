@@ -14,6 +14,8 @@ pub enum EngineKind {
     Parakeet,
     #[cfg(feature = "sherpa")]
     Sherpa,
+    #[cfg(feature = "parakeet-rs")]
+    ParakeetRs,
 }
 
 impl EngineKind {
@@ -24,6 +26,8 @@ impl EngineKind {
             EngineKind::Parakeet => "parakeet",
             #[cfg(feature = "sherpa")]
             EngineKind::Sherpa => "sherpa",
+            #[cfg(feature = "parakeet-rs")]
+            EngineKind::ParakeetRs => "parakeet-rs",
         }
     }
 
@@ -34,6 +38,8 @@ impl EngineKind {
             "parakeet" | "prkt" => Some(EngineKind::Parakeet),
             #[cfg(feature = "sherpa")]
             "sherpa" | "sherpa-onnx" | "zipformer" => Some(EngineKind::Sherpa),
+            #[cfg(feature = "parakeet-rs")]
+            "parakeet-rs" | "parakeet_rs" | "nemotron" => Some(EngineKind::ParakeetRs),
             _ => None,
         }
     }
@@ -71,6 +77,11 @@ mod tests {
         {
             assert_eq!(EngineKind::from_str("sherpa"), Some(EngineKind::Sherpa));
             assert_eq!(EngineKind::from_str("zipformer"), Some(EngineKind::Sherpa));
+        }
+        #[cfg(feature = "parakeet-rs")]
+        {
+            assert_eq!(EngineKind::from_str("nemotron"), Some(EngineKind::ParakeetRs));
+            assert_eq!(EngineKind::from_str("parakeet-rs"), Some(EngineKind::ParakeetRs));
         }
         assert_eq!(EngineKind::from_str("unknown"), None);
     }

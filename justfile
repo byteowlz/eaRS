@@ -306,8 +306,8 @@ install-all:
     fi
     
     # Build feature list with all engines and hooks
-    FEATURES=("whisper" "parakeet" "sherpa" "hooks")
-    
+    FEATURES=("whisper" "parakeet-rs" "sherpa" "hooks")
+
     if [[ -n "$ACCEL_FEATURE" ]]; then
         FEATURES=("$ACCEL_FEATURE" "${FEATURES[@]}")
     fi
@@ -343,7 +343,7 @@ install-all:
                 *) echo "Invalid choice, using auto-detected"; ;;
             esac
             
-            FEATURES=("whisper" "parakeet" "sherpa" "hooks")
+            FEATURES=("whisper" "parakeet-rs" "sherpa" "hooks")
             if [[ -n "$ACCEL_FEATURE" ]]; then
                 FEATURES=("$ACCEL_FEATURE" "${FEATURES[@]}")
             fi

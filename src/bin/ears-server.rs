@@ -4,7 +4,7 @@ use ears::server::EngineKind;
 #[cfg(feature = "parakeet")]
 use ears::server::ParakeetDevice;
 use ears::{TranscriptionOptions, config::AppConfig, server};
-#[cfg(any(feature = "parakeet", feature = "sherpa"))]
+#[cfg(any(feature = "parakeet", feature = "sherpa", feature = "parakeet-rs"))]
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -156,6 +156,16 @@ struct Args {
     #[cfg(feature = "sherpa")]
     #[arg(long, default_value = "cpu")]
     sherpa_provider: String,
+
+    /// parakeet-rs (Nemotron) model directory. Enables `--engine parakeet-rs`.
+    #[cfg(feature = "parakeet-rs")]
+    #[arg(long)]
+    parakeet_rs_model: Option<String>,
+
+    /// Target language for the multilingual parakeet-rs model (e.g. "de", "auto").
+    #[cfg(feature = "parakeet-rs")]
+    #[arg(long)]
+    parakeet_rs_lang: Option<String>,
 }
 
 #[cfg(feature = "sherpa")]
@@ -237,6 +247,10 @@ fn build_server_options(args: &Args) -> Result<server::ServerOptions> {
         sherpa_num_threads: args.sherpa_num_threads,
         #[cfg(feature = "sherpa")]
         sherpa_provider: args.sherpa_provider.clone(),
+        #[cfg(feature = "parakeet-rs")]
+        parakeet_rs_model_dir: args.parakeet_rs_model.as_ref().map(PathBuf::from),
+        #[cfg(feature = "parakeet-rs")]
+        parakeet_rs_lang: args.parakeet_rs_lang.clone(),
     })
 }
 

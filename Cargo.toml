@@ -40,9 +40,12 @@ moshi = "0.6.4"
 # prkt must come before sentencepiece to ensure ort's protobuf symbols are used
 # (both bundle protobuf-lite, and the linker uses the first definition)
 prkt = { path = "prkt", optional = true }
-# Pin ort to compatible version - prkt needs ort 2.0.0-rc.9/rc.10 API
-ort = { version = "=2.0.0-rc.10", optional = true, features = ["load-dynamic"] }
-ort-sys = { version = "=2.0.0-rc.10", optional = true, features = ["download-binaries", "load-dynamic"] }
+# Pin ort to a version compatible with both prkt (caret ^2.0.0-rc.10) and
+# parakeet-rs (caret ^2.0.0-rc.12). eaRS pins exact so both engines resolve to
+# one ort; rc.12 satisfies both caret requirements. eaRS's own ort dep is only
+# pulled by the prkt `parakeet` feature (it is optional below).
+ort = { version = "=2.0.0-rc.12", optional = true, features = ["load-dynamic"] }
+ort-sys = { version = "=2.0.0-rc.12", optional = true, features = ["download-binaries", "disable-linking"] }
 serde = { version = "1.0.210", features = ["derive"] }
 serde_json = "1.0.115"
 toml = "0.9"
@@ -65,6 +68,11 @@ cudarc = { version = "0.17", optional = true, features = ["cuda-version-from-bui
 notifica = "3.0.2"
 webrtc-vad = { version = "0.4", optional = true }
 sherpa-onnx = { version = "1.13", optional = true, default-features = false, features = ["shared"] }
+# parakeet-rs (Nemotron streaming). Mutually exclusive in practice with the
+# `parakeet` (prkt) feature: prkt pins ort =2.0.0-rc.10 while parakeet-rs needs
+# ort 2.0.0-rc.12, and eaRS's own `ort` dep is optional (only pulled by the
+# prkt feature), so do not enable both `parakeet` and `parakeet-rs` together.
+parakeet-rs = { package = "parakeet-rs", path = "../parakeet-rs", optional = true, default-features = false }
 
 # Platform-specific sentencepiece configuration
 # All platforms: compile from source (static linking).
@@ -84,12 +92,15 @@ hooks = []
 # Engines
 parakeet = ["dep:prkt", "dep:ort", "dep:ort-sys", "dep:webrtc-vad"]
 sherpa = ["dep:sherpa-onnx"]
+# parakeet-rs Nemotron streaming engine (ort 2.0.0-rc.12). Enables ort via
+# parakeet-rs's own features. Do NOT combine with the `parakeet` (prkt) feature.
+parakeet-rs = ["dep:parakeet-rs", "parakeet-rs/cpu", "parakeet-rs/ort-defaults"]
 
 # Acceleration (shared flags)
-nvidia = ["dep:cudarc", "candle/cuda", "candle-nn/cuda", "prkt/cuda"]
-apple = ["candle/metal", "candle-nn/metal", "prkt/coreml"]
-amd = ["prkt/rocm"]
-directml = ["prkt/directml"]
+nvidia = ["dep:cudarc", "candle/cuda", "candle-nn/cuda"]
+apple = ["candle/metal", "candle-nn/metal"]
+amd = []
+directml = []
 
 # Backwards-compat aliases
 cuda = ["nvidia"]
