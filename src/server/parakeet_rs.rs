@@ -12,7 +12,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use crossbeam_channel::{Receiver, Sender, select, unbounded};
@@ -30,6 +30,9 @@ const NEMOTRON_SAMPLE_RATE: usize = 16_000;
 const CHUNK_SAMPLES_16K: usize = 8_960;
 /// kaudio resampler needs a minimum input window; mirror sherpa's 1.6k floor.
 const RESAMPLE_MIN_SAMPLES: usize = 1_600;
+/// Wait longer than one 560 ms Nemotron chunk before treating an unbounded
+/// trailing fragment as a completed word during a genuine speaking pause.
+const PARTIAL_WORD_FLUSH_TIMEOUT: Duration = Duration::from_millis(800);
 
 #[derive(Debug, Clone)]
 pub struct ParakeetRsEngineConfig {
@@ -194,6 +197,7 @@ fn run_parakeet_rs_session(
     // unbounded fragment so it is not typed as a separate word (e.g. `spli` +
     // `t` becoming `spli t`).
     let mut pending_text = String::new();
+    let mut last_nonempty_delta_at = Instant::now();
     let _ = lang_rx; // language changes applied at session start; mid-stream ignored for now.
 
     while !stop_requested {
@@ -226,16 +230,36 @@ fn run_parakeet_rs_session(
         while buffer_16k.len() >= CHUNK_SAMPLES_16K {
             let chunk: Vec<f32> = buffer_16k.drain(..CHUNK_SAMPLES_16K).collect();
             match model.transcribe_chunk(&chunk) {
-                Ok(text) => emit_delta(
-                    &text,
-                    false,
-                    total_input_secs,
-                    &mut pending_text,
-                    &mut committed_words,
-                    &mut sink,
-                ),
+                Ok(text) => {
+                    if !text.is_empty() {
+                        last_nonempty_delta_at = Instant::now();
+                    }
+                    emit_delta(
+                        &text,
+                        false,
+                        total_input_secs,
+                        &mut pending_text,
+                        &mut committed_words,
+                        &mut sink,
+                    );
+                }
                 Err(err) => eprintln!("[parakeet-rs] transcribe_chunk failed: {err}"),
             }
+        }
+
+        if should_flush_pending(&pending_text, last_nonempty_delta_at, Instant::now()) {
+            eprintln!(
+                "[parakeet-rs] flushing trailing fragment after {}ms without new text",
+                PARTIAL_WORD_FLUSH_TIMEOUT.as_millis()
+            );
+            emit_delta(
+                "",
+                true,
+                total_input_secs,
+                &mut pending_text,
+                &mut committed_words,
+                &mut sink,
+            );
         }
 
         if stop_requested {
@@ -292,6 +316,10 @@ fn run_parakeet_rs_session(
             sink.close();
         }
     }
+}
+
+fn should_flush_pending(pending_text: &str, last_delta_at: Instant, now: Instant) -> bool {
+    !pending_text.is_empty() && now.duration_since(last_delta_at) >= PARTIAL_WORD_FLUSH_TIMEOUT
 }
 
 /// Buffer a transcription delta and emit only text ending at a word boundary.
@@ -351,6 +379,25 @@ mod tests {
     fn make_sink() -> SessionSink {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         SessionSink::new(tx)
+    }
+
+    #[test]
+    fn partial_word_timeout_waits_for_one_model_chunk_then_flushes() {
+        let now = Instant::now();
+        let chunk_duration =
+            Duration::from_secs_f64(CHUNK_SAMPLES_16K as f64 / NEMOTRON_SAMPLE_RATE as f64);
+        assert!(PARTIAL_WORD_FLUSH_TIMEOUT > chunk_duration);
+        assert!(!should_flush_pending("split", now, now + chunk_duration));
+        assert!(should_flush_pending(
+            "split",
+            now,
+            now + PARTIAL_WORD_FLUSH_TIMEOUT,
+        ));
+        assert!(!should_flush_pending(
+            "",
+            now,
+            now + PARTIAL_WORD_FLUSH_TIMEOUT,
+        ));
     }
 
     #[test]
