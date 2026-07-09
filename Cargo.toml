@@ -94,7 +94,9 @@ parakeet = ["dep:prkt", "dep:ort", "dep:ort-sys", "dep:webrtc-vad"]
 sherpa = ["dep:sherpa-onnx"]
 # parakeet-rs Nemotron streaming engine (ort 2.0.0-rc.12). Enables ort via
 # parakeet-rs's own features. Do NOT combine with the `parakeet` (prkt) feature.
-parakeet-rs = ["dep:parakeet-rs", "parakeet-rs/cpu", "parakeet-rs/ort-defaults"]
+# Dynamic ORT avoids symbol collisions with eaRS's statically linked
+# SentencePiece protobuf-lite. Set ORT_DYLIB_PATH to the ORT dylib at runtime.
+parakeet-rs = ["dep:parakeet-rs", "parakeet-rs/cpu", "parakeet-rs/load-dynamic"]
 
 # Acceleration (shared flags)
 nvidia = ["dep:cudarc", "candle/cuda", "candle-nn/cuda"]
