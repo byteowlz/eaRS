@@ -53,8 +53,12 @@ impl ParakeetRsEngine {
         options: TranscriptionOptions,
         max_sessions: usize,
     ) -> Result<Self> {
-        let handle = NemotronHandle::from_pretrained(&cfg.model_dir, None)
-            .map_err(|e| anyhow::anyhow!("parakeet-rs model load failed for {}: {e}", cfg.model_dir.display()))?;
+        let handle = NemotronHandle::from_pretrained(&cfg.model_dir, None).map_err(|e| {
+            anyhow::anyhow!(
+                "parakeet-rs model load failed for {}: {e}",
+                cfg.model_dir.display()
+            )
+        })?;
         let variant = match handle.mode() {
             NemotronMode::Multilingual => "multilingual",
             NemotronMode::EnglishOnly => "english-only",
@@ -186,6 +190,10 @@ fn run_parakeet_rs_session(
     let mut stop_requested = false;
     let mut total_input_secs: f64 = 0.0;
     let mut committed_words: Vec<WordTimestamp> = Vec::new();
+    // Nemotron returns incremental SentencePiece fragments. Hold the trailing
+    // unbounded fragment so it is not typed as a separate word (e.g. `spli` +
+    // `t` becoming `spli t`).
+    let mut pending_text = String::new();
     let _ = lang_rx; // language changes applied at session start; mid-stream ignored for now.
 
     while !stop_requested {
@@ -218,7 +226,14 @@ fn run_parakeet_rs_session(
         while buffer_16k.len() >= CHUNK_SAMPLES_16K {
             let chunk: Vec<f32> = buffer_16k.drain(..CHUNK_SAMPLES_16K).collect();
             match model.transcribe_chunk(&chunk) {
-                Ok(text) => emit_delta(&text, total_input_secs, &mut committed_words, &mut sink),
+                Ok(text) => emit_delta(
+                    &text,
+                    false,
+                    total_input_secs,
+                    &mut pending_text,
+                    &mut committed_words,
+                    &mut sink,
+                ),
                 Err(err) => eprintln!("[parakeet-rs] transcribe_chunk failed: {err}"),
             }
         }
@@ -232,16 +247,38 @@ fn run_parakeet_rs_session(
                     let mut tail = std::mem::take(&mut buffer_16k);
                     tail.resize(CHUNK_SAMPLES_16K, 0.0);
                     if let Ok(text) = model.transcribe_chunk(&tail) {
-                        emit_delta(&text, total_input_secs, &mut committed_words, &mut sink);
+                        emit_delta(
+                            &text,
+                            false,
+                            total_input_secs,
+                            &mut pending_text,
+                            &mut committed_words,
+                            &mut sink,
+                        );
                     }
                 }
                 for _ in 0..3 {
                     match model.transcribe_chunk(&zeros) {
-                        Ok(text) => emit_delta(&text, total_input_secs, &mut committed_words, &mut sink),
+                        Ok(text) => emit_delta(
+                            &text,
+                            false,
+                            total_input_secs,
+                            &mut pending_text,
+                            &mut committed_words,
+                            &mut sink,
+                        ),
                         Err(err) => eprintln!("[parakeet-rs] flush transcribe_chunk failed: {err}"),
                     }
                 }
             }
+            emit_delta(
+                "",
+                true,
+                total_input_secs,
+                &mut pending_text,
+                &mut committed_words,
+                &mut sink,
+            );
 
             let final_text = committed_words
                 .iter()
@@ -257,21 +294,37 @@ fn run_parakeet_rs_session(
     }
 }
 
-/// Split a transcription delta on whitespace and emit each token as a `Word`.
+/// Buffer a transcription delta and emit only text ending at a word boundary.
+///
+/// SentencePiece deltas are not guaranteed to end on a word boundary. For
+/// example, consecutive calls can return `" spli"` and `"t weird"`. Holding
+/// the final fragment until the next whitespace avoids the dictation client
+/// typing `spli t` with an irreversible space between the fragments.
 fn emit_delta(
     text: &str,
+    flush_pending: bool,
     start_time: f64,
+    pending_text: &mut String,
     committed_words: &mut Vec<WordTimestamp>,
     sink: &mut SessionSink,
 ) {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
+    pending_text.push_str(text);
+    let boundary = if flush_pending {
+        Some(pending_text.len())
+    } else {
+        pending_text
+            .char_indices()
+            .rev()
+            .find(|(_, ch)| ch.is_whitespace())
+            .map(|(idx, ch)| idx + ch.len_utf8())
+    };
+    let Some(boundary) = boundary else {
         return;
-    }
-    for token in trimmed.split_whitespace() {
-        if token.is_empty() {
-            continue;
-        }
+    };
+
+    let ready = pending_text[..boundary].to_string();
+    pending_text.replace_range(..boundary, "");
+    for token in ready.split_whitespace() {
         sink.handle_message(WebSocketMessage::Word {
             word: token.to_string(),
             start_time,
@@ -301,14 +354,25 @@ mod tests {
     }
 
     #[test]
-    fn emit_delta_splits_words_and_accumulates() {
+    fn emit_delta_holds_and_rejoins_split_word_fragments() {
         let mut words = Vec::new();
         let mut sink = make_sink();
-        emit_delta("  hello   world  ", 1.0, &mut words, &mut sink);
-        emit_delta("", 1.1, &mut words, &mut sink);
-        emit_delta("again.", 1.2, &mut words, &mut sink);
+        let mut pending = String::new();
+
+        emit_delta(" spli", false, 1.0, &mut pending, &mut words, &mut sink);
+        assert!(words.is_empty());
+        assert_eq!(pending, "spli");
+
+        emit_delta("t weird", false, 1.1, &mut pending, &mut words, &mut sink);
+        assert_eq!(words[0].word, "split");
+        assert_eq!(pending, "weird");
+
+        emit_delta("ly fast ", false, 1.2, &mut pending, &mut words, &mut sink);
+        emit_delta("again.", false, 1.3, &mut pending, &mut words, &mut sink);
+        emit_delta("", true, 1.4, &mut pending, &mut words, &mut sink);
 
         let ws: Vec<String> = words.into_iter().map(|w| w.word).collect();
-        assert_eq!(ws, vec!["hello", "world", "again."]);
+        assert_eq!(ws, vec!["split", "weirdly", "fast", "again."]);
+        assert!(pending.is_empty());
     }
 }

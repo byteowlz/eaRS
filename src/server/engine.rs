@@ -80,8 +80,14 @@ mod tests {
         }
         #[cfg(feature = "parakeet-rs")]
         {
-            assert_eq!(EngineKind::from_str("nemotron"), Some(EngineKind::ParakeetRs));
-            assert_eq!(EngineKind::from_str("parakeet-rs"), Some(EngineKind::ParakeetRs));
+            assert_eq!(
+                EngineKind::from_str("nemotron"),
+                Some(EngineKind::ParakeetRs)
+            );
+            assert_eq!(
+                EngineKind::from_str("parakeet-rs"),
+                Some(EngineKind::ParakeetRs)
+            );
         }
         assert_eq!(EngineKind::from_str("unknown"), None);
     }

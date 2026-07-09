@@ -19,18 +19,18 @@ use crate::{Model, TranscriptionOptions, TranscriptionSink, WebSocketMessage};
 use engine::{EngineManager, EngineSession, send_engine_changed};
 #[cfg(feature = "parakeet")]
 use parakeet::{ParakeetEngine, ParakeetEngineConfig};
-#[cfg(feature = "sherpa")]
-use sherpa::{SherpaEngine, SherpaEngineConfig};
 #[cfg(feature = "parakeet-rs")]
 use parakeet_rs::ParakeetRsEngine;
+#[cfg(feature = "sherpa")]
+use sherpa::{SherpaEngine, SherpaEngineConfig};
 
 mod engine;
 pub mod listener;
 #[cfg(feature = "parakeet")]
 mod parakeet;
-mod parallel;
 #[cfg(feature = "parakeet-rs")]
 mod parakeet_rs;
+mod parallel;
 #[cfg(feature = "sherpa")]
 mod sherpa;
 pub use engine::EngineKind;
