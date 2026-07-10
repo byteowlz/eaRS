@@ -13,6 +13,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub whisper: WhisperConfig,
     #[serde(default)]
+    pub parakeet_rs: ParakeetRsConfig,
+    #[serde(default)]
     pub server: ServerConfig,
     #[serde(default)]
     pub dictation: DictationConfig,
@@ -47,6 +49,22 @@ pub struct WhisperConfig {
     pub confidence_threshold: f32,
     pub storage_dir: String,
     pub sentence_detection: SentenceDetectionConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParakeetRsConfig {
+    /// Directory containing encoder.onnx, encoder.onnx.data,
+    /// decoder_joint.onnx, and tokenizer.model. None means the engine is not
+    /// loaded unless --parakeet-rs-model is supplied.
+    #[serde(default)]
+    pub model_dir: Option<String>,
+    /// Default language prompt for multilingual Nemotron sessions.
+    #[serde(default = "default_parakeet_rs_language")]
+    pub language: String,
+}
+
+fn default_parakeet_rs_language() -> String {
+    "auto".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -212,6 +230,15 @@ impl Default for DictationHooksConfig {
     }
 }
 
+impl Default for ParakeetRsConfig {
+    fn default() -> Self {
+        Self {
+            model_dir: None,
+            language: default_parakeet_rs_language(),
+        }
+    }
+}
+
 impl Default for ModelConfig {
     fn default() -> Self {
         Self {
@@ -280,6 +307,7 @@ impl Default for AppConfig {
             },
             model: ModelConfig::default(),
             whisper: WhisperConfig::default(),
+            parakeet_rs: ParakeetRsConfig::default(),
             server: ServerConfig::default(),
             dictation: DictationConfig::default(),
             hotkeys: HotkeyConfig::default(),
@@ -355,6 +383,7 @@ impl AppConfig {
                             storage: old_config.storage,
                             model: ModelConfig::default(),
                             whisper: WhisperConfig::default(),
+                            parakeet_rs: ParakeetRsConfig::default(),
                             server: ServerConfig::default(),
                             dictation: DictationConfig::default(),
                             hotkeys: HotkeyConfig::default(),
@@ -379,6 +408,9 @@ impl AppConfig {
             config.storage.ref_audio = expand_tilde(&config.storage.ref_audio)?;
             if config.whisper.storage_dir != "default" {
                 config.whisper.storage_dir = expand_tilde(&config.whisper.storage_dir)?;
+            }
+            if let Some(model_dir) = config.parakeet_rs.model_dir.as_mut() {
+                *model_dir = expand_tilde(model_dir)?;
             }
 
             Ok(config)
@@ -508,4 +540,54 @@ pub async fn ensure_ref_audio(config: &AppConfig) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parakeet_rs_config_defaults_to_auto_without_model() {
+        let config: AppConfig = toml::from_str(
+            r#"
+[storage]
+model_dir = "default"
+ref_audio = "~/.local/share/ears/ref_audio"
+"#,
+        )
+        .expect("minimal config should deserialize");
+        assert!(config.parakeet_rs.model_dir.is_none());
+        assert_eq!(config.parakeet_rs.language, "auto");
+    }
+
+    #[test]
+    fn example_config_deserializes() {
+        let config: AppConfig = toml::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/examples/config.toml"
+        )))
+        .expect("examples/config.toml must stay in sync with AppConfig");
+        assert_eq!(config.parakeet_rs.language, "auto");
+    }
+
+    #[test]
+    fn parakeet_rs_config_deserializes_model_and_language() {
+        let config: AppConfig = toml::from_str(
+            r#"
+[storage]
+model_dir = "default"
+ref_audio = "~/.local/share/ears/ref_audio"
+
+[parakeet_rs]
+model_dir = "/models/nemotron"
+language = "de"
+"#,
+        )
+        .expect("parakeet-rs config should deserialize");
+        assert_eq!(
+            config.parakeet_rs.model_dir.as_deref(),
+            Some("/models/nemotron")
+        );
+        assert_eq!(config.parakeet_rs.language, "de");
+    }
 }

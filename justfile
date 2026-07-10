@@ -453,9 +453,9 @@ install-ears:
     # Run the interactive install script
     ./scripts/install-ears.sh
 
-# Install ears with specific features (e.g., just install-ears-features "nvidia,parakeet")
-# Available features: nvidia, apple, amd, directml, whisper, parakeet, hooks
-# Combine multiple features with commas: "nvidia,parakeet" or "apple,whisper,hooks"
+# Install ears with specific features (e.g., just install-ears-features "nvidia,parakeet-rs")
+# Available features: nvidia, apple, amd, directml, whisper, parakeet-rs, sherpa, hooks
+# Combine multiple features with commas: "nvidia,parakeet-rs" or "apple,whisper,hooks"
 install-ears-features features:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -558,7 +558,8 @@ install-ears-cuda:
     
     cargo install --path . --force --features nvidia
 
-# Install ears with CUDA + Parakeet (best for NVIDIA GPUs)
+# Install ears with Kyutai CUDA + parakeet-rs Nemotron
+# (kept under the old recipe name for compatibility)
 install-ears-cuda-parakeet:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -592,9 +593,10 @@ install-ears-cuda-parakeet:
         export SENTENCEPIECE_SYS_USE_PKG_CONFIG=1
     fi
     
-    cargo install --path . --force --features nvidia,parakeet
+    cargo install --path . --force --features nvidia,parakeet-rs
 
-# Install ears with Parakeet engine
+# Install ears with parakeet-rs Nemotron streaming engine
+# (kept under the old recipe name for compatibility)
 install-ears-parakeet:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -628,7 +630,7 @@ install-ears-parakeet:
         export SENTENCEPIECE_SYS_USE_PKG_CONFIG=1
     fi
     
-    cargo install --path . --force --features parakeet
+    cargo install --path . --force --features parakeet-rs
 
 # === Maintenance ===
 

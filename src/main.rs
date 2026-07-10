@@ -774,9 +774,16 @@ fn build_server_options(args: &ServerStartArgs) -> Result<server::ServerOptions>
         #[cfg(feature = "sherpa")]
         sherpa_provider: args.sherpa_provider.clone(),
         #[cfg(feature = "parakeet-rs")]
-        parakeet_rs_model_dir: args.parakeet_rs_model.as_ref().map(PathBuf::from),
+        parakeet_rs_model_dir: args
+            .parakeet_rs_model
+            .clone()
+            .or_else(|| config.parakeet_rs.model_dir.clone())
+            .map(PathBuf::from),
         #[cfg(feature = "parakeet-rs")]
-        parakeet_rs_lang: args.parakeet_rs_lang.clone(),
+        parakeet_rs_lang: args
+            .parakeet_rs_lang
+            .clone()
+            .or_else(|| Some(config.parakeet_rs.language.clone())),
     })
 }
 

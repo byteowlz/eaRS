@@ -132,6 +132,22 @@
       },
       "additionalProperties": false
     },
+    "parakeet_rs": {
+      "type": "object",
+      "description": "parakeet-rs Nemotron streaming engine defaults",
+      "properties": {
+        "model_dir": {
+          "type": "string",
+          "description": "Directory containing encoder.onnx, encoder.onnx.data, decoder_joint.onnx, and tokenizer.model. CLI --parakeet-rs-model overrides this value."
+        },
+        "language": {
+          "type": "string",
+          "default": "auto",
+          "description": "Default multilingual Nemotron language prompt (for example auto, en, de, es, ja). Client/session --lang overrides this value."
+        }
+      },
+      "additionalProperties": false
+    },
     "server": {
       "type": "object",
       "description": "WebSocket server configuration",

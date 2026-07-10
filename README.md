@@ -41,12 +41,10 @@ just install-ears
 # Or use presets for specific configurations:
 just install-ears-metal         # macOS with Metal acceleration (Apple Silicon)
 just install-ears-cuda          # Linux/Windows with NVIDIA GPU (CUDA)
-just install-ears-cuda-parakeet # NVIDIA GPU with Parakeet engine
-just install-ears-parakeet      # Parakeet engine (CPU)
 just install-ears-default       # CPU only, no acceleration
 
 # Install with custom feature combinations
-just install-ears-features "nvidia,parakeet,whisper,hooks"
+just install-ears-features "apple,parakeet-rs,hooks"
 ```
 
 The `just install-ears` command will:
@@ -65,19 +63,21 @@ The `just install-ears` command will:
 | `apple`    | Metal/CoreML acceleration for Apple Silicon            |
 | `amd`      | ROCm acceleration for AMD GPUs                         |
 | `directml` | DirectML acceleration for Windows                      |
-| `parakeet` | Enable Parakeet ONNX engine                            |
-| `whisper`  | Enable Whisper post-processing                         |
-| `hooks`    | Enable shell command hooks for dictation state changes |
+| `parakeet-rs` | Enable Nemotron cache-aware streaming through parakeet-rs |
+| `sherpa`      | Enable optional sherpa-onnx streaming engine             |
+| `whisper`     | Enable Whisper post-processing                            |
+| `hooks`       | Enable shell command hooks for dictation state changes    |
 
 ### Manual Installation
 
 If you prefer not to use just:
 
 ```bash
-cargo install --path .                        # CPU only
-cargo install --path . --features apple       # Apple Silicon
-cargo install --path . --features nvidia      # NVIDIA GPU
-cargo install --path . --features parakeet    # With Parakeet engine
+cargo install --path .                               # CPU only
+cargo install --path . --features apple              # Apple Silicon
+cargo install --path . --features nvidia             # NVIDIA GPU
+cargo install --path . --features parakeet-rs        # Nemotron streaming
+cargo install --path . --features apple,parakeet-rs  # Kyutai Metal + Nemotron
 ```
 
 ## System Dependencies
@@ -228,14 +228,11 @@ The `src/virtual_keyboard.rs` module provides a cross-platform abstraction:
 For development builds:
 
 ```bash
-cargo build --release                                 # CPU only
-cargo build --release --features apple                # Apple Silicon (Metal)
-cargo build --release --features nvidia               # NVIDIA GPU (CUDA)
-cargo build --release --features parakeet             # Parakeet ONNX engine
-cargo build --release --features "parakeet nvidia"    # Parakeet + CUDA
-cargo build --release --features "parakeet apple"     # Parakeet + CoreML/Metal
-cargo build --release --features "parakeet amd"       # Parakeet + ROCm
-cargo build --release --features "parakeet directml"  # Parakeet + DirectML
+cargo build --release                                      # CPU only
+cargo build --release --features apple                     # Apple Silicon (Metal)
+cargo build --release --features nvidia                    # NVIDIA GPU (CUDA)
+cargo build --release --features parakeet-rs               # Nemotron streaming
+cargo build --release --features "apple,parakeet-rs,hooks" # Typical macOS build
 ```
 
 All binaries are emitted into `./target/release/`.
@@ -290,31 +287,30 @@ If the local server is not running, `ears` will start it automatically before co
 
 ## Server commands
 
-```
-./target/release/ears server start \
+```bash
+ears server start \
     [--bind 0.0.0.0:8765] \
-    [--engine kyutai|parakeet] \
+    [--engine kyutai|parakeet-rs] \
     [--hf-repo kyutai/stt-1b-en_fr-candle] \
-    [--parakeet-repo istupakov/parakeet-tdt-0.6b-v3-onnx] \
-    [--parakeet-device cpu|nvidia|apple|amd|directml] \
-    [--parakeet-chunk-seconds 3.0] \
-    [--parakeet-overlap-seconds 1.0] \
-    [--cpu] \
-    [--timestamps] \
-    [--vad] \
-    [--whisper]   # requires --features whisper
+    [--parakeet-rs-model /path/to/nemotron-model] \
+    [--parakeet-rs-lang auto|en|de|es|ja] \
+    [--cpu] [--timestamps] [--vad] [--whisper]
+
+# Restart accepts the same arguments as start.
+ears server restart --engine parakeet-rs --parakeet-rs-lang de
 ```
 
 - `--bind`: Override the default bind address (`0.0.0.0:<port-from-config>`).
-- `--engine`: Choose the default engine; when compiled with `parakeet`, both engines load and you can switch via WebSocket `{"type":"setengine","engine":"parakeet"}`.
-- `--hf-repo`: Choose a different Kyutai Speech repo hosted on Hugging Face.
-- `--parakeet-*`: Configure the Parakeet ONNX engine (defaults are multilingual, no language selection needed). Parakeet weights are CC-BY and are downloaded at runtime; nothing is redistributed.
-- `--cpu`: Force CPU execution (otherwise CUDA/Metal is used when available).
+- `--engine`: Choose the default engine (`kyutai` or `parakeet-rs` when compiled with that feature).
+- `--hf-repo`: Choose a different Kyutai Speech repository.
+- `--parakeet-rs-model`: Override `[parakeet_rs].model_dir`.
+- `--parakeet-rs-lang`: Override `[parakeet_rs].language`; a dictation client `--lang` command overrides it per session.
+- `--cpu`: Force Kyutai CPU execution (otherwise CUDA/Metal is used when available).
 - `--timestamps`: Include word timestamps in the server stream.
-- `--vad`: Enable voice-activity detection for automatic sentence segmentation.
-- `--whisper`: Force-enable Whisper post-processing (only when compiled with the `whisper` feature).
+- `--vad`: Enable Kyutai voice-activity detection.
+- `--whisper`: Force-enable Whisper post-processing (requires the `whisper` feature).
 
-The server writes a PID file to `$XDG_STATE_HOME/ears/server.pid` (or `~/.local/state/ears/server.pid`) so subsequent `start` commands will refuse to launch if an instance is already running. `ears server stop` sends a SIGTERM to the stored PID and removes the PID file; stale files are cleaned up automatically.
+The server writes a PID file to `$XDG_STATE_HOME/ears/server.pid` (or `~/.local/state/ears/server.pid`). `ears server stop` stops the local server and associated local dictation. `ears server restart` keeps dictation alive so it reconnects to the new server automatically.
 
 ## Client options
 
@@ -399,6 +395,7 @@ Key sections:
 
 - `[storage]`: Override model cache directories and reference audio location.
 - `[whisper]`: Configure optional Whisper enhancement defaults (model, quantization, languages, sentence detection thresholds).
+- `[parakeet_rs]`: Set the default Nemotron model directory and multilingual language prompt. CLI server flags override these values; client `--lang` overrides the language per session.
 - `[server]`: Default WebSocket port used by `ears server start` and the capture client.
 - `[dictation]`: Enable live typing and configure in-app hotkeys.
 - `[hotkeys]`: Set hotkey bindings and mode (`toggle`, `push_to_talk`, or `hybrid`).
@@ -408,9 +405,13 @@ Key sections:
 - `[replacement]`: Enable dictionary replacement, configure dictionary paths, and choose case-sensitive matching.
 - `[transcripts]`: Enable transcript JSONL history and configure buffering.
 
-Example replacement and transcript settings:
+Example engine, replacement, and transcript settings:
 
 ```toml
+[parakeet_rs]
+model_dir = "~/Models/parakeet-rs/nemotron-3.5-asr-streaming-0.6b-onnx"
+language = "auto"
+
 [replacement]
 enabled = true
 dictionary_paths = ["~/.config/ears/dictionaries/global.toml"]

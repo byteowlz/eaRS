@@ -40,6 +40,13 @@ silence_duration = 0.5
 # Punctuation markers that indicate sentence endings
 punctuation_markers = [".", "!", "?", "。", "！", "？"]
 
+[parakeet_rs]
+# Default Nemotron streaming model used when --parakeet-rs-model is omitted.
+# Required files: encoder.onnx, encoder.onnx.data, decoder_joint.onnx, tokenizer.model.
+# model_dir = "~/Models/parakeet-rs/nemotron-3.5-asr-streaming-0.6b-onnx"
+# Default language prompt for multilingual Nemotron. Client --lang overrides this.
+language = "auto"
+
 [server]
 # WebSocket server host address (default: local machine "127.0.0.1")
 host = "127.0.0.1"
