@@ -104,6 +104,7 @@ impl Engine for ParakeetRsEngine {
             }
         }
 
+        let multilingual = matches!(model.mode(), NemotronMode::Multilingual);
         let (audio_tx, audio_rx) = unbounded::<Vec<f32>>();
         let (lang_tx, lang_rx) = unbounded::<String>();
         let (control_tx, control_rx) = unbounded::<ParakeetRsControl>();
@@ -111,6 +112,7 @@ impl Engine for ParakeetRsEngine {
             audio_tx,
             lang_tx,
             control_tx,
+            multilingual,
         };
 
         std::thread::spawn(move || {
@@ -130,6 +132,7 @@ struct ParakeetRsSessionHandle {
     audio_tx: Sender<Vec<f32>>,
     lang_tx: Sender<String>,
     control_tx: Sender<ParakeetRsControl>,
+    multilingual: bool,
 }
 
 impl ParakeetRsSessionHandle {
@@ -175,7 +178,7 @@ impl EngineSession for ParakeetRsSessionHandle {
     }
 
     fn supports_language(&self) -> bool {
-        true
+        self.multilingual
     }
 }
 
@@ -198,12 +201,42 @@ fn run_parakeet_rs_session(
     // `t` becoming `spli t`).
     let mut pending_text = String::new();
     let mut last_nonempty_delta_at = Instant::now();
-    let _ = lang_rx; // language changes applied at session start; mid-stream ignored for now.
 
     while !stop_requested {
         select! {
             recv(audio_rx) -> msg => match msg {
                 Ok(chunk) => buffer_24k.extend_from_slice(&chunk),
+                Err(_) => stop_requested = true,
+            },
+            recv(lang_rx) -> msg => match msg {
+                Ok(lang) => {
+                    // A language prompt is session-scoped, like Kyutai's
+                    // set_language. Treat a live change as an utterance boundary:
+                    // commit pending text, discard at most one unprocessed chunk,
+                    // and reset cache/decoder state before applying the prompt.
+                    emit_delta(
+                        "",
+                        true,
+                        total_input_secs,
+                        &mut pending_text,
+                        &mut committed_words,
+                        &mut sink,
+                    );
+                    buffer_24k.clear();
+                    buffer_16k.clear();
+                    match model.set_target_lang(&lang) {
+                        Ok(()) => {
+                            model.reset();
+                            sink.handle_message(WebSocketMessage::LanguageChanged {
+                                lang: lang.clone(),
+                            });
+                            eprintln!("[parakeet-rs] switched session language to {lang}");
+                        }
+                        Err(err) => {
+                            eprintln!("[parakeet-rs] set_language({lang}) failed: {err}");
+                        }
+                    }
+                }
                 Err(_) => stop_requested = true,
             },
             recv(control_rx) -> msg => match msg {

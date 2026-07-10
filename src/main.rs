@@ -1376,6 +1376,10 @@ mod tests {
             EngineArg::Kyutai => {}
             #[cfg(feature = "parakeet")]
             EngineArg::Parakeet => panic!("unexpected default engine"),
+            #[cfg(feature = "sherpa")]
+            EngineArg::Sherpa => panic!("unexpected default engine"),
+            #[cfg(feature = "parakeet-rs")]
+            EngineArg::ParakeetRs => panic!("unexpected default engine"),
         }
         assert_eq!(args.hf_repo, "kyutai/stt-1b-en_fr-candle");
         assert_eq!(args.max_sessions, 8);

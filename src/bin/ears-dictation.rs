@@ -833,10 +833,9 @@ fn handle_message(
                             transcript_recorder,
                         )?;
                         let replaced = replacement_reloader.replace(text);
-                        eprintln!("[TYPING FINAL] {}", replaced);
-                        keyboard.type_text(&replaced)?;
-                        keyboard.press_key(SpecialKey::Space)?;
-                        transcript_recorder.record("final", text, &replaced)?;
+                        let formatted = live_word_buffer.type_formatted(keyboard, &replaced)?;
+                        eprintln!("[TYPING FINAL] {}", formatted);
+                        transcript_recorder.record("final", text, &formatted)?;
                     }
                 }
             }
@@ -849,6 +848,9 @@ fn handle_message(
 struct LiveWordBuffer {
     holdback_chunks: usize,
     chunks: Vec<String>,
+    /// Whether the previous dictation write added a trailing space. This lets
+    /// punctuation remove only our own auto-space, never arbitrary editor text.
+    trailing_space_inserted: bool,
 }
 
 impl LiveWordBuffer {
@@ -856,6 +858,7 @@ impl LiveWordBuffer {
         Self {
             holdback_chunks,
             chunks: Vec::new(),
+            trailing_space_inserted: false,
         }
     }
 
@@ -904,12 +907,66 @@ impl LiveWordBuffer {
             return Ok(());
         }
         let replaced = replacement_reloader.replace(&raw);
-        eprintln!("[TYPING WORD] {}", replaced);
-        keyboard.type_text(&replaced)?;
-        keyboard.press_key(SpecialKey::Space)?;
-        transcript_recorder.record("word", &raw, &replaced)?;
+        let formatted = self.type_formatted(keyboard, &replaced)?;
+        eprintln!("[TYPING WORD] {}", formatted);
+        transcript_recorder.record("word", &raw, &formatted)?;
         Ok(())
     }
+
+    fn type_formatted(
+        &mut self,
+        keyboard: &mut Box<dyn VirtualKeyboard>,
+        text: &str,
+    ) -> Result<String> {
+        let formatted = normalize_punctuation_spacing(text);
+        if formatted.is_empty() {
+            return Ok(formatted);
+        }
+        if starts_with_closing_punctuation(&formatted) && self.trailing_space_inserted {
+            keyboard.press_key(SpecialKey::Backspace)?;
+        }
+        keyboard.type_text(&formatted)?;
+        keyboard.press_key(SpecialKey::Space)?;
+        self.trailing_space_inserted = true;
+        Ok(formatted)
+    }
+}
+
+/// Punctuation tokens are sometimes emitted separately from their preceding
+/// word. Normalise only the safe, common rule: no whitespace before closing
+/// punctuation. Opening quotes/brackets deliberately remain untouched because
+/// their language-specific spacing rules are more nuanced.
+fn normalize_punctuation_spacing(text: &str) -> String {
+    const NO_SPACE_BEFORE: [char; 10] = ['.', ',', '!', '?', ';', ':', '%', '…', ')', ']'];
+    let mut out = String::with_capacity(text.len());
+    let mut pending_space = false;
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            pending_space = true;
+            continue;
+        }
+        if NO_SPACE_BEFORE.contains(&ch) {
+            while out.ends_with(' ') {
+                out.pop();
+            }
+            out.push(ch);
+            pending_space = false;
+            continue;
+        }
+        if pending_space && !out.is_empty() {
+            out.push(' ');
+        }
+        out.push(ch);
+        pending_space = false;
+    }
+    out
+}
+
+fn starts_with_closing_punctuation(text: &str) -> bool {
+    matches!(
+        text.chars().next(),
+        Some('.' | ',' | '!' | '?' | ';' | ':' | '%' | '…' | ')' | ']')
+    )
 }
 
 struct TranscriptRecorder {
@@ -1152,4 +1209,20 @@ fn encode_chunk(chunk: &[f32]) -> Vec<u8> {
         bytes.extend_from_slice(&sample.to_le_bytes());
     }
     bytes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_space_before_closing_punctuation() {
+        assert_eq!(
+            normalize_punctuation_spacing("Das ist . Wirklich , ja !"),
+            "Das ist. Wirklich, ja!"
+        );
+        assert_eq!(normalize_punctuation_spacing("  Hallo …  "), "Hallo…");
+        assert!(starts_with_closing_punctuation("."));
+        assert!(!starts_with_closing_punctuation("Hallo."));
+    }
 }
