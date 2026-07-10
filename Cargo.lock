@@ -3161,6 +3161,7 @@ dependencies = [
 [[package]]
 name = "parakeet-rs"
 version = "0.3.6"
+source = "git+https://github.com/altunenes/parakeet-rs.git?rev=086e3bb734dd9a3f01e4e99ef6895da0db85b47a#086e3bb734dd9a3f01e4e99ef6895da0db85b47a"
 dependencies = [
  "eyre",
  "hound",

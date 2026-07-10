@@ -72,7 +72,7 @@ sherpa-onnx = { version = "1.13", optional = true, default-features = false, fea
 # `parakeet` (prkt) feature: prkt pins ort =2.0.0-rc.10 while parakeet-rs needs
 # ort 2.0.0-rc.12, and eaRS's own `ort` dep is optional (only pulled by the
 # prkt feature), so do not enable both `parakeet` and `parakeet-rs` together.
-parakeet-rs = { package = "parakeet-rs", path = "../parakeet-rs", optional = true, default-features = false }
+parakeet-rs = { package = "parakeet-rs", git = "https://github.com/altunenes/parakeet-rs.git", rev = "086e3bb734dd9a3f01e4e99ef6895da0db85b47a", optional = true, default-features = false }
 
 # Platform-specific sentencepiece configuration
 # All platforms: compile from source (static linking).
