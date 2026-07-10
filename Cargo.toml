@@ -79,6 +79,10 @@ parakeet-rs = { package = "parakeet-rs", git = "https://github.com/altunenes/par
 [target.'cfg(target_os = "linux")'.dependencies]
 sentencepiece = { version = "0.12", features = ["static"] }
 uinput = "0.1"
+# hf-hub's sync (ureq) path uses native-tls -> openssl-sys on Linux. Build
+# OpenSSL from source so cross-compiled release artifacts (cargo-zigbuild) do
+# not depend on a system OpenSSL that isn't present in the cross sysroot.
+openssl = { version = "0.10", features = ["vendored"] }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 sentencepiece = { version = "0.12", features = ["static"] }
