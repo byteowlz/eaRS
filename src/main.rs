@@ -60,6 +60,8 @@ enum Commands {
 #[derive(Subcommand)]
 enum ServerCommand {
     Start(ServerStartArgs),
+    /// Restart the server using the same options accepted by `server start`.
+    Restart(ServerStartArgs),
     Stop,
     Status,
     #[command(hide = true)]
@@ -400,6 +402,7 @@ async fn main() -> Result<()> {
 async fn handle_server_command(command: ServerCommand) -> Result<()> {
     match command {
         ServerCommand::Start(args) => start_server(args),
+        ServerCommand::Restart(args) => restart_server(args),
         ServerCommand::Stop => stop_server(),
         ServerCommand::Status => check_server_status(),
         ServerCommand::Run(args) => run_server(args).await,
@@ -549,7 +552,17 @@ fn check_server_status() -> Result<()> {
     Ok(())
 }
 
+fn restart_server(args: ServerStartArgs) -> Result<()> {
+    println!("restarting ears server...");
+    stop_server_process(false)?;
+    start_server(args)
+}
+
 fn stop_server() -> Result<()> {
+    stop_server_process(true)
+}
+
+fn stop_server_process(stop_local_dictation: bool) -> Result<()> {
     match server::read_pid_file()? {
         Some(pid) => {
             if server::is_process_alive(pid) {
@@ -589,9 +602,11 @@ fn stop_server() -> Result<()> {
         }
     }
 
-    // Only stop dictation if it is connected to the local server.
-    // If it is connected to a remote server, leave it running.
-    if let (Some(dictation_pid), dictation_url) = read_dictation_pid_info()? {
+    // A normal stop terminates dictation connected to this local server.
+    // A restart deliberately leaves it alive: its reconnect loop will attach
+    // to the newly started server and preserve the user's dictation state.
+    if stop_local_dictation && let (Some(dictation_pid), dictation_url) = read_dictation_pid_info()?
+    {
         if server::is_process_alive(dictation_pid) {
             let is_local = match dictation_url.as_deref() {
                 Some(url) => {
@@ -1367,6 +1382,33 @@ mod tests {
             Duration::from_millis(10),
             false
         ));
+    }
+
+    #[test]
+    fn server_restart_accepts_server_start_args() {
+        let cli = Cli::try_parse_from([
+            "ears",
+            "server",
+            "restart",
+            "--engine",
+            "kyutai",
+            "--hf-repo",
+            "example/model",
+            "--max-sessions",
+            "3",
+            "--cpu",
+            "--timestamps",
+        ])
+        .expect("restart should accept server start arguments");
+
+        let Some(Commands::Server(ServerCommand::Restart(args))) = cli.command else {
+            panic!("expected server restart command");
+        };
+        assert!(matches!(args.engine, EngineArg::Kyutai));
+        assert_eq!(args.hf_repo, "example/model");
+        assert_eq!(args.max_sessions, 3);
+        assert!(args.cpu);
+        assert!(args.timestamps);
     }
 
     #[test]
