@@ -23,6 +23,13 @@ publish-jobs = ["homebrew"]
 # Whether to install an updater program
 install-updater = false
 
+# Override stale runner labels. cargo-dist 0.28.7 pins Darwin builds to the
+# retired `macos-13` (Intel) hosted runner, so those jobs queue forever and get
+# auto-cancelled. macos-14 (Apple Silicon) builds both Darwin targets.
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-14"
+x86_64-apple-darwin = "macos-14"
+
 # CPU-only variant (default)
 [[dist.variants]]
 name = "cpu"
