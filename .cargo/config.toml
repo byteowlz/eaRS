@@ -1,3 +1,9 @@
+# audiopus_sys builds Opus from source with CMake. CMake 4.x (on current
+# macOS/Windows CI runners) removed compatibility with Opus's old
+# cmake_minimum_required(<3.5). Allow it to proceed by pinning the policy floor.
+[env]
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"
+
 # Linker configuration to resolve duplicate protobuf symbols
 # Both ort-sys (ONNX Runtime) and sentencepiece-sys bundle protobuf-lite,
 # causing duplicate symbol errors at link time.
