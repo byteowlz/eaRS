@@ -361,6 +361,7 @@ pub enum WebSocketCommand {
     GetStatus,
     SetVadTimeout { seconds: f64 },
     SetEngine { engine: String },
+    SetCodec { codec: String },
 }
 
 #[derive(Debug, Clone)]
@@ -1082,6 +1083,10 @@ impl Model {
                                         match cmd {
                                             WebSocketCommand::Restart => {
                                                 let _ = restart_tx.send(());
+                                            }
+                                            WebSocketCommand::SetCodec { .. } => {
+                                                // Only the standalone server supports
+                                                // codec switching.
                                             }
                                             WebSocketCommand::Pause => {
                                                 auto_resume_pending.store(false, Ordering::SeqCst);

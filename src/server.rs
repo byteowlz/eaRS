@@ -39,6 +39,13 @@ pub use parakeet::ParakeetDevice;
 #[cfg(feature = "parakeet-rs")]
 pub use parakeet_rs::ParakeetRsEngineConfig;
 
+/// Per-connection audio transport codec. Binary WS frames are raw f32 LE PCM
+/// by default; a `setcodec` command switches the connection to ogg-opus.
+enum SessionCodec {
+    Pcm,
+    Opus(Box<kaudio::ogg_opus::Decoder>),
+}
+
 #[derive(Debug, Clone)]
 struct WsMessageDebug {
     is_audio: bool,
@@ -513,6 +520,7 @@ async fn handle_connection(
 
     let reader = tokio::spawn(async move {
         let mut ws_debug = WsDebugLog::from_env(session_id);
+        let mut codec = SessionCodec::Pcm;
         if let Some(msg) = first_msg {
             let msg_debug = WsMessageDebug::from_message(&msg);
             let result = handle_client_message(
@@ -523,6 +531,7 @@ async fn handle_connection(
                 &msg_tx,
                 &mut current_engine,
                 &transcription_options,
+                &mut codec,
             );
             if let Some(debug) = ws_debug.as_mut() {
                 debug.observe(current_engine, &msg_debug, result.is_ok());
@@ -545,6 +554,7 @@ async fn handle_connection(
                         &msg_tx,
                         &mut current_engine,
                         &transcription_options,
+                        &mut codec,
                     );
                     if let Some(debug) = ws_debug.as_mut() {
                         debug.observe(current_engine, &msg_debug, result.is_ok());
@@ -815,10 +825,25 @@ fn handle_client_message(
     msg_tx: &mpsc::UnboundedSender<Message>,
     current_engine: &mut EngineKind,
     transcription: &TranscriptionOptions,
+    codec: &mut SessionCodec,
 ) -> Result<()> {
     match msg {
         Message::Binary(data) => {
             if data.is_empty() {
+                return Ok(());
+            }
+            let chunk = match codec {
+                SessionCodec::Pcm => decode_audio_chunk(&data),
+                SessionCodec::Opus(decoder) => match decoder.decode(&data) {
+                    Ok(Some(pcm)) => pcm.to_vec(),
+                    Ok(None) => return Ok(()),
+                    Err(err) => {
+                        eprintln!("[ears-server] opus decode failed: {err}");
+                        return Ok(());
+                    }
+                },
+            };
+            if chunk.is_empty() {
                 return Ok(());
             }
             if session.is_none() {
@@ -834,10 +859,6 @@ fn handle_client_message(
                 }
             }
             if let Some(sess) = session.as_ref() {
-                let chunk = decode_audio_chunk(&data);
-                if chunk.is_empty() {
-                    return Ok(());
-                }
                 sess.send_audio(chunk)?;
             }
         }
@@ -917,6 +938,25 @@ fn handle_client_message(
                     }
                     crate::WebSocketCommand::SetVadTimeout { .. } => {
                         // Not adjustable per-session for now; ignore gracefully.
+                    }
+                    crate::WebSocketCommand::SetCodec { codec: name } => {
+                        match name.to_ascii_lowercase().as_str() {
+                            "opus" => match kaudio::ogg_opus::Decoder::new(24_000, 1) {
+                                Ok(decoder) => {
+                                    *codec = SessionCodec::Opus(Box::new(decoder));
+                                    eprintln!("[ears-server] session codec set to opus");
+                                }
+                                Err(err) => {
+                                    eprintln!("[ears-server] opus decoder init failed: {err}");
+                                    send_error(msg_tx, "failed to initialize opus decoder");
+                                }
+                            },
+                            "pcm" => *codec = SessionCodec::Pcm,
+                            other => {
+                                eprintln!("[ears-server] unknown codec requested: {other}");
+                                send_error(msg_tx, "unknown codec (supported: pcm, opus)");
+                            }
+                        }
                     }
                     crate::WebSocketCommand::Pause | crate::WebSocketCommand::Resume => {}
                 }

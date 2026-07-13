@@ -322,8 +322,13 @@ The server writes a PID file to `$XDG_STATE_HOME/ears/server.pid` (or `~/.local/
 - `--device`: Select a specific capture device by index.
 - `--server`: Point the client at a remote server (`ws://127.0.0.1:<config-port>/` by default).
 - `--timestamps`: Print the final transcript with per-word timing instead of live text.
+- `--codec`: Audio transport codec, `pcm` (default) or `opus`. Opus cuts upstream
+  bandwidth roughly 30x (~768 kbps raw f32 vs ~25 kbps) with no practical accuracy
+  loss — useful when the server is remote or the link is slow. The client sends a
+  `{"type":"setcodec","codec":"opus"}` command before streaming ogg-opus frames;
+  third-party clients can do the same.
 
-The client streams raw 24 kHz mono PCM to the server and displays each live word as it appears. When the backend signals completion, the final transcript (and optional timestamps) is printed.
+The client streams raw 24 kHz mono PCM to the server (or ogg-opus with `--codec opus`) and displays each live word as it appears. When the backend signals completion, the final transcript (and optional timestamps) is printed.
 
 ## Dictionary replacements
 

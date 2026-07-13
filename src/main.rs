@@ -234,6 +234,11 @@ struct ClientArgs {
     /// Path to audio file to transcribe (instead of live capture). Use '-' to read from stdin
     #[arg(long, short = 'f')]
     file: Option<String>,
+
+    /// Audio transport codec: "pcm" (raw f32, default) or "opus" (~30x less
+    /// bandwidth, useful for remote servers)
+    #[arg(long, default_value = "pcm")]
+    codec: String,
 }
 
 #[derive(Args, Clone)]
@@ -852,11 +857,18 @@ async fn run_client(args: ClientArgs) -> Result<()> {
     let (writer_tx, mut writer_rx) = mpsc::unbounded_channel::<WriterCommand>();
 
     let lang_to_send = args.lang.clone();
+    let use_opus = args.codec.eq_ignore_ascii_case("opus");
     let writer_handle = tokio::spawn(async move {
         if let Some(lang) = lang_to_send {
             let set_lang_cmd = json!({ "type": "setlanguage", "lang": lang }).to_string();
             if ws_writer.send(Message::text(set_lang_cmd)).await.is_err() {
                 eprintln!("Failed to send language change command");
+            }
+        }
+        if use_opus {
+            let cmd = json!({ "type": "setcodec", "codec": "opus" }).to_string();
+            if ws_writer.send(Message::text(cmd)).await.is_err() {
+                eprintln!("Failed to send codec command");
             }
         }
 
@@ -885,13 +897,31 @@ async fn run_client(args: ClientArgs) -> Result<()> {
         let _ = ws_writer.close().await;
     });
 
+    let mut opus_encoder = if use_opus {
+        Some(kaudio::ogg_opus::Encoder::new(24_000).context("failed to create opus encoder")?)
+    } else {
+        None
+    };
     let audio_writer = writer_tx.clone();
     thread::spawn(move || {
+        if let Some(enc) = opus_encoder.as_ref() {
+            let _ = audio_writer.send(WriterCommand::Audio(enc.header_data().to_vec()));
+        }
         while let Ok(chunk) = audio_rx.recv() {
-            if audio_writer
-                .send(WriterCommand::Audio(encode_chunk(&chunk)))
-                .is_err()
-            {
+            let bytes = match opus_encoder.as_mut() {
+                Some(enc) => match enc.encode_page(&chunk) {
+                    Ok(bytes) => bytes,
+                    Err(err) => {
+                        eprintln!("opus encode failed: {err}");
+                        break;
+                    }
+                },
+                None => encode_chunk(&chunk),
+            };
+            if bytes.is_empty() {
+                continue;
+            }
+            if audio_writer.send(WriterCommand::Audio(bytes)).is_err() {
                 break;
             }
         }
@@ -1087,11 +1117,18 @@ async fn transcribe_file(file_path: &str, args: &ClientArgs) -> Result<()> {
     let (writer_tx, mut writer_rx) = mpsc::unbounded_channel::<WriterCommand>();
 
     let lang_to_send = args.lang.clone();
+    let use_opus = args.codec.eq_ignore_ascii_case("opus");
     let writer_handle = tokio::spawn(async move {
         if let Some(lang) = lang_to_send {
             let set_lang_cmd = json!({ "type": "setlanguage", "lang": lang }).to_string();
             if ws_writer.send(Message::text(set_lang_cmd)).await.is_err() {
                 eprintln!("Failed to send language change command");
+            }
+        }
+        if use_opus {
+            let cmd = json!({ "type": "setcodec", "codec": "opus" }).to_string();
+            if ws_writer.send(Message::text(cmd)).await.is_err() {
+                eprintln!("Failed to send codec command");
             }
         }
 
@@ -1116,13 +1153,38 @@ async fn transcribe_file(file_path: &str, args: &ClientArgs) -> Result<()> {
     });
 
     eprintln!("Streaming audio to server...");
+    let mut opus_encoder = if use_opus {
+        let enc = kaudio::ogg_opus::Encoder::new(24_000).context("failed to create opus encoder")?;
+        let _ = writer_tx.send(WriterCommand::Audio(enc.header_data().to_vec()));
+        Some(enc)
+    } else {
+        None
+    };
     let chunk_size = 1920;
     for chunk in pcm.chunks(chunk_size) {
-        if writer_tx
-            .send(WriterCommand::Audio(encode_chunk(chunk)))
-            .is_err()
-        {
+        let bytes = match opus_encoder.as_mut() {
+            Some(enc) => match enc.encode_page(chunk) {
+                Ok(bytes) => bytes,
+                Err(err) => {
+                    eprintln!("opus encode failed: {err}");
+                    break;
+                }
+            },
+            None => encode_chunk(chunk),
+        };
+        if bytes.is_empty() {
+            continue;
+        }
+        if writer_tx.send(WriterCommand::Audio(bytes)).is_err() {
             break;
+        }
+    }
+    if let Some(enc) = opus_encoder.as_mut() {
+        // Flush the sub-frame tail with one frame of silence.
+        if let Ok(bytes) = enc.encode_page(&vec![0.0f32; 960]) {
+            if !bytes.is_empty() {
+                let _ = writer_tx.send(WriterCommand::Audio(bytes));
+            }
         }
     }
 
