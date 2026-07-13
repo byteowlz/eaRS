@@ -33,6 +33,16 @@ const RESAMPLE_MIN_SAMPLES: usize = 1_600;
 /// Wait longer than one 560 ms Nemotron chunk before treating an unbounded
 /// trailing fragment as a completed word during a genuine speaking pause.
 const PARTIAL_WORD_FLUSH_TIMEOUT: Duration = Duration::from_millis(800);
+/// Energy gate: a 560 ms chunk counts as speech if any 50 ms window exceeds
+/// this RMS. Windowed so a quiet utterance onset in the chunk tail still
+/// registers.
+const SPEECH_RMS_THRESHOLD: f32 = 0.0025;
+const SPEECH_RMS_WINDOW: usize = 800; // 50 ms @ 16 kHz
+/// Gate the model after this many consecutive silent chunks (~2.2 s). Long
+/// silence saturates Nemotron's rolling encoder cache with silence statistics,
+/// which mangles the first words after the pause; instead we stop feeding,
+/// reset the model, and replay one chunk of pre-roll when speech resumes.
+const SILENCE_GATE_AFTER_CHUNKS: usize = 4;
 
 #[derive(Debug, Clone)]
 pub struct ParakeetRsEngineConfig {
@@ -201,6 +211,10 @@ fn run_parakeet_rs_session(
     // `t` becoming `spli t`).
     let mut pending_text = String::new();
     let mut last_nonempty_delta_at = Instant::now();
+    let mut silent_run: usize = 0;
+    let mut gated = false;
+    // Last silent chunk seen while gated; replayed as pre-roll on speech resume.
+    let mut preroll: Option<Vec<f32>> = None;
 
     while !stop_requested {
         select! {
@@ -259,25 +273,61 @@ fn run_parakeet_rs_session(
             }
         }
 
-        // Feed the model fixed 560 ms chunks.
+        // Feed the model fixed 560 ms chunks, gating out long silence.
         while buffer_16k.len() >= CHUNK_SAMPLES_16K {
             let chunk: Vec<f32> = buffer_16k.drain(..CHUNK_SAMPLES_16K).collect();
-            match model.transcribe_chunk(&chunk) {
-                Ok(text) => {
-                    if !text.is_empty() {
-                        last_nonempty_delta_at = Instant::now();
-                    }
+            let speech = chunk_has_speech(&chunk);
+            if gated {
+                if !speech {
+                    preroll = Some(chunk);
+                    continue;
+                }
+                gated = false;
+                silent_run = 0;
+                eprintln!("[parakeet-rs] speech resumed, replaying pre-roll");
+                if let Some(pre) = preroll.take() {
+                    feed_chunk(
+                        &mut model,
+                        &pre,
+                        total_input_secs,
+                        &mut pending_text,
+                        &mut committed_words,
+                        &mut sink,
+                        &mut last_nonempty_delta_at,
+                    );
+                }
+            } else if speech {
+                silent_run = 0;
+            } else {
+                silent_run += 1;
+                if silent_run >= SILENCE_GATE_AFTER_CHUNKS {
+                    eprintln!(
+                        "[parakeet-rs] {}+ chunks of silence, gating model input",
+                        SILENCE_GATE_AFTER_CHUNKS
+                    );
                     emit_delta(
-                        &text,
-                        false,
+                        "",
+                        true,
                         total_input_secs,
                         &mut pending_text,
                         &mut committed_words,
                         &mut sink,
                     );
+                    model.reset();
+                    gated = true;
+                    preroll = Some(chunk);
+                    continue;
                 }
-                Err(err) => eprintln!("[parakeet-rs] transcribe_chunk failed: {err}"),
             }
+            feed_chunk(
+                &mut model,
+                &chunk,
+                total_input_secs,
+                &mut pending_text,
+                &mut committed_words,
+                &mut sink,
+                &mut last_nonempty_delta_at,
+            );
         }
 
         if should_flush_pending(&pending_text, last_nonempty_delta_at, Instant::now()) {
@@ -353,6 +403,40 @@ fn run_parakeet_rs_session(
 
 fn should_flush_pending(pending_text: &str, last_delta_at: Instant, now: Instant) -> bool {
     !pending_text.is_empty() && now.duration_since(last_delta_at) >= PARTIAL_WORD_FLUSH_TIMEOUT
+}
+
+fn chunk_has_speech(chunk: &[f32]) -> bool {
+    chunk.chunks(SPEECH_RMS_WINDOW).any(|w| {
+        let mean_sq = w.iter().map(|s| s * s).sum::<f32>() / w.len() as f32;
+        mean_sq.sqrt() > SPEECH_RMS_THRESHOLD
+    })
+}
+
+fn feed_chunk(
+    model: &mut Nemotron,
+    chunk: &[f32],
+    total_input_secs: f64,
+    pending_text: &mut String,
+    committed_words: &mut Vec<WordTimestamp>,
+    sink: &mut SessionSink,
+    last_nonempty_delta_at: &mut Instant,
+) {
+    match model.transcribe_chunk(chunk) {
+        Ok(text) => {
+            if !text.is_empty() {
+                *last_nonempty_delta_at = Instant::now();
+            }
+            emit_delta(
+                &text,
+                false,
+                total_input_secs,
+                pending_text,
+                committed_words,
+                sink,
+            );
+        }
+        Err(err) => eprintln!("[parakeet-rs] transcribe_chunk failed: {err}"),
+    }
 }
 
 /// Buffer a transcription delta and emit only text ending at a word boundary.
