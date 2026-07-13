@@ -111,6 +111,9 @@ pub struct DictationConfig {
     pub type_live_words: bool,
     #[serde(default)]
     pub start_paused: bool,
+    /// Audio transport codec for dictation: "pcm" (default) or "opus".
+    #[serde(default = "default_audio_codec")]
+    pub codec: String,
     /// Default server alias to use when none is specified (defaults to "local")
     #[serde(default = "default_server_alias")]
     pub default_server: String,
@@ -126,6 +129,10 @@ pub struct DictationConfig {
 
 fn default_server_alias() -> String {
     "local".to_string()
+}
+
+fn default_audio_codec() -> String {
+    "pcm".to_string()
 }
 
 fn default_servers() -> HashMap<String, DictationServerConfig> {
@@ -275,6 +282,7 @@ impl Default for DictationConfig {
             enabled: false,
             type_live_words: true,
             start_paused: false,
+            codec: default_audio_codec(),
             default_server: default_server_alias(),
             servers: default_servers(),
             notifications: DictationNotificationConfig::default(),

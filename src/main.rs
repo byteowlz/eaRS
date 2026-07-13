@@ -1191,7 +1191,12 @@ async fn transcribe_file(file_path: &str, args: &ClientArgs) -> Result<()> {
     let _ = writer_tx.send(WriterCommand::Stop);
 
     let mut final_result: Option<(String, Vec<WordTimestamp>)> = None;
-    let timeout_duration = Duration::from_secs(10);
+    // File audio is sent faster than real time, but the server may still need
+    // roughly the file duration to drain its inference queue (especially on
+    // CPU or during model warm-up). A fixed 10 s timeout truncated results.
+    let timeout_duration = Duration::from_secs_f64(
+        pcm.len() as f64 / 24_000.0 + 10.0,
+    );
 
     let timeout = tokio::time::sleep(timeout_duration);
     tokio::pin!(timeout);

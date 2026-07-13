@@ -199,6 +199,12 @@
           "default": false,
           "description": "Start dictation in paused mode (true) or live mode (false)"
         },
+        "codec": {
+          "type": "string",
+          "enum": ["pcm", "opus"],
+          "default": "pcm",
+          "description": "Audio transport codec; use opus for remote or bandwidth-constrained connections"
+        },
         "default_server": {
           "type": "string",
           "default": "local",

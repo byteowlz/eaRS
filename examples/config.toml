@@ -72,6 +72,8 @@ enabled = false
 type_live_words = true
 # Start dictation in paused mode (true) or live mode (false)
 start_paused = false
+# Audio transport: "pcm" for localhost or "opus" for remote/slow connections
+codec = "pcm"
 # Default server alias to connect to (use with: ears-dictation or ears-dictation --server local)
 default_server = "local"
 

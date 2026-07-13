@@ -83,6 +83,13 @@ struct Args {
     )]
     server: Option<String>,
 
+    #[arg(
+        long,
+        value_parser = ["pcm", "opus"],
+        help = "Audio transport codec (pcm|opus); overrides dictation.codec"
+    )]
+    codec: Option<String>,
+
     #[arg(long, help = "List all configured servers and exit")]
     list_servers: bool,
 }
@@ -590,6 +597,18 @@ async fn main() -> Result<()> {
                 )?;
 
                 let (writer_tx, mut writer_rx) = mpsc::unbounded_channel::<WriterCommand>();
+                let codec = args.codec.as_deref().unwrap_or(&config.dictation.codec);
+                let use_opus = codec.eq_ignore_ascii_case("opus");
+
+                if use_opus {
+                    eprintln!("Using Opus audio transport");
+                    let codec_cmd = serde_json::json!({
+                        "type": "setcodec",
+                        "codec": "opus"
+                    })
+                    .to_string();
+                    let _ = writer_tx.send(WriterCommand::Text(codec_cmd));
+                }
 
                 if let Some(ref lang) = args.lang {
                     eprintln!("Setting language to: {}", lang);
@@ -613,18 +632,41 @@ async fn main() -> Result<()> {
                     let _ = writer_tx.send(WriterCommand::Text(engine_cmd));
                 }
 
+                let mut opus_encoder = if use_opus {
+                    Some(
+                        kaudio::ogg_opus::Encoder::new(24_000)
+                            .context("failed to create opus encoder")?,
+                    )
+                } else {
+                    None
+                };
                 let audio_writer = writer_tx.clone();
                 let audio_rx_clone = audio_rx.clone();
                 let audio_capturing = capturing.clone();
                 thread::spawn(move || {
+                    if let Some(enc) = opus_encoder.as_ref() {
+                        let _ = audio_writer
+                            .send(WriterCommand::Audio(enc.header_data().to_vec()));
+                    }
                     while let Ok(chunk) = audio_rx_clone.recv() {
-                        if *audio_capturing.lock().unwrap() {
-                            if audio_writer
-                                .send(WriterCommand::Audio(encode_chunk(&chunk)))
-                                .is_err()
-                            {
-                                break;
-                            }
+                        if !*audio_capturing.lock().unwrap() {
+                            continue;
+                        }
+                        let bytes = match opus_encoder.as_mut() {
+                            Some(enc) => match enc.encode_page(&chunk) {
+                                Ok(bytes) => bytes,
+                                Err(err) => {
+                                    eprintln!("opus encode failed: {err}");
+                                    break;
+                                }
+                            },
+                            None => encode_chunk(&chunk),
+                        };
+                        if bytes.is_empty() {
+                            continue;
+                        }
+                        if audio_writer.send(WriterCommand::Audio(bytes)).is_err() {
+                            break;
                         }
                     }
                 });
