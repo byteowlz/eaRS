@@ -1,5 +1,5 @@
 # eaRS Configuration File
-"$schema" = "https://raw.githubusercontent.com/byteowlz/schemas/refs/heads/main/eaRS/eaRS.config.schema.json"
+#:schema https://raw.githubusercontent.com/byteowlz/schemas/refs/heads/main/eaRS/eaRS.config.schema.json
 
 [storage]
 # Model storage directory - "default" uses HuggingFace cache
