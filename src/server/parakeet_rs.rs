@@ -10,7 +10,7 @@
 //! See reports/parakeet-rs-spike/streaming_models_report.md for the model
 //! benchmarks that selected Nemotron over the 120M EOU model.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -44,6 +44,59 @@ const SPEECH_RMS_WINDOW: usize = 800; // 50 ms @ 16 kHz
 /// reset the model, and replay one chunk of pre-roll when speech resumes.
 const SILENCE_GATE_AFTER_CHUNKS: usize = 4;
 
+const HF_REPO: &str = "altunenes/parakeet-rs";
+const HF_MULTILINGUAL_DIR: &str = "nemotron-3.5-asr-streaming-0.6b-onnx";
+const HF_ENGLISH_DIR: &str = "nemotron-speech-streaming-en-0.6b";
+const MODEL_FILES: [&str; 4] = [
+    "encoder.onnx",
+    "encoder.onnx.data",
+    "decoder_joint.onnx",
+    "tokenizer.model",
+];
+
+/// Download any missing Nemotron model files from Hugging Face into
+/// `model_dir`. The variant is picked from the directory name: names
+/// containing "speech-streaming-en" map to the English-only export, anything
+/// else to the multilingual 3.5 export.
+fn ensure_model_files(model_dir: &Path) -> Result<()> {
+    let missing: Vec<&str> = MODEL_FILES
+        .iter()
+        .copied()
+        .filter(|f| !model_dir.join(f).is_file())
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let subfolder = match model_dir.file_name().and_then(|n| n.to_str()) {
+        Some(name) if name.contains("speech-streaming-en") => HF_ENGLISH_DIR,
+        _ => HF_MULTILINGUAL_DIR,
+    };
+    eprintln!(
+        "[parakeet-rs] {} model file(s) missing in {}; downloading from {HF_REPO}/{subfolder}",
+        missing.len(),
+        model_dir.display()
+    );
+    std::fs::create_dir_all(model_dir)
+        .with_context(|| format!("failed to create model dir {}", model_dir.display()))?;
+    let api = hf_hub::api::sync::ApiBuilder::new()
+        .with_progress(true)
+        .build()
+        .context("failed to build Hugging Face API client")?;
+    let repo = api.model(HF_REPO.to_string());
+    for file in missing {
+        let cached = repo
+            .get(&format!("{subfolder}/{file}"))
+            .with_context(|| format!("failed to download {subfolder}/{file} from {HF_REPO}"))?;
+        let target = model_dir.join(file);
+        if std::fs::hard_link(&cached, &target).is_err() {
+            std::fs::copy(&cached, &target).with_context(|| {
+                format!("failed to copy {} to {}", cached.display(), target.display())
+            })?;
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 pub struct ParakeetRsEngineConfig {
     pub model_dir: PathBuf,
@@ -66,6 +119,9 @@ impl ParakeetRsEngine {
         options: TranscriptionOptions,
         max_sessions: usize,
     ) -> Result<Self> {
+        if let Err(err) = ensure_model_files(&cfg.model_dir) {
+            eprintln!("[parakeet-rs] auto-download failed: {err:#}");
+        }
         let handle = NemotronHandle::from_pretrained(&cfg.model_dir, None).map_err(|e| {
             anyhow::anyhow!(
                 "parakeet-rs model load failed for {}: {e}",
