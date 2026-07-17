@@ -87,7 +87,14 @@ fn ensure_model_files(model_dir: &Path) -> Result<()> {
         let cached = repo
             .get(&format!("{subfolder}/{file}"))
             .with_context(|| format!("failed to download {subfolder}/{file} from {HF_REPO}"))?;
+        // hf_hub snapshots are relative symlinks into its blobs dir; resolve
+        // them so we link/copy the actual file instead of a dangling symlink.
+        let cached = std::fs::canonicalize(&cached)
+            .with_context(|| format!("failed to resolve {}", cached.display()))?;
         let target = model_dir.join(file);
+        if target.is_symlink() {
+            std::fs::remove_file(&target)?;
+        }
         if std::fs::hard_link(&cached, &target).is_err() {
             std::fs::copy(&cached, &target).with_context(|| {
                 format!("failed to copy {} to {}", cached.display(), target.display())
