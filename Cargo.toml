@@ -67,7 +67,6 @@ ctrlc = { version = "3.4", features = ["termination"] }
 cudarc = { version = "0.17", optional = true, features = ["cuda-version-from-build-system"] }
 notifica = "3.0.2"
 webrtc-vad = { version = "0.4", optional = true }
-sherpa-onnx = { version = "1.13", optional = true, default-features = false, features = ["shared"] }
 # parakeet-rs (Nemotron streaming). Mutually exclusive in practice with the
 # `parakeet` (prkt) feature: prkt pins ort =2.0.0-rc.10 while parakeet-rs needs
 # ort 2.0.0-rc.12, and eaRS's own `ort` dep is optional (only pulled by the
@@ -95,7 +94,6 @@ hooks = []
 
 # Engines
 parakeet = ["dep:prkt", "dep:ort", "dep:ort-sys", "dep:webrtc-vad"]
-sherpa = ["dep:sherpa-onnx"]
 # parakeet-rs Nemotron streaming engine (ort 2.0.0-rc.12). Enables ort via
 # parakeet-rs's own features. Do NOT combine with the `parakeet` (prkt) feature.
 # Dynamic ORT avoids symbol collisions with eaRS's statically linked

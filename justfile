@@ -306,7 +306,7 @@ install-all:
     fi
     
     # Build feature list with all engines and hooks
-    FEATURES=("whisper" "parakeet-rs" "sherpa" "hooks")
+    FEATURES=("whisper" "parakeet-rs" "hooks")
 
     if [[ -n "$ACCEL_FEATURE" ]]; then
         FEATURES=("$ACCEL_FEATURE" "${FEATURES[@]}")
@@ -343,7 +343,7 @@ install-all:
                 *) echo "Invalid choice, using auto-detected"; ;;
             esac
             
-            FEATURES=("whisper" "parakeet-rs" "sherpa" "hooks")
+            FEATURES=("whisper" "parakeet-rs" "hooks")
             if [[ -n "$ACCEL_FEATURE" ]]; then
                 FEATURES=("$ACCEL_FEATURE" "${FEATURES[@]}")
             fi
@@ -357,47 +357,6 @@ install-all:
             exit 0
             ;;
     esac
-
-    # Copy sherpa-onnx shared libraries next to the installed binaries.
-    # The rpath (\$ORIGIN on Linux, @executable_path on macOS) lets the
-    # binaries find them without LD_LIBRARY_PATH / DYLD_LIBRARY_PATH.
-    if [[ ",$FEATURE_STRING," == *",sherpa,"* ]]; then
-        CARGO_BIN="${CARGO_HOME:-$HOME/.cargo}/bin"
-        SO_SOURCE_DIR="target/release"
-        if [[ "$OSTYPE" == "darwin"* ]]; then
-            LIB_GLOB="$SO_SOURCE_DIR/libonnxruntime*.dylib"
-            EXTRA_GLOB="$SO_SOURCE_DIR/libsherpa-onnx-*.dylib"
-        else
-            LIB_GLOB="$SO_SOURCE_DIR/libonnxruntime.so*"
-            EXTRA_GLOB="$SO_SOURCE_DIR/libsherpa-onnx-*.so*"
-        fi
-        if [[ -d "$SO_SOURCE_DIR" ]] && compgen -G "$LIB_GLOB" >/dev/null; then
-            echo "Installing sherpa-onnx shared libraries to $CARGO_BIN..."
-            cp -P $LIB_GLOB "$CARGO_BIN/" 2>/dev/null || true
-            cp -P $EXTRA_GLOB "$CARGO_BIN/" 2>/dev/null || true
-
-            # macOS: re-sign adhoc after copying. cargo/rustc adhoc-signs the
-            # build artifacts, but copying them next to the binary (or any
-            # rpath/ID rewrite) invalidates the embedded code-directory page
-            # hashes. With SIP + AMFI, dyld then SIGKILLs the process at launch
-            # with "Invalid Page" / CODESIGNING termination before main() runs.
-            # Re-sign the dylibs and the dependent executables so they load.
-            if [[ "$OSTYPE" == "darwin"* ]]; then
-                for lib in "$CARGO_BIN"/libonnxruntime*.dylib "$CARGO_BIN"/libsherpa-onnx-*.dylib; do
-                    [[ -e "$lib" ]] && codesign --force --sign - "$lib" 2>/dev/null || true
-                done
-                for bin in ears ears-server ears-dictation; do
-                    [[ -e "$CARGO_BIN/$bin" ]] && codesign --force --sign - "$CARGO_BIN/$bin" 2>/dev/null || true
-                done
-                echo "✓ Sherpa libraries installed and re-signed (macOS)"
-            else
-                echo "✓ Sherpa libraries installed"
-            fi
-        else
-            echo "⚠ Sherpa libraries not found in $SO_SOURCE_DIR; sherpa engine may fail to load"
-            echo "  (set LD_LIBRARY_PATH/DYLD_LIBRARY_PATH or rerun this install)"
-        fi
-    fi
 
     echo ""
     echo "✓ Installation complete!"
@@ -454,7 +413,7 @@ install-ears:
     ./scripts/install-ears.sh
 
 # Install ears with specific features (e.g., just install-ears-features "nvidia,parakeet-rs")
-# Available features: nvidia, apple, amd, directml, whisper, parakeet-rs, sherpa, hooks
+# Available features: nvidia, apple, amd, directml, whisper, parakeet-rs, hooks
 # Combine multiple features with commas: "nvidia,parakeet-rs" or "apple,whisper,hooks"
 install-ears-features features:
     #!/usr/bin/env bash

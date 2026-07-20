@@ -28,7 +28,7 @@ const NEMOTRON_SAMPLE_RATE: usize = 16_000;
 /// Nemotron streaming chunk: 560 ms at 16 kHz (matches the upstream example
 /// and parakeet-rs's CHUNK_SIZE mel-frame schedule).
 const CHUNK_SAMPLES_16K: usize = 8_960;
-/// kaudio resampler needs a minimum input window; mirror sherpa's 1.6k floor.
+/// kaudio resampler needs a minimum input window; 1.6k floor.
 const RESAMPLE_MIN_SAMPLES: usize = 1_600;
 /// Wait longer than one 560 ms Nemotron chunk before treating an unbounded
 /// trailing fragment as a completed word during a genuine speaking pause.

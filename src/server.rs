@@ -21,8 +21,6 @@ use engine::{EngineManager, EngineSession, send_engine_changed};
 use parakeet::{ParakeetEngine, ParakeetEngineConfig};
 #[cfg(feature = "parakeet-rs")]
 use parakeet_rs::ParakeetRsEngine;
-#[cfg(feature = "sherpa")]
-use sherpa::{SherpaEngine, SherpaEngineConfig};
 
 mod engine;
 pub mod listener;
@@ -31,8 +29,6 @@ mod parakeet;
 #[cfg(feature = "parakeet-rs")]
 mod parakeet_rs;
 mod parallel;
-#[cfg(feature = "sherpa")]
-mod sherpa;
 pub use engine::EngineKind;
 #[cfg(feature = "parakeet")]
 pub use parakeet::ParakeetDevice;
@@ -266,12 +262,6 @@ pub struct ServerOptions {
     pub parakeet_overlap_seconds: f32,
     #[cfg(feature = "parakeet")]
     pub parakeet_noise_gate_rms: f32,
-    #[cfg(feature = "sherpa")]
-    pub sherpa_models: Vec<(String, PathBuf)>,
-    #[cfg(feature = "sherpa")]
-    pub sherpa_num_threads: i32,
-    #[cfg(feature = "sherpa")]
-    pub sherpa_provider: String,
     #[cfg(feature = "parakeet-rs")]
     pub parakeet_rs_model_dir: Option<PathBuf>,
     #[cfg(feature = "parakeet-rs")]
@@ -342,22 +332,6 @@ pub async fn run(options: ServerOptions) -> Result<()> {
             }
             Err(err) => {
                 eprintln!("[ears-server] failed to initialize parakeet engine: {err:#}");
-            }
-        }
-    }
-
-    #[cfg(feature = "sherpa")]
-    {
-        if !options.sherpa_models.is_empty() {
-            let mut sherpa_cfg = SherpaEngineConfig::defaults_for(options.sherpa_models.clone());
-            sherpa_cfg.num_threads = options.sherpa_num_threads.max(1);
-            sherpa_cfg.provider = options.sherpa_provider.clone();
-
-            match SherpaEngine::load(sherpa_cfg, options.transcription.clone(), batch_size) {
-                Ok(engine) => engine_manager.register(Arc::new(engine)),
-                Err(err) => {
-                    eprintln!("[ears-server] failed to initialize sherpa engine: {err:#}");
-                }
             }
         }
     }

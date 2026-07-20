@@ -64,7 +64,6 @@ The `just install-ears` command will:
 | `amd`      | ROCm acceleration for AMD GPUs                         |
 | `directml` | DirectML acceleration for Windows                      |
 | `parakeet-rs` | Enable Nemotron cache-aware streaming through parakeet-rs |
-| `sherpa`      | Enable optional sherpa-onnx streaming engine             |
 | `whisper`     | Enable Whisper post-processing                            |
 | `hooks`       | Enable shell command hooks for dictation state changes    |
 

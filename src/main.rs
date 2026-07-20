@@ -26,7 +26,7 @@ use tokio_tungstenite::{
 use ears::server::EngineKind;
 #[cfg(feature = "parakeet")]
 use ears::server::ParakeetDevice;
-#[cfg(any(feature = "parakeet", feature = "sherpa", feature = "parakeet-rs"))]
+#[cfg(any(feature = "parakeet", feature = "parakeet-rs"))]
 use std::path::PathBuf;
 
 #[cfg(unix)]
@@ -137,8 +137,6 @@ enum EngineArg {
     Kyutai,
     #[cfg(feature = "parakeet")]
     Parakeet,
-    #[cfg(feature = "sherpa")]
-    Sherpa,
     #[cfg(feature = "parakeet-rs")]
     ParakeetRs,
 }
@@ -149,25 +147,10 @@ impl EngineArg {
             EngineArg::Kyutai => EngineKind::Kyutai,
             #[cfg(feature = "parakeet")]
             EngineArg::Parakeet => EngineKind::Parakeet,
-            #[cfg(feature = "sherpa")]
-            EngineArg::Sherpa => EngineKind::Sherpa,
             #[cfg(feature = "parakeet-rs")]
             EngineArg::ParakeetRs => EngineKind::ParakeetRs,
         }
     }
-}
-
-#[cfg(feature = "sherpa")]
-fn parse_sherpa_model(s: &str) -> Result<(String, String), String> {
-    let (lang, path) = s.split_once('=').ok_or_else(|| {
-        format!("expected `LANG=PATH`, got `{s}` (e.g., `--sherpa-model en=/models/en`)")
-    })?;
-    let lang = lang.trim();
-    let path = path.trim();
-    if lang.is_empty() || path.is_empty() {
-        return Err(format!("LANG and PATH must be non-empty in `{s}`"));
-    }
-    Ok((lang.to_string(), path.to_string()))
 }
 
 #[cfg(feature = "parakeet")]
@@ -306,28 +289,6 @@ struct ServerStartArgs {
     #[arg(long, default_value_t = 0.0015)]
     parakeet_noise_gate_rms: f32,
 
-    /// Path to a sherpa-onnx streaming model directory (loaded under language "default").
-    /// For multilingual setups use repeated `--sherpa-model LANG=PATH` instead.
-    #[cfg(feature = "sherpa")]
-    #[arg(long)]
-    sherpa_model_dir: Option<String>,
-
-    /// Per-language sherpa-onnx model in `LANG=PATH` form (repeatable).
-    /// Example: `--sherpa-model en=/models/en --sherpa-model de=/models/de`.
-    #[cfg(feature = "sherpa")]
-    #[arg(long = "sherpa-model", value_parser = parse_sherpa_model)]
-    sherpa_models: Vec<(String, String)>,
-
-    /// Number of CPU threads for sherpa-onnx inference
-    #[cfg(feature = "sherpa")]
-    #[arg(long, default_value_t = 1)]
-    sherpa_num_threads: i32,
-
-    /// Provider for sherpa-onnx (cpu, cuda, coreml, ...)
-    #[cfg(feature = "sherpa")]
-    #[arg(long, default_value = "cpu")]
-    sherpa_provider: String,
-
     /// parakeet-rs (Nemotron) model directory containing encoder.onnx,
     /// decoder_joint.onnx, tokenizer.model. Enables `--engine parakeet-rs`.
     #[cfg(feature = "parakeet-rs")]
@@ -364,14 +325,6 @@ impl Default for ServerStartArgs {
             parakeet_overlap_seconds: 1.0,
             #[cfg(feature = "parakeet")]
             parakeet_noise_gate_rms: 0.0015,
-            #[cfg(feature = "sherpa")]
-            sherpa_model_dir: None,
-            #[cfg(feature = "sherpa")]
-            sherpa_models: Vec::new(),
-            #[cfg(feature = "sherpa")]
-            sherpa_num_threads: 1,
-            #[cfg(feature = "sherpa")]
-            sherpa_provider: "cpu".to_string(),
             #[cfg(feature = "parakeet-rs")]
             parakeet_rs_model: None,
             #[cfg(feature = "parakeet-rs")]
@@ -704,20 +657,6 @@ fn append_server_args(cmd: &mut ProcessCommand, args: &ServerStartArgs) {
         cmd.arg("--parakeet-noise-gate-rms")
             .arg(args.parakeet_noise_gate_rms.to_string());
     }
-    #[cfg(feature = "sherpa")]
-    {
-        if let Some(dir) = &args.sherpa_model_dir {
-            cmd.arg("--sherpa-model-dir").arg(dir);
-        }
-        for (lang, path) in &args.sherpa_models {
-            cmd.arg("--sherpa-model").arg(format!("{lang}={path}"));
-        }
-        cmd.arg("--sherpa-num-threads")
-            .arg(args.sherpa_num_threads.to_string());
-        if args.sherpa_provider != "cpu" {
-            cmd.arg("--sherpa-provider").arg(&args.sherpa_provider);
-        }
-    }
 }
 
 fn build_server_options(args: &ServerStartArgs) -> Result<server::ServerOptions> {
@@ -772,12 +711,6 @@ fn build_server_options(args: &ServerStartArgs) -> Result<server::ServerOptions>
         parakeet_overlap_seconds: args.parakeet_overlap_seconds,
         #[cfg(feature = "parakeet")]
         parakeet_noise_gate_rms: args.parakeet_noise_gate_rms,
-        #[cfg(feature = "sherpa")]
-        sherpa_models: build_sherpa_models(args),
-        #[cfg(feature = "sherpa")]
-        sherpa_num_threads: args.sherpa_num_threads,
-        #[cfg(feature = "sherpa")]
-        sherpa_provider: args.sherpa_provider.clone(),
         #[cfg(feature = "parakeet-rs")]
         parakeet_rs_model_dir: args
             .parakeet_rs_model
@@ -790,18 +723,6 @@ fn build_server_options(args: &ServerStartArgs) -> Result<server::ServerOptions>
             .clone()
             .or_else(|| Some(config.parakeet_rs.language.clone())),
     })
-}
-
-#[cfg(feature = "sherpa")]
-fn build_sherpa_models(args: &ServerStartArgs) -> Vec<(String, PathBuf)> {
-    let mut out: Vec<(String, PathBuf)> = Vec::new();
-    if let Some(dir) = args.sherpa_model_dir.clone() {
-        out.push(("default".to_string(), PathBuf::from(dir)));
-    }
-    for (lang, path) in &args.sherpa_models {
-        out.push((lang.clone(), PathBuf::from(path)));
-    }
-    out
 }
 
 async fn run_client(args: ClientArgs) -> Result<()> {
@@ -1492,8 +1413,6 @@ mod tests {
             EngineArg::Kyutai => {}
             #[cfg(feature = "parakeet")]
             EngineArg::Parakeet => panic!("unexpected default engine"),
-            #[cfg(feature = "sherpa")]
-            EngineArg::Sherpa => panic!("unexpected default engine"),
             #[cfg(feature = "parakeet-rs")]
             EngineArg::ParakeetRs => panic!("unexpected default engine"),
         }

@@ -10,8 +10,7 @@ CMAKE_POLICY_VERSION_MINIMUM = "3.5"
 # Using --allow-multiple-definition lets the linker pick one copy.
 # We also use --whole-archive to ensure ort's protobuf is fully included.
 #
-# $ORIGIN rpath: when the `sherpa` feature is on, sherpa-onnx ships its
-# .so files next to the binary; the rpath makes the binary find them
+# $ORIGIN rpath: lets the binary find shared libraries placed next to it
 # without needing LD_LIBRARY_PATH at runtime.
 
 [target.x86_64-unknown-linux-gnu]
