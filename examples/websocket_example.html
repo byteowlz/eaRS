@@ -37,7 +37,6 @@
         .final { color: #006600; font-weight: bold; }
         .error { color: #cc0000; font-weight: bold; }
         .info { color: #666; }
-        .whisper { color: #9900cc; font-style: italic; }
         .controls {
             display: flex;
             gap: 10px;
@@ -258,12 +257,6 @@
                 addMessage(`ERROR: ${message.message}`, 'error');
                 if (message.message === 'server busy') {
                     addMessage('Another client is already streaming. Please wait.', 'error');
-                }
-            } else if (type === 'whisper_processing') {
-                addMessage(`Whisper processing: "${message.original_text}"`, 'whisper');
-            } else if (type === 'whisper_complete') {
-                if (message.changed) {
-                    addMessage(`Whisper: "${message.original_text}" → "${message.corrected_text}"`, 'whisper');
                 }
             } else {
                 addMessage(`Unknown message: ${JSON.stringify(message)}`, 'info');

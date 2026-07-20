@@ -11,8 +11,6 @@ pub struct AppConfig {
     #[serde(default)]
     pub model: ModelConfig,
     #[serde(default)]
-    pub whisper: WhisperConfig,
-    #[serde(default)]
     pub parakeet_rs: ParakeetRsConfig,
     #[serde(default)]
     pub server: ServerConfig,
@@ -40,18 +38,6 @@ pub struct ModelConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WhisperConfig {
-    pub enabled: bool,
-    pub default_model: String,
-    pub model_format: String,
-    pub quantization: String,
-    pub languages: Vec<String>,
-    pub confidence_threshold: f32,
-    pub storage_dir: String,
-    pub sentence_detection: SentenceDetectionConfig,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParakeetRsConfig {
     /// Directory containing encoder.onnx, encoder.onnx.data,
     /// decoder_joint.onnx, and tokenizer.model. None means the engine is not
@@ -65,15 +51,6 @@ pub struct ParakeetRsConfig {
 
 fn default_parakeet_rs_language() -> String {
     "auto".to_string()
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SentenceDetectionConfig {
-    pub min_duration: f64,
-    pub max_duration: f64,
-    pub vad_pause_threshold: f32,
-    pub silence_duration: f64,
-    pub punctuation_markers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -314,7 +291,6 @@ impl Default for AppConfig {
                 ref_audio: "~/.local/share/ears/ref_audio".to_string(),
             },
             model: ModelConfig::default(),
-            whisper: WhisperConfig::default(),
             parakeet_rs: ParakeetRsConfig::default(),
             server: ServerConfig::default(),
             dictation: DictationConfig::default(),
@@ -322,40 +298,6 @@ impl Default for AppConfig {
             subs: SubsConfig::default(),
             replacement: ReplacementConfig::default(),
             transcripts: TranscriptHistoryConfig::default(),
-        }
-    }
-}
-
-impl Default for WhisperConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            default_model: "large-v3-turbo".to_string(),
-            model_format: "gguf".to_string(),
-            quantization: "Q5_0".to_string(), // Use Q5_0 for whisper.cpp models
-            languages: vec!["de".to_string(), "ja".to_string(), "it".to_string()],
-            confidence_threshold: 0.7,
-            storage_dir: "default".to_string(), // Use HF cache
-            sentence_detection: SentenceDetectionConfig::default(),
-        }
-    }
-}
-
-impl Default for SentenceDetectionConfig {
-    fn default() -> Self {
-        Self {
-            min_duration: 1.0,
-            max_duration: 30.0,
-            vad_pause_threshold: 0.8,
-            silence_duration: 0.5,
-            punctuation_markers: vec![
-                ".".to_string(),
-                "!".to_string(),
-                "?".to_string(),
-                "。".to_string(),
-                "！".to_string(),
-                "？".to_string(),
-            ],
         }
     }
 }
@@ -371,52 +313,12 @@ impl AppConfig {
         } else {
             let contents = fs::read_to_string(&config_path)?;
 
-            // Try to parse the config
-            let mut config: AppConfig = match toml::from_str(&contents) {
-                Ok(c) => c,
-                Err(e) => {
-                    // If parsing fails due to missing whisper field, try to migrate
-                    if contents.contains("[storage]") && !contents.contains("[whisper]") {
-                        eprintln!("Migrating config file to include Whisper settings...");
-
-                        // Parse just the storage section
-                        #[derive(Deserialize)]
-                        struct OldConfig {
-                            storage: StorageConfig,
-                        }
-
-                        let old_config: OldConfig = toml::from_str(&contents)?;
-
-                        let new_config = AppConfig {
-                            storage: old_config.storage,
-                            model: ModelConfig::default(),
-                            whisper: WhisperConfig::default(),
-                            parakeet_rs: ParakeetRsConfig::default(),
-                            server: ServerConfig::default(),
-                            dictation: DictationConfig::default(),
-                            hotkeys: HotkeyConfig::default(),
-                            subs: SubsConfig::default(),
-                            replacement: ReplacementConfig::default(),
-                            transcripts: TranscriptHistoryConfig::default(),
-                        };
-
-                        // Save the updated config
-                        new_config.save()?;
-                        eprintln!("Config file updated with Whisper defaults");
-
-                        new_config
-                    } else {
-                        return Err(anyhow::anyhow!("Failed to parse config: {}", e));
-                    }
-                }
-            };
+            let mut config: AppConfig = toml::from_str(&contents)
+                .map_err(|e| anyhow::anyhow!("Failed to parse config: {}", e))?;
 
             // Expand tilde paths
             config.storage.model_dir = expand_tilde(&config.storage.model_dir)?;
             config.storage.ref_audio = expand_tilde(&config.storage.ref_audio)?;
-            if config.whisper.storage_dir != "default" {
-                config.whisper.storage_dir = expand_tilde(&config.whisper.storage_dir)?;
-            }
             if let Some(model_dir) = config.parakeet_rs.model_dir.as_mut() {
                 *model_dir = expand_tilde(model_dir)?;
             }
@@ -446,17 +348,6 @@ impl AppConfig {
         PathBuf::from(&self.storage.model_dir)
     }
 
-    pub fn whisper_storage_path(&self) -> PathBuf {
-        if self.whisper.storage_dir == "default" {
-            // Use a subdirectory in the cache for whisper models
-            dirs::cache_dir()
-                .unwrap_or_else(|| PathBuf::from("~/.cache"))
-                .join("huggingface")
-                .join("whisper-models")
-        } else {
-            PathBuf::from(&self.whisper.storage_dir)
-        }
-    }
 }
 
 fn get_config_path() -> Result<PathBuf> {

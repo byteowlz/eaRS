@@ -254,11 +254,6 @@ struct ServerStartArgs {
     #[arg(long, default_value_t = 8)]
     max_sessions: usize,
 
-    /// Force-enable Whisper enhancements (requires --features whisper)
-    #[cfg(feature = "whisper")]
-    #[arg(long, default_value_t = false)]
-    whisper: bool,
-
     /// Parakeet Hugging Face repository (requires --features parakeet)
     #[cfg(feature = "parakeet")]
     #[arg(long, default_value = "istupakov/parakeet-tdt-0.6b-v3-onnx")]
@@ -311,8 +306,6 @@ impl Default for ServerStartArgs {
             timestamps: false,
             vad: false,
             max_sessions: 8,
-            #[cfg(feature = "whisper")]
-            whisper: false,
             #[cfg(feature = "parakeet")]
             parakeet_repo: "istupakov/parakeet-tdt-0.6b-v3-onnx".to_string(),
             #[cfg(feature = "parakeet")]
@@ -634,10 +627,6 @@ fn append_server_args(cmd: &mut ProcessCommand, args: &ServerStartArgs) {
     if args.hf_repo != "kyutai/stt-1b-en_fr-candle" {
         cmd.arg("--hf-repo").arg(&args.hf_repo);
     }
-    #[cfg(feature = "whisper")]
-    if args.whisper {
-        cmd.arg("--whisper");
-    }
     #[cfg(feature = "parakeet")]
     {
         if args.parakeet_repo != "istupakov/parakeet-tdt-0.6b-v3-onnx" {
@@ -670,21 +659,6 @@ fn build_server_options(args: &ServerStartArgs) -> Result<server::ServerOptions>
     let mut transcription = TranscriptionOptions::default();
     transcription.timestamps = args.timestamps;
     transcription.vad = args.vad;
-
-    #[cfg(feature = "whisper")]
-    {
-        let whisper_enabled = if args.whisper {
-            true
-        } else {
-            config.whisper.enabled
-        };
-        transcription.whisper_enabled = whisper_enabled;
-        if whisper_enabled {
-            transcription.whisper_model = Some(config.whisper.default_model.clone());
-            transcription.whisper_quantization = Some(config.whisper.quantization.clone());
-            transcription.whisper_languages = Some(config.whisper.languages.clone());
-        }
-    }
 
     Ok(server::ServerOptions {
         bind_addr,

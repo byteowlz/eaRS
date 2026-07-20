@@ -64,7 +64,6 @@ The `just install-ears` command will:
 | `amd`      | ROCm acceleration for AMD GPUs                         |
 | `directml` | DirectML acceleration for Windows                      |
 | `parakeet-rs` | Enable Nemotron cache-aware streaming through parakeet-rs |
-| `whisper`     | Enable Whisper post-processing                            |
 | `hooks`       | Enable shell command hooks for dictation state changes    |
 
 ### Manual Installation
@@ -293,7 +292,7 @@ ears server start \
     [--hf-repo kyutai/stt-1b-en_fr-candle] \
     [--parakeet-rs-model /path/to/nemotron-model] \
     [--parakeet-rs-lang auto|en|de|es|ja] \
-    [--cpu] [--timestamps] [--vad] [--whisper]
+    [--cpu] [--timestamps] [--vad]
 
 # Restart accepts the same arguments as start.
 ears server restart --engine parakeet-rs --parakeet-rs-lang de
@@ -307,7 +306,6 @@ ears server restart --engine parakeet-rs --parakeet-rs-lang de
 - `--cpu`: Force Kyutai CPU execution (otherwise CUDA/Metal is used when available).
 - `--timestamps`: Include word timestamps in the server stream.
 - `--vad`: Enable Kyutai voice-activity detection.
-- `--whisper`: Force-enable Whisper post-processing (requires the `whisper` feature).
 
 The server writes a PID file to `$XDG_STATE_HOME/ears/server.pid` (or `~/.local/state/ears/server.pid`). `ears server stop` stops the local server and associated local dictation. `ears server restart` keeps dictation alive so it reconnects to the new server automatically.
 
@@ -399,7 +397,6 @@ $XDG_CONFIG_HOME/ears/config.toml
 Key sections:
 
 - `[storage]`: Override model cache directories and reference audio location.
-- `[whisper]`: Configure optional Whisper enhancement defaults (model, quantization, languages, sentence detection thresholds).
 - `[parakeet_rs]`: Set the default Nemotron model directory and multilingual language prompt. CLI server flags override these values; client `--lang` overrides the language per session.
 - `[dictation].codec`: Set `"pcm"` (default, accuracy-first) or `"opus"` (bandwidth-saving for remote servers). `ears-dictation --codec` overrides the config value.
 - `[server]`: Default WebSocket port used by `ears server start` and the capture client.
@@ -441,7 +438,6 @@ The server emits JSON events:
 
 - `{"type":"word","word":"hello","start_time":1.23,"end_time":null}` – live word updates.
 - `{"type":"final","text":"…","words":[…]}` – final transcript with timestamp list.
-- `{"type":"whisper_processing"|"whisper_complete",…}` – optional Whisper status messages when Whisper is enabled.
 
 Clients may send `{"type":"stop"}` to end the current session (the capture client does this automatically when interrupted).
 

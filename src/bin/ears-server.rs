@@ -89,11 +89,6 @@ struct Args {
     #[arg(long, default_value_t = 8)]
     max_sessions: usize,
 
-    /// Force Whisper enhancement, overriding config defaults (requires `--features whisper`)
-    #[cfg(feature = "whisper")]
-    #[arg(long, default_value_t = false)]
-    whisper: bool,
-
     /// Log transcriptions from language injection audio (for debugging)
     #[arg(long, default_value_t = false)]
     verbose_injection: bool,
@@ -158,21 +153,6 @@ fn build_server_options(args: &Args) -> Result<server::ServerOptions> {
     transcription.timestamps = args.timestamps;
     transcription.vad = args.vad;
     transcription.verbose_injection = args.verbose_injection;
-
-    #[cfg(feature = "whisper")]
-    {
-        let whisper_enabled = if args.whisper {
-            true
-        } else {
-            config.whisper.enabled
-        };
-        transcription.whisper_enabled = whisper_enabled;
-        if whisper_enabled {
-            transcription.whisper_model = Some(config.whisper.default_model.clone());
-            transcription.whisper_quantization = Some(config.whisper.quantization.clone());
-            transcription.whisper_languages = Some(config.whisper.languages.clone());
-        }
-    }
 
     Ok(server::ServerOptions {
         bind_addr,

@@ -24,7 +24,10 @@
           "description": "Reference audio directory for language priming"
         }
       },
-      "required": ["model_dir", "ref_audio"],
+      "required": [
+        "model_dir",
+        "ref_audio"
+      ],
       "additionalProperties": false
     },
     "model": {
@@ -38,96 +41,6 @@
           },
           "default": [],
           "description": "Languages to prime on model startup (e.g., ['de', 'ja']). Improves transcription accuracy for these languages from the first words"
-        }
-      },
-      "additionalProperties": false
-    },
-    "whisper": {
-      "type": "object",
-      "description": "Whisper enhancement configuration for higher accuracy transcription",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": false,
-          "description": "Enable Whisper enhancement for higher accuracy transcription"
-        },
-        "default_model": {
-          "type": "string",
-          "default": "large-v3-turbo",
-          "description": "Default Whisper model to use",
-          "enum": ["tiny", "base", "small", "medium", "large", "large-v2", "large-v3", "large-v3-turbo"]
-        },
-        "model_format": {
-          "type": "string",
-          "default": "gguf",
-          "description": "Model format",
-          "enum": ["gguf", "safetensors"]
-        },
-        "quantization": {
-          "type": "string",
-          "default": "Q5_0",
-          "description": "Quantization level for ggerganov/whisper.cpp models",
-          "enum": ["Q5_0", "Q8_0", "f32"]
-        },
-        "languages": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": ["ger", "jap"],
-          "description": "Languages to enhance (only these will be processed by Whisper)"
-        },
-        "confidence_threshold": {
-          "type": "number",
-          "default": 0.7,
-          "minimum": 0.0,
-          "maximum": 1.0,
-          "description": "Confidence threshold for accepting Whisper corrections"
-        },
-        "storage_dir": {
-          "type": "string",
-          "default": "default",
-          "description": "Storage directory for Whisper models. Use 'default' for HuggingFace cache"
-        },
-        "sentence_detection": {
-          "type": "object",
-          "description": "Sentence detection configuration",
-          "properties": {
-            "min_duration": {
-              "type": "number",
-              "default": 1.0,
-              "minimum": 0.0,
-              "description": "Minimum sentence duration in seconds"
-            },
-            "max_duration": {
-              "type": "number",
-              "default": 30.0,
-              "minimum": 0.0,
-              "description": "Maximum sentence duration in seconds"
-            },
-            "vad_pause_threshold": {
-              "type": "number",
-              "default": 0.8,
-              "minimum": 0.0,
-              "maximum": 1.0,
-              "description": "VAD confidence threshold for detecting pauses"
-            },
-            "silence_duration": {
-              "type": "number",
-              "default": 0.5,
-              "minimum": 0.0,
-              "description": "Minimum silence duration to consider sentence boundary (in seconds)"
-            },
-            "punctuation_markers": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "default": [".", "!", "?", "\u3002", "\uff01", "\uff1f"],
-              "description": "Punctuation markers that indicate sentence endings"
-            }
-          },
-          "additionalProperties": false
         }
       },
       "additionalProperties": false
@@ -201,7 +114,10 @@
         },
         "codec": {
           "type": "string",
-          "enum": ["pcm", "opus"],
+          "enum": [
+            "pcm",
+            "opus"
+          ],
           "default": "pcm",
           "description": "Audio transport codec; use opus for remote or bandwidth-constrained connections"
         },
@@ -232,7 +148,10 @@
                 "description": "Optional description for this server"
               }
             },
-            "required": ["host", "port"],
+            "required": [
+              "host",
+              "port"
+            ],
             "additionalProperties": false
           },
           "default": {
@@ -306,7 +225,11 @@
         },
         "mode": {
           "type": "string",
-          "enum": ["toggle", "push_to_talk", "hybrid"],
+          "enum": [
+            "toggle",
+            "push_to_talk",
+            "hybrid"
+          ],
           "default": "hybrid",
           "description": "Dictation control mode: toggle, hold-to-talk, or hybrid"
         },
@@ -376,6 +299,8 @@
       "additionalProperties": false
     }
   },
-  "required": ["storage"],
+  "required": [
+    "storage"
+  ],
   "additionalProperties": false
 }

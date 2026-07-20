@@ -30,7 +30,6 @@ anyhow = "1.0"
 atty = "0.2"
 candle = { version = "0.9", package = "candle-core" }
 candle-nn = "0.9"
-whisper-rs = { version = "0.11", optional = true }
 clap = { version = "4.4.12", features = ["derive"] }
 cpal = "0.16"
 crossbeam-channel = "0.5"
@@ -88,7 +87,6 @@ sentencepiece = { version = "0.12", features = ["static"] }
 
 [features]
 default = []
-whisper = ["dep:whisper-rs"]
 cudnn = ["candle/cudnn", "candle-nn/cudnn"]
 hooks = []
 
@@ -108,9 +106,7 @@ directml = []
 
 # Backwards-compat aliases
 cuda = ["nvidia"]
-cuda-whisper = ["nvidia", "whisper", "whisper-rs/cuda"]
 metal = ["apple"]
-metal-whisper = ["apple", "whisper", "whisper-rs/metal"]
 parakeet-cuda = ["parakeet", "nvidia"]
 parakeet-coreml = ["parakeet", "apple"]
 parakeet-directml = ["parakeet", "directml"]
