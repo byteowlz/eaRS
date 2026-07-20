@@ -4,7 +4,11 @@ use ears::server::EngineKind;
 #[cfg(feature = "parakeet")]
 use ears::server::ParakeetDevice;
 use ears::{TranscriptionOptions, config::AppConfig, server};
-#[cfg(any(feature = "parakeet", feature = "parakeet-rs"))]
+#[cfg(any(
+    feature = "parakeet",
+    feature = "parakeet-rs",
+    feature = "transcribe-cpp"
+))]
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -12,6 +16,10 @@ enum EngineArg {
     Kyutai,
     #[cfg(feature = "parakeet")]
     Parakeet,
+    #[cfg(feature = "parakeet-rs")]
+    ParakeetRs,
+    #[cfg(feature = "transcribe-cpp")]
+    TranscribeCpp,
 }
 
 impl EngineArg {
@@ -20,6 +28,10 @@ impl EngineArg {
             EngineArg::Kyutai => EngineKind::Kyutai,
             #[cfg(feature = "parakeet")]
             EngineArg::Parakeet => EngineKind::Parakeet,
+            #[cfg(feature = "parakeet-rs")]
+            EngineArg::ParakeetRs => EngineKind::ParakeetRs,
+            #[cfg(feature = "transcribe-cpp")]
+            EngineArg::TranscribeCpp => EngineKind::TranscribeCpp,
         }
     }
 }
@@ -132,6 +144,16 @@ struct Args {
     #[cfg(feature = "parakeet-rs")]
     #[arg(long)]
     parakeet_rs_lang: Option<String>,
+
+    /// transcribe.cpp streaming GGUF model path. Enables `--engine transcribe-cpp`.
+    #[cfg(feature = "transcribe-cpp")]
+    #[arg(long)]
+    transcribe_cpp_model: Option<String>,
+
+    /// Language hint for multilingual transcribe.cpp models (e.g. "de", "auto").
+    #[cfg(feature = "transcribe-cpp")]
+    #[arg(long)]
+    transcribe_cpp_lang: Option<String>,
 }
 
 #[tokio::main]
@@ -190,6 +212,17 @@ fn build_server_options(args: &Args) -> Result<server::ServerOptions> {
             .parakeet_rs_lang
             .clone()
             .or_else(|| Some(config.parakeet_rs.language.clone())),
+        #[cfg(feature = "transcribe-cpp")]
+        transcribe_cpp_model: args
+            .transcribe_cpp_model
+            .clone()
+            .or_else(|| config.transcribe_cpp.model_path.clone())
+            .map(PathBuf::from),
+        #[cfg(feature = "transcribe-cpp")]
+        transcribe_cpp_lang: args
+            .transcribe_cpp_lang
+            .clone()
+            .or_else(|| config.transcribe_cpp.language.clone()),
     })
 }
 

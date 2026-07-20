@@ -1080,6 +1080,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "toml",
+ "transcribe-cpp",
  "uinput",
  "uuid",
  "webrtc-vad",
@@ -4550,6 +4551,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 dependencies = [
  "once_cell",
+]
+
+[[package]]
+name = "transcribe-cpp"
+version = "0.1.3"
+source = "git+https://github.com/handy-computer/transcribe.cpp.git?rev=5a5a49664a8ea1f0e5b3be1dfc544730d1b62561#5a5a49664a8ea1f0e5b3be1dfc544730d1b62561"
+dependencies = [
+ "log",
+ "thiserror 2.0.18",
+ "transcribe-cpp-sys",
+]
+
+[[package]]
+name = "transcribe-cpp-sys"
+version = "0.1.3"
+source = "git+https://github.com/handy-computer/transcribe.cpp.git?rev=5a5a49664a8ea1f0e5b3be1dfc544730d1b62561#5a5a49664a8ea1f0e5b3be1dfc544730d1b62561"
+dependencies = [
+ "cmake",
+ "serde_json",
 ]
 
 [[package]]

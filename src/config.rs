@@ -13,6 +13,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub parakeet_rs: ParakeetRsConfig,
     #[serde(default)]
+    pub transcribe_cpp: TranscribeCppConfig,
+    #[serde(default)]
     pub server: ServerConfig,
     #[serde(default)]
     pub dictation: DictationConfig,
@@ -51,6 +53,20 @@ pub struct ParakeetRsConfig {
 
 fn default_parakeet_rs_language() -> String {
     "auto".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TranscribeCppConfig {
+    /// Path to a streaming-capable GGUF model (e.g.
+    /// multitalker-parakeet-streaming-0.6b-v1-Q8_0.gguf). None means the
+    /// engine is not loaded unless --transcribe-cpp-model is supplied.
+    #[serde(default)]
+    pub model_path: Option<String>,
+    /// Language hint for multilingual models (e.g. "de"). "auto" or unset
+    /// lets the model autodetect; a dictation client --lang overrides per
+    /// session.
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -292,6 +308,7 @@ impl Default for AppConfig {
             },
             model: ModelConfig::default(),
             parakeet_rs: ParakeetRsConfig::default(),
+            transcribe_cpp: TranscribeCppConfig::default(),
             server: ServerConfig::default(),
             dictation: DictationConfig::default(),
             hotkeys: HotkeyConfig::default(),
@@ -321,6 +338,9 @@ impl AppConfig {
             config.storage.ref_audio = expand_tilde(&config.storage.ref_audio)?;
             if let Some(model_dir) = config.parakeet_rs.model_dir.as_mut() {
                 *model_dir = expand_tilde(model_dir)?;
+            }
+            if let Some(model_path) = config.transcribe_cpp.model_path.as_mut() {
+                *model_path = expand_tilde(model_path)?;
             }
 
             Ok(config)

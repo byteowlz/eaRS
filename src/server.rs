@@ -21,6 +21,8 @@ use engine::{EngineManager, EngineSession, send_engine_changed};
 use parakeet::{ParakeetEngine, ParakeetEngineConfig};
 #[cfg(feature = "parakeet-rs")]
 use parakeet_rs::ParakeetRsEngine;
+#[cfg(feature = "transcribe-cpp")]
+use transcribe_cpp::TranscribeCppEngine;
 
 mod engine;
 pub mod listener;
@@ -28,12 +30,16 @@ pub mod listener;
 mod parakeet;
 #[cfg(feature = "parakeet-rs")]
 mod parakeet_rs;
+#[cfg(feature = "transcribe-cpp")]
+mod transcribe_cpp;
 mod parallel;
 pub use engine::EngineKind;
 #[cfg(feature = "parakeet")]
 pub use parakeet::ParakeetDevice;
 #[cfg(feature = "parakeet-rs")]
 pub use parakeet_rs::ParakeetRsEngineConfig;
+#[cfg(feature = "transcribe-cpp")]
+pub use transcribe_cpp::TranscribeCppEngineConfig;
 
 /// Per-connection audio transport codec. Binary WS frames are raw f32 LE PCM
 /// by default; a `setcodec` command switches the connection to ogg-opus.
@@ -266,6 +272,10 @@ pub struct ServerOptions {
     pub parakeet_rs_model_dir: Option<PathBuf>,
     #[cfg(feature = "parakeet-rs")]
     pub parakeet_rs_lang: Option<String>,
+    #[cfg(feature = "transcribe-cpp")]
+    pub transcribe_cpp_model: Option<PathBuf>,
+    #[cfg(feature = "transcribe-cpp")]
+    pub transcribe_cpp_lang: Option<String>,
 }
 
 pub async fn run(options: ServerOptions) -> Result<()> {
@@ -347,6 +357,22 @@ pub async fn run(options: ServerOptions) -> Result<()> {
                 Ok(engine) => engine_manager.register(Arc::new(engine)),
                 Err(err) => {
                     eprintln!("[ears-server] failed to initialize parakeet-rs engine: {err:#}");
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "transcribe-cpp")]
+    {
+        if let Some(model_path) = options.transcribe_cpp_model.clone() {
+            let cfg = TranscribeCppEngineConfig {
+                model_path,
+                lang: options.transcribe_cpp_lang.clone(),
+            };
+            match TranscribeCppEngine::load(cfg) {
+                Ok(engine) => engine_manager.register(Arc::new(engine)),
+                Err(err) => {
+                    eprintln!("[ears-server] failed to initialize transcribe-cpp engine: {err:#}");
                 }
             }
         }

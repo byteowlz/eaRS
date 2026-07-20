@@ -72,6 +72,12 @@ webrtc-vad = { version = "0.4", optional = true }
 # prkt feature), so do not enable both `parakeet` and `parakeet-rs` together.
 parakeet-rs = { package = "parakeet-rs", git = "https://github.com/altunenes/parakeet-rs.git", rev = "086e3bb734dd9a3f01e4e99ef6895da0db85b47a", optional = true, default-features = false }
 
+# transcribe.cpp GGUF streaming engine. Pinned past the 0.1.3 crates.io
+# release because multitalker-parakeet streaming landed after it. Builds the
+# C++ library from source via cmake; backend features (metal/cuda) are
+# forwarded from eaRS's `apple`/`nvidia` features.
+transcribe-cpp = { git = "https://github.com/handy-computer/transcribe.cpp.git", rev = "5a5a49664a8ea1f0e5b3be1dfc544730d1b62561", optional = true, default-features = false }
+
 # Platform-specific sentencepiece configuration
 # All platforms: compile from source (static linking).
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -97,10 +103,13 @@ parakeet = ["dep:prkt", "dep:ort", "dep:ort-sys", "dep:webrtc-vad"]
 # Dynamic ORT avoids symbol collisions with eaRS's statically linked
 # SentencePiece protobuf-lite. Set ORT_DYLIB_PATH to the ORT dylib at runtime.
 parakeet-rs = ["dep:parakeet-rs", "parakeet-rs/cpu", "parakeet-rs/load-dynamic"]
+# transcribe.cpp GGUF engine (streaming multitalker/nemotron models).
+# CPU-only by default; combine with `metal`/`cuda` for GPU compute.
+transcribe-cpp = ["dep:transcribe-cpp"]
 
 # Acceleration (shared flags)
-nvidia = ["dep:cudarc", "candle/cuda", "candle-nn/cuda"]
-apple = ["candle/metal", "candle-nn/metal"]
+nvidia = ["dep:cudarc", "candle/cuda", "candle-nn/cuda", "transcribe-cpp?/cuda"]
+apple = ["candle/metal", "candle-nn/metal", "transcribe-cpp?/metal"]
 amd = []
 directml = []
 

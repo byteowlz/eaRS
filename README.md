@@ -64,6 +64,7 @@ The `just install-ears` command will:
 | `amd`      | ROCm acceleration for AMD GPUs                         |
 | `directml` | DirectML acceleration for Windows                      |
 | `parakeet-rs` | Enable Nemotron cache-aware streaming through parakeet-rs |
+| `transcribe-cpp` | Enable ggml GGUF streaming models via transcribe.cpp (built from source, needs cmake; `apple`/`nvidia` add Metal/CUDA compute) |
 | `hooks`       | Enable shell command hooks for dictation state changes    |
 
 ### Manual Installation
@@ -76,6 +77,7 @@ cargo install --path . --features apple              # Apple Silicon
 cargo install --path . --features nvidia             # NVIDIA GPU
 cargo install --path . --features parakeet-rs        # Nemotron streaming
 cargo install --path . --features apple,parakeet-rs  # Kyutai Metal + Nemotron
+cargo install --path . --features apple,transcribe-cpp # Kyutai Metal + transcribe.cpp (GGUF, Metal)
 ```
 
 ## System Dependencies
@@ -288,10 +290,12 @@ If the local server is not running, `ears` will start it automatically before co
 ```bash
 ears server start \
     [--bind 0.0.0.0:8765] \
-    [--engine kyutai|parakeet-rs] \
+    [--engine kyutai|parakeet-rs|transcribe-cpp] \
     [--hf-repo kyutai/stt-1b-en_fr-candle] \
     [--parakeet-rs-model /path/to/nemotron-model] \
     [--parakeet-rs-lang auto|en|de|es|ja] \
+    [--transcribe-cpp-model /path/to/model.gguf] \
+    [--transcribe-cpp-lang auto|en|de|...] \
     [--cpu] [--timestamps] [--vad]
 
 # Restart accepts the same arguments as start.
@@ -303,6 +307,8 @@ ears server restart --engine parakeet-rs --parakeet-rs-lang de
 - `--hf-repo`: Choose a different Kyutai Speech repository.
 - `--parakeet-rs-model`: Override `[parakeet_rs].model_dir`.
 - `--parakeet-rs-lang`: Override `[parakeet_rs].language`; a dictation client `--lang` command overrides it per session.
+- `--transcribe-cpp-model`: Streaming-capable transcribe.cpp GGUF model (overrides `[transcribe_cpp].model_path`). Recommended: `multitalker-parakeet-streaming` (EN) or `nemotron-3.5-asr-streaming` (multilingual). One session at a time: the model's compute lease is held per active stream.
+- `--transcribe-cpp-lang`: Override `[transcribe_cpp].language` for multilingual GGUF models.
 - `--cpu`: Force Kyutai CPU execution (otherwise CUDA/Metal is used when available).
 - `--timestamps`: Include word timestamps in the server stream.
 - `--vad`: Enable Kyutai voice-activity detection.
@@ -398,6 +404,7 @@ Key sections:
 
 - `[storage]`: Override model cache directories and reference audio location.
 - `[parakeet_rs]`: Set the default Nemotron model directory and multilingual language prompt. CLI server flags override these values; client `--lang` overrides the language per session.
+- `[transcribe_cpp]`: Set the default transcribe.cpp GGUF model path and language hint (requires the `transcribe-cpp` feature).
 - `[dictation].codec`: Set `"pcm"` (default, accuracy-first) or `"opus"` (bandwidth-saving for remote servers). `ears-dictation --codec` overrides the config value.
 - `[server]`: Default WebSocket port used by `ears server start` and the capture client.
 - `[dictation]`: Enable live typing and configure in-app hotkeys.

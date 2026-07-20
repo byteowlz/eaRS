@@ -14,6 +14,8 @@ pub enum EngineKind {
     Parakeet,
     #[cfg(feature = "parakeet-rs")]
     ParakeetRs,
+    #[cfg(feature = "transcribe-cpp")]
+    TranscribeCpp,
 }
 
 impl EngineKind {
@@ -24,6 +26,8 @@ impl EngineKind {
             EngineKind::Parakeet => "parakeet",
             #[cfg(feature = "parakeet-rs")]
             EngineKind::ParakeetRs => "parakeet-rs",
+            #[cfg(feature = "transcribe-cpp")]
+            EngineKind::TranscribeCpp => "transcribe-cpp",
         }
     }
 
@@ -34,6 +38,8 @@ impl EngineKind {
             "parakeet" | "prkt" => Some(EngineKind::Parakeet),
             #[cfg(feature = "parakeet-rs")]
             "parakeet-rs" | "parakeet_rs" | "nemotron" => Some(EngineKind::ParakeetRs),
+            #[cfg(feature = "transcribe-cpp")]
+            "transcribe-cpp" | "transcribe_cpp" | "tcpp" => Some(EngineKind::TranscribeCpp),
             _ => None,
         }
     }

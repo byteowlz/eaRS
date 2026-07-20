@@ -26,7 +26,11 @@ use tokio_tungstenite::{
 use ears::server::EngineKind;
 #[cfg(feature = "parakeet")]
 use ears::server::ParakeetDevice;
-#[cfg(any(feature = "parakeet", feature = "parakeet-rs"))]
+#[cfg(any(
+    feature = "parakeet",
+    feature = "parakeet-rs",
+    feature = "transcribe-cpp"
+))]
 use std::path::PathBuf;
 
 #[cfg(unix)]
@@ -139,6 +143,8 @@ enum EngineArg {
     Parakeet,
     #[cfg(feature = "parakeet-rs")]
     ParakeetRs,
+    #[cfg(feature = "transcribe-cpp")]
+    TranscribeCpp,
 }
 
 impl EngineArg {
@@ -149,6 +155,8 @@ impl EngineArg {
             EngineArg::Parakeet => EngineKind::Parakeet,
             #[cfg(feature = "parakeet-rs")]
             EngineArg::ParakeetRs => EngineKind::ParakeetRs,
+            #[cfg(feature = "transcribe-cpp")]
+            EngineArg::TranscribeCpp => EngineKind::TranscribeCpp,
         }
     }
 }
@@ -294,6 +302,16 @@ struct ServerStartArgs {
     #[cfg(feature = "parakeet-rs")]
     #[arg(long)]
     parakeet_rs_lang: Option<String>,
+
+    /// transcribe.cpp streaming GGUF model path. Enables `--engine transcribe-cpp`.
+    #[cfg(feature = "transcribe-cpp")]
+    #[arg(long)]
+    transcribe_cpp_model: Option<String>,
+
+    /// Language hint for multilingual transcribe.cpp models (e.g. "de", "auto").
+    #[cfg(feature = "transcribe-cpp")]
+    #[arg(long)]
+    transcribe_cpp_lang: Option<String>,
 }
 
 impl Default for ServerStartArgs {
@@ -322,6 +340,10 @@ impl Default for ServerStartArgs {
             parakeet_rs_model: None,
             #[cfg(feature = "parakeet-rs")]
             parakeet_rs_lang: None,
+            #[cfg(feature = "transcribe-cpp")]
+            transcribe_cpp_model: None,
+            #[cfg(feature = "transcribe-cpp")]
+            transcribe_cpp_lang: None,
         }
     }
 }
@@ -646,6 +668,24 @@ fn append_server_args(cmd: &mut ProcessCommand, args: &ServerStartArgs) {
         cmd.arg("--parakeet-noise-gate-rms")
             .arg(args.parakeet_noise_gate_rms.to_string());
     }
+    #[cfg(feature = "parakeet-rs")]
+    {
+        if let Some(model) = &args.parakeet_rs_model {
+            cmd.arg("--parakeet-rs-model").arg(model);
+        }
+        if let Some(lang) = &args.parakeet_rs_lang {
+            cmd.arg("--parakeet-rs-lang").arg(lang);
+        }
+    }
+    #[cfg(feature = "transcribe-cpp")]
+    {
+        if let Some(model) = &args.transcribe_cpp_model {
+            cmd.arg("--transcribe-cpp-model").arg(model);
+        }
+        if let Some(lang) = &args.transcribe_cpp_lang {
+            cmd.arg("--transcribe-cpp-lang").arg(lang);
+        }
+    }
 }
 
 fn build_server_options(args: &ServerStartArgs) -> Result<server::ServerOptions> {
@@ -696,6 +736,17 @@ fn build_server_options(args: &ServerStartArgs) -> Result<server::ServerOptions>
             .parakeet_rs_lang
             .clone()
             .or_else(|| Some(config.parakeet_rs.language.clone())),
+        #[cfg(feature = "transcribe-cpp")]
+        transcribe_cpp_model: args
+            .transcribe_cpp_model
+            .clone()
+            .or_else(|| config.transcribe_cpp.model_path.clone())
+            .map(PathBuf::from),
+        #[cfg(feature = "transcribe-cpp")]
+        transcribe_cpp_lang: args
+            .transcribe_cpp_lang
+            .clone()
+            .or_else(|| config.transcribe_cpp.language.clone()),
     })
 }
 

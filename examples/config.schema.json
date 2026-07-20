@@ -297,6 +297,21 @@
         }
       },
       "additionalProperties": false
+    },
+    "transcribe_cpp": {
+      "type": "object",
+      "description": "transcribe.cpp GGUF streaming engine configuration (requires the transcribe-cpp feature)",
+      "properties": {
+        "model_path": {
+          "type": "string",
+          "description": "Path to a streaming-capable GGUF model (e.g. multitalker-parakeet-streaming-0.6b-v1-Q8_0.gguf). Enables --engine transcribe-cpp. CLI --transcribe-cpp-model overrides this."
+        },
+        "language": {
+          "type": "string",
+          "description": "Language hint for multilingual models (e.g. 'de'). 'auto' or unset lets the model autodetect; a dictation client --lang overrides per session."
+        }
+      },
+      "additionalProperties": false
     }
   },
   "required": [
