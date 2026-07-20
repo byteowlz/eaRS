@@ -307,7 +307,7 @@ ears server restart --engine parakeet-rs --parakeet-rs-lang de
 - `--hf-repo`: Choose a different Kyutai Speech repository.
 - `--parakeet-rs-model`: Override `[parakeet_rs].model_dir`.
 - `--parakeet-rs-lang`: Override `[parakeet_rs].language`; a dictation client `--lang` command overrides it per session.
-- `--transcribe-cpp-model`: Streaming-capable transcribe.cpp GGUF model (overrides `[transcribe_cpp].model_path`). Recommended: `multitalker-parakeet-streaming` (EN) or `nemotron-3.5-asr-streaming` (multilingual). One session at a time: the model's compute lease is held per active stream.
+- `--transcribe-cpp-model`: Streaming-capable transcribe.cpp GGUF model (overrides `[transcribe_cpp].model_path`). Accepts either an existing `.gguf` path or a known model slug, which is auto-downloaded from the `handy-computer` Hugging Face org into the shared HF cache on first use. Known slugs: `multitalker-parakeet-streaming-0.6b-v1` (EN, recommended), `nemotron-3.5-asr-streaming-0.6b` (multilingual), `parakeet-unified-en-0.6b`, `nemotron-speech-streaming-en-0.6b`. Append `@QUANT` (e.g. `nemotron-3.5-asr-streaming-0.6b@Q5_K_M`) to pick a non-default quant. One session at a time: the model's compute lease is held per active stream.
 - `--transcribe-cpp-lang`: Override `[transcribe_cpp].language` for multilingual GGUF models.
 - `--cpu`: Force Kyutai CPU execution (otherwise CUDA/Metal is used when available).
 - `--timestamps`: Include word timestamps in the server stream.

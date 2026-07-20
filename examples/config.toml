@@ -20,9 +20,12 @@ prime_languages = []
 language = "auto"
 
 [transcribe_cpp]
-# Path to a streaming-capable transcribe.cpp GGUF model (enables --engine transcribe-cpp).
-# Recommended: multitalker-parakeet-streaming (EN) or nemotron-3.5-asr-streaming (multilingual).
-# model_path = "~/Models/transcribe-cpp/multitalker-parakeet-streaming-0.6b-v1-Q8_0.gguf"
+# Streaming transcribe.cpp model (enables --engine transcribe-cpp). Either an
+# existing .gguf path, or a known slug auto-downloaded from the handy-computer
+# HF org on first use. Known slugs: multitalker-parakeet-streaming-0.6b-v1 (EN),
+# nemotron-3.5-asr-streaming-0.6b (multilingual), parakeet-unified-en-0.6b,
+# nemotron-speech-streaming-en-0.6b. Append @QUANT for a non-default quant.
+# model_path = "multitalker-parakeet-streaming-0.6b-v1"
 # Language hint for multilingual models; "auto"/unset lets the model autodetect.
 # Client --lang overrides this per session.
 # language = "auto"

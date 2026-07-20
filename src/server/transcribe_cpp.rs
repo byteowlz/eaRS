@@ -10,7 +10,7 @@
 //! the model's compute lease from begin to finalize), so this engine serves
 //! one session at a time regardless of `--max-sessions`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -33,8 +33,99 @@ const FEED_CHUNK_MS: usize = 560;
 /// without new committed text (a genuine speaking pause).
 const PARTIAL_WORD_FLUSH_TIMEOUT: Duration = Duration::from_millis(800);
 
+/// A known streaming GGUF model, downloadable by short slug from the
+/// `handy-computer` Hugging Face org. This is data, not judgment: each entry is
+/// just a repo + default quant, mirroring handy's bundled catalog. An explicit
+/// file path always bypasses this table, and any `handy-computer/*-gguf` repo
+/// works by passing its slug even if it is not listed here.
+struct CatalogModel {
+    slug: &'static str,
+    default_quant: &'static str,
+}
+
+/// The eaRS-recommended streaming models. multitalker-parakeet is the English
+/// accuracy/speed pick; nemotron-3.5 is the multilingual pick.
+const CATALOG: &[CatalogModel] = &[
+    CatalogModel {
+        slug: "multitalker-parakeet-streaming-0.6b-v1",
+        default_quant: "Q8_0",
+    },
+    CatalogModel {
+        slug: "nemotron-3.5-asr-streaming-0.6b",
+        default_quant: "Q8_0",
+    },
+    CatalogModel {
+        slug: "parakeet-unified-en-0.6b",
+        default_quant: "Q8_0",
+    },
+    CatalogModel {
+        slug: "nemotron-speech-streaming-en-0.6b",
+        default_quant: "Q8_0",
+    },
+];
+
+const HF_ORG: &str = "handy-computer";
+
+/// Resolve a `--transcribe-cpp-model` spec to an on-disk GGUF path.
+///
+/// - An existing file path is used verbatim.
+/// - Otherwise the spec is treated as a catalog slug (optionally `slug@QUANT`)
+///   and the matching GGUF is downloaded from `handy-computer/{slug}-gguf`
+///   into the shared Hugging Face cache on first use, like handy does.
+fn resolve_model(spec: &Path) -> Result<PathBuf> {
+    if spec.is_file() {
+        return Ok(spec.to_path_buf());
+    }
+    let raw = spec.to_string_lossy();
+    // A path-looking spec that does not exist is a mistake, not a slug.
+    if raw.contains('/') || raw.ends_with(".gguf") {
+        bail!(
+            "transcribe.cpp model file not found: {}\n\
+             Pass an existing .gguf path, or a known model slug ({})",
+            spec.display(),
+            catalog_slugs()
+        );
+    }
+    let (slug, quant) = match raw.split_once('@') {
+        Some((s, q)) => (s.to_string(), Some(q.to_string())),
+        None => (raw.to_string(), None),
+    };
+    let quant = quant
+        .or_else(|| {
+            CATALOG
+                .iter()
+                .find(|m| m.slug == slug)
+                .map(|m| m.default_quant.to_string())
+        })
+        .unwrap_or_else(|| "Q8_0".to_string());
+    let repo_id = format!("{HF_ORG}/{slug}-gguf");
+    let filename = format!("{slug}-{quant}.gguf");
+    eprintln!("[transcribe-cpp] resolving model {slug} ({quant}) from {repo_id}");
+    let api = hf_hub::api::sync::ApiBuilder::new()
+        .with_progress(true)
+        .build()
+        .context("failed to build Hugging Face API client")?;
+    let path = api.model(repo_id.clone()).get(&filename).with_context(|| {
+        format!(
+            "failed to download {filename} from {repo_id}\n\
+             (known slugs: {}; or pass an explicit .gguf path)",
+            catalog_slugs()
+        )
+    })?;
+    Ok(path)
+}
+
+fn catalog_slugs() -> String {
+    CATALOG
+        .iter()
+        .map(|m| m.slug)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 #[derive(Debug, Clone)]
 pub struct TranscribeCppEngineConfig {
+    /// Either an existing `.gguf` path or a catalog slug (auto-downloaded).
     pub model_path: PathBuf,
     /// Language hint (e.g. "de"). "auto"/None lets the model autodetect.
     pub lang: Option<String>,
@@ -57,10 +148,11 @@ fn normalize_lang(lang: Option<&str>) -> Option<String> {
 
 impl TranscribeCppEngine {
     pub fn load(cfg: TranscribeCppEngineConfig) -> Result<Self> {
-        let model = TcModel::load(&cfg.model_path).map_err(|e| {
+        let model_path = resolve_model(&cfg.model_path)?;
+        let model = TcModel::load(&model_path).map_err(|e| {
             anyhow::anyhow!(
                 "transcribe.cpp model load failed for {}: {e}",
-                cfg.model_path.display()
+                model_path.display()
             )
         })?;
         let caps = model.capabilities();
@@ -68,14 +160,14 @@ impl TranscribeCppEngine {
             bail!(
                 "model {} ({}) does not support streaming; pick a streaming-capable GGUF \
                  (e.g. multitalker-parakeet-streaming or nemotron-3.5-asr-streaming)",
-                cfg.model_path.display(),
+                model_path.display(),
                 model.arch()
             );
         }
         let lang = normalize_lang(cfg.lang.as_deref());
         eprintln!(
             "[transcribe-cpp] loaded {} ({}, backend {}, {} Hz, lang={})",
-            cfg.model_path.display(),
+            model_path.display(),
             model.arch(),
             model.backend(),
             caps.native_sample_rate,

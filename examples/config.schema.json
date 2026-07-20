@@ -304,7 +304,7 @@
       "properties": {
         "model_path": {
           "type": "string",
-          "description": "Path to a streaming-capable GGUF model (e.g. multitalker-parakeet-streaming-0.6b-v1-Q8_0.gguf). Enables --engine transcribe-cpp. CLI --transcribe-cpp-model overrides this."
+          "description": "Either an existing .gguf path or a known model slug auto-downloaded from the handy-computer HF org on first use (e.g. multitalker-parakeet-streaming-0.6b-v1, nemotron-3.5-asr-streaming-0.6b). Append @QUANT for a non-default quant. Enables --engine transcribe-cpp; CLI --transcribe-cpp-model overrides this."
         },
         "language": {
           "type": "string",
