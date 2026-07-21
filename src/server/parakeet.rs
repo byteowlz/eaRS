@@ -609,12 +609,6 @@ fn process_vad_frames(
         if let Some(is_voice) = state.process_frame(&pcm) {
             if is_voice {
                 voice = true;
-                if !state.in_speech {
-                    sink.handle_message(WebSocketMessage::Speech {
-                        active: true,
-                        timestamp: current_timestamp(),
-                    });
-                }
                 state.in_speech = true;
                 state.silence_frames = 0;
                 state.last_voice_instant = Some(Instant::now());
@@ -623,10 +617,6 @@ fn process_vad_frames(
                 if state.silence_frames >= 5 {
                     state.in_speech = false;
                     state.silence_frames = 0;
-                    sink.handle_message(WebSocketMessage::Speech {
-                        active: false,
-                        timestamp: current_timestamp(),
-                    });
 
                     if last_pause_sent
                         .map(|t| t.elapsed() > Duration::from_millis(200))

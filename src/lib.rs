@@ -939,13 +939,6 @@ impl Model {
                                                     .as_secs_f64(),
                                             };
                                             let _ = ws_tx.send(pause_msg);
-                                            let _ = ws_tx.send(WebSocketMessage::Speech {
-                                                active: false,
-                                                timestamp: std::time::SystemTime::now()
-                                                    .duration_since(std::time::UNIX_EPOCH)
-                                                    .unwrap_or_default()
-                                                    .as_secs_f64(),
-                                            });
 
                                             if !self.timestamps {
                                                 print!(" <pause>");
@@ -954,15 +947,6 @@ impl Model {
                                         }
                                     }
                                     moshi::asr::AsrMsg::EndWord { stop_time, .. } => {
-                                        if printed_eot {
-                                            let _ = ws_tx.send(WebSocketMessage::Speech {
-                                                active: true,
-                                                timestamp: std::time::SystemTime::now()
-                                                    .duration_since(std::time::UNIX_EPOCH)
-                                                    .unwrap_or_default()
-                                                    .as_secs_f64(),
-                                            });
-                                        }
                                         printed_eot = false;
                                         has_voice_activity = true;
                                         if self.timestamps {
@@ -990,15 +974,6 @@ impl Model {
                                         }
                                     }
                                     moshi::asr::AsrMsg::Word { tokens, start_time, .. } => {
-                                        if printed_eot {
-                                            let _ = ws_tx.send(WebSocketMessage::Speech {
-                                                active: true,
-                                                timestamp: std::time::SystemTime::now()
-                                                    .duration_since(std::time::UNIX_EPOCH)
-                                                    .unwrap_or_default()
-                                                    .as_secs_f64(),
-                                            });
-                                        }
                                         printed_eot = false;
                                         has_voice_activity = true;
                                         let word = self.text_tokenizer

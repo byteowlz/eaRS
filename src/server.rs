@@ -26,6 +26,7 @@ use transcribe_cpp::TranscribeCppEngine;
 
 mod engine;
 pub mod listener;
+mod vad;
 #[cfg(feature = "parakeet")]
 mod parakeet;
 #[cfg(feature = "parakeet-rs")]
@@ -523,6 +524,8 @@ async fn handle_connection(
     let reader = tokio::spawn(async move {
         let mut ws_debug = WsDebugLog::from_env(session_id);
         let mut codec = SessionCodec::Pcm;
+        // Single engine-agnostic speech-boundary detector for this connection.
+        let mut boundary_vad = vad::BoundaryVad::new(true, 24_000);
         if let Some(msg) = first_msg {
             let msg_debug = WsMessageDebug::from_message(&msg);
             let result = handle_client_message(
@@ -534,6 +537,7 @@ async fn handle_connection(
                 &mut current_engine,
                 &transcription_options,
                 &mut codec,
+                &mut boundary_vad,
             );
             if let Some(debug) = ws_debug.as_mut() {
                 debug.observe(current_engine, &msg_debug, result.is_ok());
@@ -557,6 +561,7 @@ async fn handle_connection(
                         &mut current_engine,
                         &transcription_options,
                         &mut codec,
+                        &mut boundary_vad,
                     );
                     if let Some(debug) = ws_debug.as_mut() {
                         debug.observe(current_engine, &msg_debug, result.is_ok());
@@ -828,6 +833,7 @@ fn handle_client_message(
     current_engine: &mut EngineKind,
     transcription: &TranscriptionOptions,
     codec: &mut SessionCodec,
+    boundary_vad: &mut vad::BoundaryVad,
 ) -> Result<()> {
     match msg {
         Message::Binary(data) => {
@@ -847,6 +853,13 @@ fn handle_client_message(
             };
             if chunk.is_empty() {
                 return Ok(());
+            }
+            // Emit engine-agnostic speech boundaries from the single ingress VAD.
+            if let Some(active) = boundary_vad.observe(&chunk) {
+                sink.handle_message(WebSocketMessage::Speech {
+                    active,
+                    timestamp: current_timestamp(),
+                });
             }
             if session.is_none() {
                 *session = allocate_session(engine_manager, *current_engine, sink.clone(), msg_tx)?;
@@ -995,6 +1008,13 @@ fn allocate_session(
             Ok(None)
         }
     }
+}
+
+fn current_timestamp() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64()
 }
 
 fn send_status(sink: &mut SessionSink, transcription: &TranscriptionOptions, engine: EngineKind) {
