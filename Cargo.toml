@@ -77,6 +77,9 @@ parakeet-rs = { package = "parakeet-rs", git = "https://github.com/altunenes/par
 # C++ library from source via cmake; backend features (metal/cuda) are
 # forwarded from eaRS's `apple`/`nvidia` features.
 transcribe-cpp = { git = "https://github.com/handy-computer/transcribe.cpp.git", rev = "5a5a49664a8ea1f0e5b3be1dfc544730d1b62561", optional = true, default-features = false }
+# `ears models refresh` fetches the maintained catalog.json. Reuses hf-hub's TLS
+# stack (native-tls); already in the tree, so this adds no new transitive cost.
+ureq = { version = "2.12", optional = true }
 
 # Platform-specific sentencepiece configuration
 # All platforms: compile from source (static linking).
@@ -105,7 +108,7 @@ parakeet = ["dep:prkt", "dep:ort", "dep:ort-sys", "dep:webrtc-vad"]
 parakeet-rs = ["dep:parakeet-rs", "parakeet-rs/cpu", "parakeet-rs/load-dynamic"]
 # transcribe.cpp GGUF engine (streaming multitalker/nemotron models).
 # CPU-only by default; combine with `metal`/`cuda` for GPU compute.
-transcribe-cpp = ["dep:transcribe-cpp"]
+transcribe-cpp = ["dep:transcribe-cpp", "dep:ureq"]
 
 # Acceleration (shared flags)
 nvidia = ["dep:cudarc", "candle/cuda", "candle-nn/cuda", "transcribe-cpp?/cuda"]

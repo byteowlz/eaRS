@@ -316,9 +316,12 @@ ears models list                 # show known streaming models
 ears models pull                 # fzf-pick a model and download it
 ears models pull nemotron        # seed the fuzzy picker with a query
 ears models pull nemotron-3.5-asr-streaming-0.6b   # exact slug: download directly
+ears models refresh              # update the local catalog to the latest list
 ```
 
 `models pull` prints the cached `.gguf` path to stdout (so `--transcribe-cpp-model "$(ears models pull ...)"` works) and falls back to a numbered prompt when `fzf` is not installed.
+
+The catalog is data, not code: `src/server/catalog.json` is baked into the binary (so `models list` works offline) and generated from the `handy-computer` Hugging Face org by `scripts/gen_catalog.py`. A weekly GitHub Action regenerates it and opens a PR, so newly published streaming models get picked up automatically. `ears models refresh` fetches the maintained catalog into the platform config dir (`~/.config/ears/models.json` on Linux, `~/Library/Application Support/ears/models.json` on macOS), which then overrides the baked copy — so you get new models without reinstalling. Set `EARS_CATALOG_URL` to point at a different source. Any `handy-computer/*-gguf` slug also works directly via `--transcribe-cpp-model`, listed or not.
 - `--transcribe-cpp-lang`: Override `[transcribe_cpp].language` for multilingual GGUF models.
 - `--cpu`: Force Kyutai CPU execution (otherwise CUDA/Metal is used when available).
 - `--timestamps`: Include word timestamps in the server stream.

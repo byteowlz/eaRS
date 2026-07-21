@@ -72,6 +72,8 @@ enum ModelsCommand {
     List,
     /// Fuzzy-pick a model with fzf (or a numbered prompt) and download it.
     Pull(ModelsPullArgs),
+    /// Refresh the local model catalog from the maintained upstream list.
+    Refresh,
 }
 
 #[cfg(feature = "transcribe-cpp")]
@@ -428,14 +430,14 @@ fn handle_dictionary_command(command: DictionaryCommand) -> Result<()> {
 
 #[cfg(feature = "transcribe-cpp")]
 fn handle_models_command(command: ModelsCommand) -> Result<()> {
-    use ears::server::transcribe_cpp::CATALOG;
+    use ears::server::catalog;
     match command {
         ModelsCommand::List => {
             println!(
                 "{:<40} {:<28} {:<18} {:>7}  {}",
                 "SLUG", "NAME", "LANGUAGES", "SIZE", "DESCRIPTION"
             );
-            for m in CATALOG {
+            for m in catalog::load() {
                 println!(
                     "{:<40} {:<28} {:<18} {:>6}M  {}",
                     m.slug, m.name, m.languages, m.default_size_mb, m.description
@@ -443,22 +445,33 @@ fn handle_models_command(command: ModelsCommand) -> Result<()> {
             }
             eprintln!(
                 "\nDownload with `ears models pull [query]` or point \
-                 --transcribe-cpp-model at a slug (optionally slug@QUANT) or a .gguf path."
+                 --transcribe-cpp-model at a slug (optionally slug@QUANT) or a .gguf path.\n\
+                 Run `ears models refresh` to update this list."
             );
             Ok(())
         }
         ModelsCommand::Pull(args) => pull_model(args.query.as_deref()),
+        ModelsCommand::Refresh => {
+            let (url, count) = catalog::refresh()?;
+            eprintln!("fetched {url}");
+            println!(
+                "updated catalog: {count} models -> {}",
+                catalog::cache_path().display()
+            );
+            Ok(())
+        }
     }
 }
 
 #[cfg(feature = "transcribe-cpp")]
 fn pull_model(query: Option<&str>) -> Result<()> {
-    use ears::server::transcribe_cpp::CATALOG;
+    use ears::server::catalog;
 
+    let models = catalog::load();
     // An exact slug (or slug@QUANT) downloads directly; otherwise fuzzy-pick.
     let selected = match query {
-        Some(q) if CATALOG.iter().any(|m| m.slug == q) || q.contains('@') => Some(q.to_string()),
-        other => pick_model(other)?,
+        Some(q) if models.iter().any(|m| m.slug == q) || q.contains('@') => Some(q.to_string()),
+        other => pick_model(&models, other)?,
     };
     let Some(spec) = selected else {
         eprintln!("nothing selected");
@@ -472,7 +485,7 @@ fn pull_model(query: Option<&str>) -> Result<()> {
 }
 
 #[cfg(feature = "transcribe-cpp")]
-fn model_row_line(m: &ears::server::transcribe_cpp::CatalogModel) -> String {
+fn model_row_line(m: &ears::server::catalog::CatalogModel) -> String {
     format!(
         "{:<40} {:<28} {:<18} {:>4}M  {}",
         m.slug, m.name, m.languages, m.default_size_mb, m.description
@@ -482,12 +495,14 @@ fn model_row_line(m: &ears::server::transcribe_cpp::CatalogModel) -> String {
 /// Pick a model slug via fzf, falling back to a numbered prompt when fzf is
 /// unavailable. Returns the chosen slug, or `None` if the user cancelled.
 #[cfg(feature = "transcribe-cpp")]
-fn pick_model(query: Option<&str>) -> Result<Option<String>> {
-    use ears::server::transcribe_cpp::CATALOG;
+fn pick_model(
+    models: &[ears::server::catalog::CatalogModel],
+    query: Option<&str>,
+) -> Result<Option<String>> {
     use std::io::{Write, stdin};
     use std::process::{Command, Stdio};
 
-    let lines: Vec<String> = CATALOG.iter().map(model_row_line).collect();
+    let lines: Vec<String> = models.iter().map(model_row_line).collect();
 
     // Try fzf first.
     let mut cmd = Command::new("fzf");
@@ -509,10 +524,10 @@ fn pick_model(query: Option<&str>) -> Result<Option<String>> {
                 return Ok(None); // cancelled
             }
             let selection = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-            return Ok(CATALOG
+            return Ok(models
                 .iter()
                 .find(|m| model_row_line(m) == selection)
-                .map(|m| m.slug.to_string()));
+                .map(|m| m.slug.clone()));
         }
         Err(_) => {
             // fzf not installed: numbered prompt.
@@ -528,8 +543,8 @@ fn pick_model(query: Option<&str>) -> Result<Option<String>> {
                 return Ok(None);
             };
             Ok(n.checked_sub(1)
-                .and_then(|i| CATALOG.get(i))
-                .map(|m| m.slug.to_string()))
+                .and_then(|i| models.get(i))
+                .map(|m| m.slug.clone()))
         }
     }
 }

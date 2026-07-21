@@ -1,0 +1,55 @@
+{
+  "catalog_version": 1,
+  "models": [
+    {
+      "slug": "multitalker-parakeet-streaming-0.6b-v1",
+      "name": "Multitalker Parakeet 0.6B",
+      "languages": "English",
+      "streaming": true,
+      "default_quant": "Q8_0",
+      "default_size_mb": 734,
+      "description": "Fast, accurate English streaming (recommended)",
+      "recommended": true
+    },
+    {
+      "slug": "nemotron-3.5-asr-streaming-0.6b",
+      "name": "Nemotron Streaming 3.5",
+      "languages": "Multilingual (28)",
+      "streaming": true,
+      "default_quant": "Q8_0",
+      "default_size_mb": 751,
+      "description": "Multilingual streaming across 28 languages",
+      "recommended": true
+    },
+    {
+      "slug": "nemotron-speech-streaming-en-0.6b",
+      "name": "Nemotron Speech Streaming EN",
+      "languages": "English",
+      "streaming": true,
+      "default_quant": "Q8_0",
+      "default_size_mb": 730,
+      "description": "English-only Nemotron streaming variant",
+      "recommended": false
+    },
+    {
+      "slug": "parakeet-unified-en-0.6b",
+      "name": "Parakeet Unified EN 0.6B",
+      "languages": "English",
+      "streaming": true,
+      "default_quant": "Q8_0",
+      "default_size_mb": 731,
+      "description": "NVIDIA unified English streaming model",
+      "recommended": false
+    },
+    {
+      "slug": "Voxtral-Mini-4B-Realtime-2602",
+      "name": "Voxtral Mini 4B Realtime",
+      "languages": "Multilingual (13)",
+      "streaming": true,
+      "default_quant": "Q5_K_M",
+      "default_size_mb": 3281,
+      "description": "Highest accuracy, ~4.7x realtime; heavier 4B model",
+      "recommended": false
+    }
+  ]
+}

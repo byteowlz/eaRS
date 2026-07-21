@@ -1082,6 +1082,7 @@ dependencies = [
  "toml",
  "transcribe-cpp",
  "uinput",
+ "ureq 2.12.1",
  "uuid",
  "webrtc-vad",
 ]

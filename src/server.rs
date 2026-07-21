@@ -32,6 +32,8 @@ mod parakeet;
 mod parakeet_rs;
 mod parallel;
 #[cfg(feature = "transcribe-cpp")]
+pub mod catalog;
+#[cfg(feature = "transcribe-cpp")]
 pub mod transcribe_cpp;
 pub use engine::EngineKind;
 #[cfg(feature = "parakeet")]

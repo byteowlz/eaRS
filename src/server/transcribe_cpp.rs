@@ -38,66 +38,7 @@ const PARTIAL_WORD_FLUSH_TIMEOUT: Duration = Duration::from_millis(800);
 /// just a repo + default quant, mirroring handy's bundled catalog. An explicit
 /// file path always bypasses this table, and any `handy-computer/*-gguf` repo
 /// works by passing its slug even if it is not listed here.
-pub struct CatalogModel {
-    /// HF repo slug under `handy-computer/{slug}-gguf`, also the model id.
-    pub slug: &'static str,
-    /// Human-readable name.
-    pub name: &'static str,
-    /// "English" or "Multilingual (N langs)" etc.
-    pub languages: &'static str,
-    /// Whether the model streams (required for live dictation).
-    pub streaming: bool,
-    /// Default quant fetched when the slug is used without `@QUANT`.
-    pub default_quant: &'static str,
-    /// Approx download size of the default quant, in MB.
-    pub default_size_mb: u32,
-    /// One-line description.
-    pub description: &'static str,
-}
-
-/// The eaRS-recommended transcribe.cpp models. multitalker-parakeet is the
-/// English accuracy/speed pick; nemotron-3.5 is the multilingual pick. This is
-/// data, not judgment: each row is just a repo + default quant + display copy,
-/// mirroring handy's bundled catalog. Any `handy-computer/*-gguf` repo also
-/// works by passing its slug even if it is not listed here.
-pub const CATALOG: &[CatalogModel] = &[
-    CatalogModel {
-        slug: "multitalker-parakeet-streaming-0.6b-v1",
-        name: "Multitalker Parakeet 0.6B",
-        languages: "English",
-        streaming: true,
-        default_quant: "Q8_0",
-        default_size_mb: 734,
-        description: "Fast, accurate English streaming (recommended)",
-    },
-    CatalogModel {
-        slug: "nemotron-3.5-asr-streaming-0.6b",
-        name: "Nemotron Streaming 3.5",
-        languages: "Multilingual (28)",
-        streaming: true,
-        default_quant: "Q8_0",
-        default_size_mb: 751,
-        description: "Multilingual streaming across 28 languages",
-    },
-    CatalogModel {
-        slug: "parakeet-unified-en-0.6b",
-        name: "Parakeet Unified EN 0.6B",
-        languages: "English",
-        streaming: true,
-        default_quant: "Q8_0",
-        default_size_mb: 731,
-        description: "NVIDIA unified English streaming model",
-    },
-    CatalogModel {
-        slug: "nemotron-speech-streaming-en-0.6b",
-        name: "Nemotron Speech Streaming EN",
-        languages: "English",
-        streaming: true,
-        default_quant: "Q8_0",
-        default_size_mb: 730,
-        description: "English-only Nemotron streaming variant",
-    },
-];
+use crate::server::catalog;
 
 const HF_ORG: &str = "handy-computer";
 
@@ -137,10 +78,10 @@ fn resolve_model(spec: &Path) -> Result<PathBuf> {
     };
     let quant = quant
         .or_else(|| {
-            CATALOG
-                .iter()
+            catalog::load()
+                .into_iter()
                 .find(|m| m.slug == slug)
-                .map(|m| m.default_quant.to_string())
+                .map(|m| m.default_quant)
         })
         .unwrap_or_else(|| "Q8_0".to_string());
     let repo_id = format!("{HF_ORG}/{slug}-gguf");
@@ -161,8 +102,8 @@ fn resolve_model(spec: &Path) -> Result<PathBuf> {
 }
 
 fn catalog_slugs() -> String {
-    CATALOG
-        .iter()
+    catalog::load()
+        .into_iter()
         .map(|m| m.slug)
         .collect::<Vec<_>>()
         .join(", ")
