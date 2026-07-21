@@ -238,6 +238,10 @@ pub enum WebSocketCommand {
     SetVadTimeout { seconds: f64 },
     SetEngine { engine: String },
     SetCodec { codec: String },
+    /// Per-connection toggle for the ingress boundary VAD. Lets one client (e.g.
+    /// dictation) opt out of `Speech { active }` events while another (e.g. the
+    /// Foxline gateway) on the same server keeps them.
+    SetBoundaryVad { enabled: bool },
 }
 
 #[derive(Debug, Clone)]
@@ -805,6 +809,10 @@ impl Model {
                                                 let _ = ws_tx.send(status);
                                             }
                                             WebSocketCommand::SetEngine { .. } => {}
+                                            WebSocketCommand::SetBoundaryVad { .. } => {
+                                                // Ingress boundary VAD only exists in the
+                                                // standalone server path.
+                                            }
                                             WebSocketCommand::SetVadTimeout { seconds } => {
                                                 // No-op here: handled in processing loop via vad_timeout
                                                 let status = WebSocketMessage::Status {

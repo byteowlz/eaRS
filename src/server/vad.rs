@@ -40,6 +40,17 @@ impl BoundaryVad {
         }
     }
 
+    /// Enable or disable boundary detection at runtime. Disabling also clears
+    /// any in-progress speech state so a later re-enable starts clean.
+    pub(crate) fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+        if !enabled {
+            self.in_speech = false;
+            self.speech_samples = 0;
+            self.silence_samples = 0;
+        }
+    }
+
     /// Feed one decoded PCM chunk. Returns `Some(true)` on a silence→speech
     /// transition, `Some(false)` on a speech→silence transition (after the
     /// hangover), and `None` when the speech state is unchanged.

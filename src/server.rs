@@ -974,6 +974,10 @@ fn handle_client_message(
                             }
                         }
                     }
+                    crate::WebSocketCommand::SetBoundaryVad { enabled } => {
+                        boundary_vad.set_enabled(enabled);
+                        eprintln!("[ears-server] boundary VAD set to {enabled} for session");
+                    }
                     crate::WebSocketCommand::Pause | crate::WebSocketCommand::Resume => {}
                 }
                 return Ok(());
