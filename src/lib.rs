@@ -186,6 +186,13 @@ pub enum WebSocketMessage {
         start_time: f64,
         end_time: Option<f64>,
     },
+    /// Authoritative, revisable live transcript (`committed + tentative`).
+    /// Clients that can replace a preview should render this directly; clients
+    /// that require append-only output (e.g. keyboard dictation) can ignore it
+    /// and continue consuming `Word` messages.
+    Interim {
+        text: String,
+    },
     Pause {
         timestamp: f64,
     },
@@ -233,15 +240,25 @@ pub enum WebSocketCommand {
     Restart,
     Pause,
     Resume,
-    SetLanguage { lang: String },
+    SetLanguage {
+        lang: String,
+    },
     GetStatus,
-    SetVadTimeout { seconds: f64 },
-    SetEngine { engine: String },
-    SetCodec { codec: String },
+    SetVadTimeout {
+        seconds: f64,
+    },
+    SetEngine {
+        engine: String,
+    },
+    SetCodec {
+        codec: String,
+    },
     /// Per-connection toggle for the ingress boundary VAD. Lets one client (e.g.
     /// dictation) opt out of `Speech { active }` events while another (e.g. the
     /// Foxline gateway) on the same server keeps them.
-    SetBoundaryVad { enabled: bool },
+    SetBoundaryVad {
+        enabled: bool,
+    },
 }
 
 #[derive(Debug, Clone)]

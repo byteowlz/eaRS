@@ -3,8 +3,9 @@
 //! Wraps the `transcribe-cpp` bindings (ggml-based GGUF models such as
 //! multitalker-parakeet or nemotron-3.5). Audio arrives from the server at
 //! 24 kHz and is resampled to the model's native rate; the stream API returns
-//! a committed/tentative text split and only committed text is emitted as
-//! eaRS `Word` events, since dictation output cannot be retracted.
+//! a committed/tentative text split. Append-only clients consume committed
+//! eaRS `Word` events; revisable-preview clients consume authoritative
+//! `Interim { text }` snapshots (`committed + tentative`).
 //!
 //! The library allows one active stream per loaded model (the stream holds
 //! the model's compute lease from begin to finalize), so this engine serves
@@ -12,15 +13,15 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use crossbeam_channel::{Receiver, Sender, select, unbounded};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use transcribe_cpp::{Model as TcModel, RunOptions, StreamOptions};
 
-use crate::server::SessionSink;
 use crate::server::engine::{Engine, EngineKind, EngineSession};
+use crate::server::{SessionSink, current_timestamp};
 use crate::{TranscriptionSink, WebSocketMessage, WordTimestamp};
 
 const SERVER_SAMPLE_RATE: usize = 24_000;
@@ -28,10 +29,6 @@ const SERVER_SAMPLE_RATE: usize = 24_000;
 const RESAMPLE_MIN_SAMPLES: usize = 1_600;
 /// Feed the stream in 560 ms slices (matches the benchmark configuration).
 const FEED_CHUNK_MS: usize = 560;
-/// Committed text that does not end on a word boundary is held back so the
-/// dictation client never types a split word. Flush it after this long
-/// without new committed text (a genuine speaking pause).
-const PARTIAL_WORD_FLUSH_TIMEOUT: Duration = Duration::from_millis(800);
 
 /// A known streaming GGUF model, downloadable by short slug from the
 /// `handy-computer` Hugging Face org. This is data, not judgment: each entry is
@@ -216,6 +213,10 @@ impl Engine for TranscribeCppEngine {
 #[derive(Debug)]
 enum TranscribeCppControl {
     Stop,
+    /// Acoustic end-of-utterance from the server ingress VAD. Finalize the
+    /// current native stream, emit its complete snapshot, then begin a fresh
+    /// stream while keeping the client session alive.
+    UtteranceEnd,
 }
 
 struct TranscribeCppSessionHandle {
@@ -242,6 +243,18 @@ impl EngineSession for TranscribeCppSessionHandle {
             .context("failed to send language command to transcribe-cpp engine")
     }
 
+    fn send_speech_boundary(&self, active: bool) -> Result<bool> {
+        if active {
+            return Ok(false);
+        }
+        self.control_tx
+            .send(TranscribeCppControl::UtteranceEnd)
+            .context("failed to send utterance boundary to transcribe-cpp engine")?;
+        // The engine owns Speech(false): it emits it only after finalization so
+        // trailing words cannot arrive after the gateway commits the turn.
+        Ok(true)
+    }
+
     fn request_stop(&self) {
         let _ = self.control_tx.send(TranscribeCppControl::Stop);
     }
@@ -256,7 +269,6 @@ impl EngineSession for TranscribeCppSessionHandle {
 struct CommittedEmitter {
     emitted_bytes: usize,
     pending: String,
-    last_committed_growth: Instant,
 }
 
 impl CommittedEmitter {
@@ -264,7 +276,6 @@ impl CommittedEmitter {
         Self {
             emitted_bytes: 0,
             pending: String::new(),
-            last_committed_growth: Instant::now(),
         }
     }
 
@@ -273,7 +284,6 @@ impl CommittedEmitter {
         if committed.len() > self.emitted_bytes {
             self.pending.push_str(&committed[self.emitted_bytes..]);
             self.emitted_bytes = committed.len();
-            self.last_committed_growth = Instant::now();
         }
         let boundary = if flush {
             Some(self.pending.len())
@@ -291,10 +301,11 @@ impl CommittedEmitter {
         self.pending.replace_range(..boundary, "");
         ready.split_whitespace().map(str::to_string).collect()
     }
+}
 
-    fn should_flush(&self, now: Instant) -> bool {
-        !self.pending.is_empty()
-            && now.duration_since(self.last_committed_growth) >= PARTIAL_WORD_FLUSH_TIMEOUT
+fn emit_interim(text: String, sink: &mut SessionSink) {
+    if !text.trim().is_empty() {
+        sink.handle_message(WebSocketMessage::Interim { text });
     }
 }
 
@@ -347,6 +358,7 @@ fn run_transcribe_cpp_session(
             .context("failed to begin stream")?;
         let mut emitter = CommittedEmitter::new();
         let mut pending_lang: Option<String> = None;
+        let mut utterance_end_requested = false;
 
         loop {
             select! {
@@ -364,6 +376,7 @@ fn run_transcribe_cpp_session(
                     Err(_) => stop_requested = true,
                 },
                 recv(control_rx) -> msg => match msg {
+                    Ok(TranscribeCppControl::UtteranceEnd) => utterance_end_requested = true,
                     Ok(TranscribeCppControl::Stop) | Err(_) => stop_requested = true,
                 },
                 default(Duration::from_millis(10)) => {}
@@ -404,17 +417,15 @@ fn run_transcribe_cpp_session(
                             let words = emitter.absorb(&stream.text().committed, false);
                             emit_words(words, total_input_secs, &mut committed_words, &mut sink);
                         }
+                        if update.committed_changed || update.tentative_changed {
+                            emit_interim(stream.text().display(), &mut sink);
+                        }
                     }
                     Err(err) => eprintln!("[transcribe-cpp] stream feed failed: {err}"),
                 }
             }
 
-            if emitter.should_flush(Instant::now()) {
-                let words = emitter.absorb(&stream.text().committed, true);
-                emit_words(words, total_input_secs, &mut committed_words, &mut sink);
-            }
-
-            if stop_requested || pending_lang.is_some() {
+            if stop_requested || pending_lang.is_some() || utterance_end_requested {
                 // Feed the resampled tail, then finalize to promote all
                 // remaining tentative text.
                 if !buffer_native.is_empty() {
@@ -425,12 +436,23 @@ fn run_transcribe_cpp_session(
                 }
                 match stream.finalize() {
                     Ok(_) => {
-                        let words = emitter.absorb(&stream.text().full, true);
+                        let final_text = stream.text().full;
+                        let words = emitter.absorb(&final_text, true);
                         emit_words(words, total_input_secs, &mut committed_words, &mut sink);
+                        emit_interim(final_text, &mut sink);
                     }
                     Err(err) => eprintln!("[transcribe-cpp] finalize failed: {err}"),
                 }
                 drop(stream);
+
+                if utterance_end_requested {
+                    sink.handle_message(WebSocketMessage::Speech {
+                        active: false,
+                        timestamp: current_timestamp(),
+                    });
+                    eprintln!("[transcribe-cpp] utterance finalized; restarting stream");
+                    continue 'stream;
+                }
 
                 if let Some(new_lang) = pending_lang.take() {
                     lang = normalize_lang(Some(&new_lang));
@@ -478,11 +500,10 @@ mod tests {
     }
 
     #[test]
-    fn committed_emitter_flush_timeout() {
+    fn committed_emitter_never_splits_a_word_before_a_real_boundary() {
         let mut e = CommittedEmitter::new();
-        assert!(e.absorb("partial", false).is_empty());
-        assert!(!e.should_flush(Instant::now()));
-        assert!(e.should_flush(Instant::now() + PARTIAL_WORD_FLUSH_TIMEOUT));
+        assert!(e.absorb("Irwi", false).is_empty());
+        assert_eq!(e.absorb("Irwin ", false), vec!["Irwin".to_string()]);
     }
 
     #[test]

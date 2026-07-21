@@ -50,6 +50,13 @@ pub trait EngineSession: Send {
     fn engine(&self) -> EngineKind;
     fn send_audio(&self, pcm: Vec<f32>) -> Result<()>;
     fn set_language(&self, lang: String) -> Result<()>;
+    /// Notify an engine of an acoustic speech-boundary transition. Returns true
+    /// when the engine takes ownership of emitting the corresponding `Speech`
+    /// event (for example, after flushing an utterance); false lets the server
+    /// emit it immediately. Most engines need no special handling.
+    fn send_speech_boundary(&self, _active: bool) -> Result<bool> {
+        Ok(false)
+    }
     fn request_stop(&self);
     fn supports_language(&self) -> bool;
 }

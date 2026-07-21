@@ -24,18 +24,18 @@ use parakeet_rs::ParakeetRsEngine;
 #[cfg(feature = "transcribe-cpp")]
 use transcribe_cpp::TranscribeCppEngine;
 
+#[cfg(feature = "transcribe-cpp")]
+pub mod catalog;
 mod engine;
 pub mod listener;
-mod vad;
 #[cfg(feature = "parakeet")]
 mod parakeet;
 #[cfg(feature = "parakeet-rs")]
 mod parakeet_rs;
 mod parallel;
 #[cfg(feature = "transcribe-cpp")]
-pub mod catalog;
-#[cfg(feature = "transcribe-cpp")]
 pub mod transcribe_cpp;
+mod vad;
 pub use engine::EngineKind;
 #[cfg(feature = "parakeet")]
 pub use parakeet::ParakeetDevice;
@@ -525,8 +525,7 @@ async fn handle_connection(
         let mut ws_debug = WsDebugLog::from_env(session_id);
         let mut codec = SessionCodec::Pcm;
         // Single engine-agnostic speech-boundary detector for this connection.
-        let mut boundary_vad =
-            vad::BoundaryVad::new(transcription_options.boundary_vad, 24_000);
+        let mut boundary_vad = vad::BoundaryVad::new(transcription_options.boundary_vad, 24_000);
         if let Some(msg) = first_msg {
             let msg_debug = WsMessageDebug::from_message(&msg);
             let result = handle_client_message(
@@ -855,13 +854,9 @@ fn handle_client_message(
             if chunk.is_empty() {
                 return Ok(());
             }
-            // Emit engine-agnostic speech boundaries from the single ingress VAD.
-            if let Some(active) = boundary_vad.observe(&chunk) {
-                sink.handle_message(WebSocketMessage::Speech {
-                    active,
-                    timestamp: current_timestamp(),
-                });
-            }
+            // Detect at the single engine-agnostic ingress. Engines may take
+            // ownership of emitting a boundary when they must flush first.
+            let speech_boundary = boundary_vad.observe(&chunk);
             if session.is_none() {
                 *session = allocate_session(engine_manager, *current_engine, sink.clone(), msg_tx)?;
                 if session.is_none() {
@@ -876,6 +871,15 @@ fn handle_client_message(
             }
             if let Some(sess) = session.as_ref() {
                 sess.send_audio(chunk)?;
+                if let Some(active) = speech_boundary {
+                    let engine_will_emit = sess.send_speech_boundary(active)?;
+                    if !engine_will_emit {
+                        sink.handle_message(WebSocketMessage::Speech {
+                            active,
+                            timestamp: current_timestamp(),
+                        });
+                    }
+                }
             }
         }
         Message::Text(text) => {
@@ -1015,7 +1019,7 @@ fn allocate_session(
     }
 }
 
-fn current_timestamp() -> f64 {
+pub(crate) fn current_timestamp() -> f64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
