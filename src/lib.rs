@@ -247,6 +247,10 @@ pub struct TranscriptionOptions {
     pub save_audio: Option<String>,
     pub vad_timeout: Option<f64>,
     pub verbose_injection: bool,
+    /// Emit engine-agnostic `Speech { active }` boundaries from the ingress VAD.
+    /// On by default so turn detection works for every engine; disable for pure
+    /// dictation that does not want boundary events.
+    pub boundary_vad: bool,
 }
 
 impl Default for TranscriptionOptions {
@@ -257,6 +261,7 @@ impl Default for TranscriptionOptions {
             save_audio: None,
             vad_timeout: None,
             verbose_injection: false,
+            boundary_vad: true,
         }
     }
 }

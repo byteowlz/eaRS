@@ -97,6 +97,11 @@ struct Args {
     #[arg(long, default_value_t = false)]
     vad: bool,
 
+    /// Disable the engine-agnostic ingress boundary VAD that emits
+    /// `Speech { active }` events. Boundary detection is on by default.
+    #[arg(long, default_value_t = false)]
+    no_boundary_vad: bool,
+
     /// Maximum number of concurrent streaming sessions handled in parallel
     #[arg(long, default_value_t = 8)]
     max_sessions: usize,
@@ -174,6 +179,7 @@ fn build_server_options(args: &Args) -> Result<server::ServerOptions> {
     let mut transcription = TranscriptionOptions::default();
     transcription.timestamps = args.timestamps;
     transcription.vad = args.vad;
+    transcription.boundary_vad = !args.no_boundary_vad;
     transcription.verbose_injection = args.verbose_injection;
 
     Ok(server::ServerOptions {
@@ -225,5 +231,3 @@ fn build_server_options(args: &Args) -> Result<server::ServerOptions> {
             .or_else(|| config.transcribe_cpp.language.clone()),
     })
 }
-
-
