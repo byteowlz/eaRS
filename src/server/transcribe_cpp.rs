@@ -118,7 +118,7 @@ pub struct TranscribeCppEngine {
     model: TcModel,
     lang: Option<String>,
     native_sample_rate: usize,
-    supports_language: bool,
+    supported_languages: Vec<String>,
     semaphore: Arc<Semaphore>,
 }
 
@@ -149,16 +149,17 @@ impl TranscribeCppEngine {
         }
         let lang = normalize_lang(cfg.lang.as_deref());
         eprintln!(
-            "[transcribe-cpp] loaded {} ({}, backend {}, {} Hz, lang={})",
+            "[transcribe-cpp] loaded {} ({}, backend {}, {} Hz, lang={}, languages={:?})",
             model_path.display(),
             model.arch(),
             model.backend(),
             caps.native_sample_rate,
-            lang.as_deref().unwrap_or("auto")
+            lang.as_deref().unwrap_or("auto"),
+            caps.languages,
         );
         Ok(Self {
             native_sample_rate: caps.native_sample_rate as usize,
-            supports_language: !caps.languages.is_empty(),
+            supported_languages: caps.languages,
             model,
             lang,
             // One active stream per model: the stream holds the compute lease.
@@ -188,7 +189,7 @@ impl Engine for TranscribeCppEngine {
             audio_tx,
             lang_tx,
             control_tx,
-            supports_language: self.supports_language,
+            supported_languages: self.supported_languages.clone(),
         };
 
         std::thread::spawn(move || {
@@ -223,7 +224,7 @@ struct TranscribeCppSessionHandle {
     audio_tx: Sender<Vec<f32>>,
     lang_tx: Sender<String>,
     control_tx: Sender<TranscribeCppControl>,
-    supports_language: bool,
+    supported_languages: Vec<String>,
 }
 
 impl EngineSession for TranscribeCppSessionHandle {
@@ -238,8 +239,29 @@ impl EngineSession for TranscribeCppSessionHandle {
     }
 
     fn set_language(&self, lang: String) -> Result<()> {
+        let normalized = lang.to_ascii_lowercase();
+        let resolved = if normalized == "auto" {
+            Some("auto".to_string())
+        } else {
+            self.supported_languages
+                .iter()
+                .find(|candidate| candidate.eq_ignore_ascii_case(&normalized))
+                .or_else(|| {
+                    let prefix = format!("{normalized}-");
+                    self.supported_languages
+                        .iter()
+                        .find(|candidate| candidate.to_ascii_lowercase().starts_with(&prefix))
+                })
+                .cloned()
+        };
+        let resolved = resolved.with_context(|| {
+            format!(
+                "transcribe-cpp model does not support language {lang:?}; supported: {:?}",
+                self.supported_languages
+            )
+        })?;
         self.lang_tx
-            .send(lang)
+            .send(resolved)
             .context("failed to send language command to transcribe-cpp engine")
     }
 
@@ -260,7 +282,7 @@ impl EngineSession for TranscribeCppSessionHandle {
     }
 
     fn supports_language(&self) -> bool {
-        self.supports_language
+        !self.supported_languages.is_empty()
     }
 }
 
@@ -504,6 +526,27 @@ mod tests {
         let mut e = CommittedEmitter::new();
         assert!(e.absorb("Irwi", false).is_empty());
         assert_eq!(e.absorb("Irwin ", false), vec!["Irwin".to_string()]);
+    }
+
+    #[test]
+    fn session_rejects_unsupported_language_without_sending_command() {
+        let (audio_tx, _audio_rx) = unbounded();
+        let (lang_tx, lang_rx) = unbounded();
+        let (control_tx, _control_rx) = unbounded();
+        let handle = TranscribeCppSessionHandle {
+            audio_tx,
+            lang_tx,
+            control_tx,
+            supported_languages: vec!["en-US".to_string(), "de-DE".to_string()],
+        };
+        assert!(handle.set_language("xx".to_string()).is_err());
+        assert!(lang_rx.try_recv().is_err());
+        assert!(handle.set_language("en".to_string()).is_ok());
+        assert_eq!(lang_rx.try_recv().unwrap(), "en-US");
+        assert!(handle.set_language("de-DE".to_string()).is_ok());
+        assert_eq!(lang_rx.try_recv().unwrap(), "de-DE");
+        assert!(handle.set_language("auto".to_string()).is_ok());
+        assert_eq!(lang_rx.try_recv().unwrap(), "auto");
     }
 
     #[test]

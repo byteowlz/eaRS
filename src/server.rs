@@ -895,7 +895,10 @@ fn handle_client_message(
                     crate::WebSocketCommand::SetLanguage { lang } => {
                         if let Some(sess) = session.as_mut() {
                             if sess.supports_language() {
-                                let _ = sess.set_language(lang.clone());
+                                if let Err(err) = sess.set_language(lang.clone()) {
+                                    eprintln!("[ears-server] language request rejected: {err}");
+                                    send_error(msg_tx, &err.to_string());
+                                }
                             } else {
                                 send_status(sink, transcription, *current_engine);
                             }
