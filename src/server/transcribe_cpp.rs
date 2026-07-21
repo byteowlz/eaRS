@@ -38,33 +38,78 @@ const PARTIAL_WORD_FLUSH_TIMEOUT: Duration = Duration::from_millis(800);
 /// just a repo + default quant, mirroring handy's bundled catalog. An explicit
 /// file path always bypasses this table, and any `handy-computer/*-gguf` repo
 /// works by passing its slug even if it is not listed here.
-struct CatalogModel {
-    slug: &'static str,
-    default_quant: &'static str,
+pub struct CatalogModel {
+    /// HF repo slug under `handy-computer/{slug}-gguf`, also the model id.
+    pub slug: &'static str,
+    /// Human-readable name.
+    pub name: &'static str,
+    /// "English" or "Multilingual (N langs)" etc.
+    pub languages: &'static str,
+    /// Whether the model streams (required for live dictation).
+    pub streaming: bool,
+    /// Default quant fetched when the slug is used without `@QUANT`.
+    pub default_quant: &'static str,
+    /// Approx download size of the default quant, in MB.
+    pub default_size_mb: u32,
+    /// One-line description.
+    pub description: &'static str,
 }
 
-/// The eaRS-recommended streaming models. multitalker-parakeet is the English
-/// accuracy/speed pick; nemotron-3.5 is the multilingual pick.
-const CATALOG: &[CatalogModel] = &[
+/// The eaRS-recommended transcribe.cpp models. multitalker-parakeet is the
+/// English accuracy/speed pick; nemotron-3.5 is the multilingual pick. This is
+/// data, not judgment: each row is just a repo + default quant + display copy,
+/// mirroring handy's bundled catalog. Any `handy-computer/*-gguf` repo also
+/// works by passing its slug even if it is not listed here.
+pub const CATALOG: &[CatalogModel] = &[
     CatalogModel {
         slug: "multitalker-parakeet-streaming-0.6b-v1",
+        name: "Multitalker Parakeet 0.6B",
+        languages: "English",
+        streaming: true,
         default_quant: "Q8_0",
+        default_size_mb: 734,
+        description: "Fast, accurate English streaming (recommended)",
     },
     CatalogModel {
         slug: "nemotron-3.5-asr-streaming-0.6b",
+        name: "Nemotron Streaming 3.5",
+        languages: "Multilingual (28)",
+        streaming: true,
         default_quant: "Q8_0",
+        default_size_mb: 751,
+        description: "Multilingual streaming across 28 languages",
     },
     CatalogModel {
         slug: "parakeet-unified-en-0.6b",
+        name: "Parakeet Unified EN 0.6B",
+        languages: "English",
+        streaming: true,
         default_quant: "Q8_0",
+        default_size_mb: 731,
+        description: "NVIDIA unified English streaming model",
     },
     CatalogModel {
         slug: "nemotron-speech-streaming-en-0.6b",
+        name: "Nemotron Speech Streaming EN",
+        languages: "English",
+        streaming: true,
         default_quant: "Q8_0",
+        default_size_mb: 730,
+        description: "English-only Nemotron streaming variant",
     },
 ];
 
 const HF_ORG: &str = "handy-computer";
+
+/// Download a catalog model (or `slug@QUANT`) into the shared HF cache and
+/// return its on-disk path. Reuses the same resolution as the engine loader.
+///
+/// # Errors
+///
+/// Returns an error if the download fails.
+pub fn pull(spec: &str) -> Result<PathBuf> {
+    resolve_model(Path::new(spec))
+}
 
 /// Resolve a `--transcribe-cpp-model` spec to an on-disk GGUF path.
 ///
@@ -209,9 +254,16 @@ impl Engine for TranscribeCppEngine {
         };
 
         std::thread::spawn(move || {
-            if let Err(err) =
-                run_transcribe_cpp_session(model, lang, native_rate, audio_rx, lang_rx, control_rx, sink, permit)
-            {
+            if let Err(err) = run_transcribe_cpp_session(
+                model,
+                lang,
+                native_rate,
+                audio_rx,
+                lang_rx,
+                control_rx,
+                sink,
+                permit,
+            ) {
                 eprintln!("[transcribe-cpp] session failed: {err:#}");
             }
         });
@@ -400,7 +452,12 @@ fn run_transcribe_cpp_session(
                     Ok(update) => {
                         if std::env::var("EARS_DEBUG_ENGINE").is_ok() {
                             let t = stream.text();
-                            eprintln!("[transcribe-cpp] feed: committed={:?} tentative={:?} changed={}", t.committed.len(), t.tentative, update.committed_changed);
+                            eprintln!(
+                                "[transcribe-cpp] feed: committed={:?} tentative={:?} changed={}",
+                                t.committed.len(),
+                                t.tentative,
+                                update.committed_changed
+                            );
                         }
                         if update.committed_changed {
                             let words = emitter.absorb(&stream.text().committed, false);
@@ -472,7 +529,10 @@ mod tests {
             e.absorb("hello world again", false),
             vec!["world".to_string()]
         );
-        assert_eq!(e.absorb("hello world again", true), vec!["again".to_string()]);
+        assert_eq!(
+            e.absorb("hello world again", true),
+            vec!["again".to_string()]
+        );
         assert!(e.absorb("hello world again", true).is_empty());
     }
 

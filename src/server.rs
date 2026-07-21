@@ -30,9 +30,9 @@ pub mod listener;
 mod parakeet;
 #[cfg(feature = "parakeet-rs")]
 mod parakeet_rs;
-#[cfg(feature = "transcribe-cpp")]
-mod transcribe_cpp;
 mod parallel;
+#[cfg(feature = "transcribe-cpp")]
+pub mod transcribe_cpp;
 pub use engine::EngineKind;
 #[cfg(feature = "parakeet")]
 pub use parakeet::ParakeetDevice;

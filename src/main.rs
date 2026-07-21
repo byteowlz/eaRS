@@ -59,6 +59,27 @@ enum Commands {
     Dictation(DictationCommand),
     #[command(subcommand)]
     Dictionary(DictionaryCommand),
+    /// List and download transcribe.cpp models.
+    #[cfg(feature = "transcribe-cpp")]
+    #[command(subcommand)]
+    Models(ModelsCommand),
+}
+
+#[cfg(feature = "transcribe-cpp")]
+#[derive(Subcommand)]
+enum ModelsCommand {
+    /// List the known transcribe.cpp streaming models.
+    List,
+    /// Fuzzy-pick a model with fzf (or a numbered prompt) and download it.
+    Pull(ModelsPullArgs),
+}
+
+#[cfg(feature = "transcribe-cpp")]
+#[derive(Args)]
+struct ModelsPullArgs {
+    /// Model slug (optionally slug@QUANT). An exact match downloads directly;
+    /// otherwise it seeds the fuzzy picker.
+    query: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -366,6 +387,11 @@ async fn main() -> Result<()> {
             handle_dictionary_command(dictionary_cmd)?;
             return Ok(());
         }
+        #[cfg(feature = "transcribe-cpp")]
+        Some(Commands::Models(models_cmd)) => {
+            handle_models_command(models_cmd)?;
+            return Ok(());
+        }
         None => {}
     }
 
@@ -397,6 +423,114 @@ fn handle_dictionary_command(command: DictionaryCommand) -> Result<()> {
         DictionaryCommand::Add(args) => add_dictionary_entry(args),
         DictionaryCommand::Remove(args) => remove_dictionary_entry(args),
         DictionaryCommand::Test(args) => test_dictionary(args),
+    }
+}
+
+#[cfg(feature = "transcribe-cpp")]
+fn handle_models_command(command: ModelsCommand) -> Result<()> {
+    use ears::server::transcribe_cpp::CATALOG;
+    match command {
+        ModelsCommand::List => {
+            println!(
+                "{:<40} {:<28} {:<18} {:>7}  {}",
+                "SLUG", "NAME", "LANGUAGES", "SIZE", "DESCRIPTION"
+            );
+            for m in CATALOG {
+                println!(
+                    "{:<40} {:<28} {:<18} {:>6}M  {}",
+                    m.slug, m.name, m.languages, m.default_size_mb, m.description
+                );
+            }
+            eprintln!(
+                "\nDownload with `ears models pull [query]` or point \
+                 --transcribe-cpp-model at a slug (optionally slug@QUANT) or a .gguf path."
+            );
+            Ok(())
+        }
+        ModelsCommand::Pull(args) => pull_model(args.query.as_deref()),
+    }
+}
+
+#[cfg(feature = "transcribe-cpp")]
+fn pull_model(query: Option<&str>) -> Result<()> {
+    use ears::server::transcribe_cpp::CATALOG;
+
+    // An exact slug (or slug@QUANT) downloads directly; otherwise fuzzy-pick.
+    let selected = match query {
+        Some(q) if CATALOG.iter().any(|m| m.slug == q) || q.contains('@') => Some(q.to_string()),
+        other => pick_model(other)?,
+    };
+    let Some(spec) = selected else {
+        eprintln!("nothing selected");
+        return Ok(());
+    };
+    eprintln!("downloading {spec}...");
+    let path = ears::server::transcribe_cpp::pull(&spec)?;
+    println!("{}", path.display());
+    eprintln!("cached {spec}");
+    Ok(())
+}
+
+#[cfg(feature = "transcribe-cpp")]
+fn model_row_line(m: &ears::server::transcribe_cpp::CatalogModel) -> String {
+    format!(
+        "{:<40} {:<28} {:<18} {:>4}M  {}",
+        m.slug, m.name, m.languages, m.default_size_mb, m.description
+    )
+}
+
+/// Pick a model slug via fzf, falling back to a numbered prompt when fzf is
+/// unavailable. Returns the chosen slug, or `None` if the user cancelled.
+#[cfg(feature = "transcribe-cpp")]
+fn pick_model(query: Option<&str>) -> Result<Option<String>> {
+    use ears::server::transcribe_cpp::CATALOG;
+    use std::io::{Write, stdin};
+    use std::process::{Command, Stdio};
+
+    let lines: Vec<String> = CATALOG.iter().map(model_row_line).collect();
+
+    // Try fzf first.
+    let mut cmd = Command::new("fzf");
+    cmd.arg("--prompt=model> ")
+        .arg("--height=40%")
+        .arg("--reverse")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped());
+    if let Some(q) = query {
+        cmd.arg(format!("--query={q}"));
+    }
+    match cmd.spawn() {
+        Ok(mut child) => {
+            if let Some(mut child_stdin) = child.stdin.take() {
+                child_stdin.write_all(lines.join("\n").as_bytes()).ok();
+            }
+            let output = child.wait_with_output().context("running fzf")?;
+            if !output.status.success() {
+                return Ok(None); // cancelled
+            }
+            let selection = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            return Ok(CATALOG
+                .iter()
+                .find(|m| model_row_line(m) == selection)
+                .map(|m| m.slug.to_string()));
+        }
+        Err(_) => {
+            // fzf not installed: numbered prompt.
+            eprintln!("(fzf not found - pick a number)");
+            for (i, line) in lines.iter().enumerate() {
+                eprintln!("{:>3}  {}", i + 1, line);
+            }
+            eprint!("model number: ");
+            std::io::stderr().flush().ok();
+            let mut buf = String::new();
+            stdin().read_line(&mut buf).context("reading selection")?;
+            let Ok(n) = buf.trim().parse::<usize>() else {
+                return Ok(None);
+            };
+            Ok(n.checked_sub(1)
+                .and_then(|i| CATALOG.get(i))
+                .map(|m| m.slug.to_string()))
+        }
     }
 }
 
@@ -1100,7 +1234,8 @@ async fn transcribe_file(file_path: &str, args: &ClientArgs) -> Result<()> {
 
     eprintln!("Streaming audio to server...");
     let mut opus_encoder = if use_opus {
-        let enc = kaudio::ogg_opus::Encoder::new(24_000).context("failed to create opus encoder")?;
+        let enc =
+            kaudio::ogg_opus::Encoder::new(24_000).context("failed to create opus encoder")?;
         let _ = writer_tx.send(WriterCommand::Audio(enc.header_data().to_vec()));
         Some(enc)
     } else {
@@ -1140,9 +1275,7 @@ async fn transcribe_file(file_path: &str, args: &ClientArgs) -> Result<()> {
     // File audio is sent faster than real time, but the server may still need
     // roughly the file duration to drain its inference queue (especially on
     // CPU or during model warm-up). A fixed 10 s timeout truncated results.
-    let timeout_duration = Duration::from_secs_f64(
-        pcm.len() as f64 / 24_000.0 + 10.0,
-    );
+    let timeout_duration = Duration::from_secs_f64(pcm.len() as f64 / 24_000.0 + 10.0);
 
     let timeout = tokio::time::sleep(timeout_duration);
     tokio::pin!(timeout);

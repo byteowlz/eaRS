@@ -306,7 +306,7 @@ install-all:
     fi
     
     # Build feature list with all engines and hooks
-    FEATURES=("parakeet-rs" "hooks")
+    FEATURES=("parakeet-rs" "transcribe-cpp" "hooks")
 
     if [[ -n "$ACCEL_FEATURE" ]]; then
         FEATURES=("$ACCEL_FEATURE" "${FEATURES[@]}")
@@ -343,7 +343,7 @@ install-all:
                 *) echo "Invalid choice, using auto-detected"; ;;
             esac
             
-            FEATURES=("parakeet-rs" "hooks")
+            FEATURES=("parakeet-rs" "transcribe-cpp" "hooks")
             if [[ -n "$ACCEL_FEATURE" ]]; then
                 FEATURES=("$ACCEL_FEATURE" "${FEATURES[@]}")
             fi
@@ -413,8 +413,8 @@ install-ears:
     ./scripts/install-ears.sh
 
 # Install ears with specific features (e.g., just install-ears-features "nvidia,parakeet-rs")
-# Available features: nvidia, apple, amd, directml, parakeet-rs, hooks
-# Combine multiple features with commas: "nvidia,parakeet-rs" or "apple,parakeet-rs,hooks"
+# Available features: nvidia, apple, amd, directml, parakeet-rs, transcribe-cpp, hooks
+# Combine multiple features with commas: "nvidia,parakeet-rs" or "apple,parakeet-rs,transcribe-cpp,hooks"
 install-ears-features features:
     #!/usr/bin/env bash
     set -euo pipefail
