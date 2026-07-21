@@ -189,6 +189,14 @@ pub enum WebSocketMessage {
     Pause {
         timestamp: f64,
     },
+    // Speech-boundary event driven by the internal VAD. Emitted additively
+    // alongside Pause/Final so downstream turn logic (e.g. the Foxline gateway)
+    // can gate barge-in without running a second VAD. Existing clients that do
+    // not match this variant ignore it.
+    Speech {
+        active: bool,
+        timestamp: f64,
+    },
     Final {
         text: String,
         words: Vec<WordTimestamp>,
@@ -931,6 +939,13 @@ impl Model {
                                                     .as_secs_f64(),
                                             };
                                             let _ = ws_tx.send(pause_msg);
+                                            let _ = ws_tx.send(WebSocketMessage::Speech {
+                                                active: false,
+                                                timestamp: std::time::SystemTime::now()
+                                                    .duration_since(std::time::UNIX_EPOCH)
+                                                    .unwrap_or_default()
+                                                    .as_secs_f64(),
+                                            });
 
                                             if !self.timestamps {
                                                 print!(" <pause>");
@@ -939,6 +954,15 @@ impl Model {
                                         }
                                     }
                                     moshi::asr::AsrMsg::EndWord { stop_time, .. } => {
+                                        if printed_eot {
+                                            let _ = ws_tx.send(WebSocketMessage::Speech {
+                                                active: true,
+                                                timestamp: std::time::SystemTime::now()
+                                                    .duration_since(std::time::UNIX_EPOCH)
+                                                    .unwrap_or_default()
+                                                    .as_secs_f64(),
+                                            });
+                                        }
                                         printed_eot = false;
                                         has_voice_activity = true;
                                         if self.timestamps {
@@ -966,6 +990,15 @@ impl Model {
                                         }
                                     }
                                     moshi::asr::AsrMsg::Word { tokens, start_time, .. } => {
+                                        if printed_eot {
+                                            let _ = ws_tx.send(WebSocketMessage::Speech {
+                                                active: true,
+                                                timestamp: std::time::SystemTime::now()
+                                                    .duration_since(std::time::UNIX_EPOCH)
+                                                    .unwrap_or_default()
+                                                    .as_secs_f64(),
+                                            });
+                                        }
                                         printed_eot = false;
                                         has_voice_activity = true;
                                         let word = self.text_tokenizer
