@@ -97,7 +97,11 @@ fn ensure_model_files(model_dir: &Path) -> Result<()> {
         }
         if std::fs::hard_link(&cached, &target).is_err() {
             std::fs::copy(&cached, &target).with_context(|| {
-                format!("failed to copy {} to {}", cached.display(), target.display())
+                format!(
+                    "failed to copy {} to {}",
+                    cached.display(),
+                    target.display()
+                )
             })?;
         }
     }

@@ -367,7 +367,6 @@ impl AppConfig {
     pub fn model_dir_path(&self) -> PathBuf {
         PathBuf::from(&self.storage.model_dir)
     }
-
 }
 
 fn get_config_path() -> Result<PathBuf> {

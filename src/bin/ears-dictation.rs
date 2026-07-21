@@ -645,8 +645,7 @@ async fn main() -> Result<()> {
                 let audio_capturing = capturing.clone();
                 thread::spawn(move || {
                     if let Some(enc) = opus_encoder.as_ref() {
-                        let _ = audio_writer
-                            .send(WriterCommand::Audio(enc.header_data().to_vec()));
+                        let _ = audio_writer.send(WriterCommand::Audio(enc.header_data().to_vec()));
                     }
                     while let Ok(chunk) = audio_rx_clone.recv() {
                         if !*audio_capturing.lock().unwrap() {
