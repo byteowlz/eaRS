@@ -8,6 +8,9 @@ repository = "https://github.com/tommyfalkowski/eaRS"
 authors = ["Tommy Falkowski"]
 homepage = "https://byteowlz.com"
 
+[build-dependencies]
+pkg-config = "0.3"
+
 [lib]
 name = "ears"
 path = "src/lib.rs"
