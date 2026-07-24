@@ -265,7 +265,7 @@ async fn main() -> Result<()> {
     }
     let mut replacement_reloader = ReplacementReloader::new(config.replacement.clone());
     let mut transcript_recorder = TranscriptRecorder::new(config.transcripts.clone());
-    let mut live_word_buffer = LiveWordBuffer::new(3);
+    let mut live_word_buffer = LiveWordBuffer::new(Duration::from_millis(1500));
 
     // Handle --list-servers flag
     if args.list_servers {
@@ -732,10 +732,10 @@ async fn main() -> Result<()> {
                         Ok(None) => break,
                         Err(_) => {
                             // Timed out waiting for WS data; loop back so stop
-                            // signals are observed promptly. A timeout also acts
-                            // as a small speech pause, so flush the live holdback
-                            // buffer and transcript buffer.
-                            live_word_buffer.flush_all(
+                            // signals are observed promptly. Only retain text
+                            // that could begin a multi-word dictionary phrase,
+                            // and cap that hold so standalone words still type.
+                            live_word_buffer.flush_if_expired(
                                 &mut keyboard,
                                 &mut replacement_reloader,
                                 &mut transcript_recorder,
@@ -813,6 +813,11 @@ impl ReplacementReloader {
         self.engine.replace(text)
     }
 
+    fn ends_with_phrase_prefix(&mut self, text: &str) -> bool {
+        self.reload_if_changed();
+        self.engine.ends_with_phrase_prefix(text)
+    }
+
     fn reload_if_changed(&mut self) {
         let stamp = dictionary_stamp(&self.config);
         if stamp == self.stamp {
@@ -887,24 +892,27 @@ fn handle_message(
 }
 
 struct LiveWordBuffer {
-    holdback_chunks: usize,
+    max_phrase_hold: Duration,
     chunks: Vec<String>,
+    last_push: Option<Instant>,
     /// Whether the previous dictation write added a trailing space. This lets
     /// punctuation remove only our own auto-space, never arbitrary editor text.
     trailing_space_inserted: bool,
 }
 
 impl LiveWordBuffer {
-    fn new(holdback_chunks: usize) -> Self {
+    fn new(max_phrase_hold: Duration) -> Self {
         Self {
-            holdback_chunks,
+            max_phrase_hold,
             chunks: Vec::new(),
+            last_push: None,
             trailing_space_inserted: false,
         }
     }
 
     fn push(&mut self, chunk: String) {
         self.chunks.push(chunk);
+        self.last_push = Some(Instant::now());
     }
 
     fn flush_ready(
@@ -913,10 +921,26 @@ impl LiveWordBuffer {
         replacement_reloader: &mut ReplacementReloader,
         transcript_recorder: &mut TranscriptRecorder,
     ) -> Result<()> {
-        if self.chunks.len() < self.holdback_chunks {
+        let raw = self.chunks.join(" ");
+        if replacement_reloader.ends_with_phrase_prefix(&raw) {
             return Ok(());
         }
         self.flush_all(keyboard, replacement_reloader, transcript_recorder)
+    }
+
+    fn flush_if_expired(
+        &mut self,
+        keyboard: &mut Box<dyn VirtualKeyboard>,
+        replacement_reloader: &mut ReplacementReloader,
+        transcript_recorder: &mut TranscriptRecorder,
+    ) -> Result<()> {
+        if self
+            .last_push
+            .is_some_and(|last_push| last_push.elapsed() >= self.max_phrase_hold)
+        {
+            self.flush_all(keyboard, replacement_reloader, transcript_recorder)?;
+        }
+        Ok(())
     }
 
     fn flush_all(
@@ -944,6 +968,9 @@ impl LiveWordBuffer {
             return Ok(());
         }
         let raw = self.chunks.drain(..count).collect::<Vec<_>>().join(" ");
+        if self.chunks.is_empty() {
+            self.last_push = None;
+        }
         if raw.trim().is_empty() {
             return Ok(());
         }
@@ -1255,6 +1282,68 @@ fn encode_chunk(chunk: &[f32]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Clone, Default)]
+    struct RecordingKeyboard {
+        typed: Arc<Mutex<String>>,
+    }
+
+    impl VirtualKeyboard for RecordingKeyboard {
+        fn type_text(&mut self, text: &str) -> Result<()> {
+            self.typed.lock().unwrap().push_str(text);
+            Ok(())
+        }
+
+        fn press_key(&mut self, key: SpecialKey) -> Result<()> {
+            if matches!(key, SpecialKey::Space) {
+                self.typed.lock().unwrap().push(' ');
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn buffers_dictionary_phrase_across_stream_events() {
+        let dir =
+            std::env::temp_dir().join(format!("ears-live-dict-test-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("global.toml");
+        ReplacementDictionary {
+            version: 1,
+            entries: vec![ears::replacement::ReplacementEntry {
+                replace: "trx issue".to_string(),
+                phrases: vec!["tricks issue".to_string()],
+            }],
+        }
+        .save(&path)
+        .unwrap();
+        let mut reloader = ReplacementReloader::new(ReplacementConfig {
+            enabled: true,
+            dictionary_paths: vec![path.to_string_lossy().to_string()],
+            case_sensitive: false,
+        });
+        let mut history_config = TranscriptHistoryConfig::default();
+        history_config.enabled = false;
+        let mut recorder = TranscriptRecorder::new(history_config);
+        let mut buffer = LiveWordBuffer::new(Duration::from_millis(1500));
+        let recording_keyboard = RecordingKeyboard::default();
+        let typed = Arc::clone(&recording_keyboard.typed);
+        let mut keyboard: Box<dyn VirtualKeyboard> = Box::new(recording_keyboard);
+
+        buffer.push("tricks".to_string());
+        buffer
+            .flush_ready(&mut keyboard, &mut reloader, &mut recorder)
+            .unwrap();
+        assert_eq!(buffer.chunks, vec!["tricks"]);
+
+        buffer.push("issue".to_string());
+        buffer
+            .flush_ready(&mut keyboard, &mut reloader, &mut recorder)
+            .unwrap();
+        assert!(buffer.chunks.is_empty());
+        assert_eq!(buffer.last_push, None);
+        assert_eq!(&*typed.lock().unwrap(), "trx issue ");
+        let _ = fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn normalizes_space_before_closing_punctuation() {

@@ -74,6 +74,7 @@ pub struct ReplacementEntry {
 pub struct ReplacementEngine {
     matcher: Option<AhoCorasick>,
     replacements: Vec<String>,
+    phrases: Vec<String>,
 }
 
 impl ReplacementEngine {
@@ -81,6 +82,7 @@ impl ReplacementEngine {
         Self {
             matcher: None,
             replacements: Vec::new(),
+            phrases: Vec::new(),
         }
     }
 
@@ -126,6 +128,7 @@ impl ReplacementEngine {
         Ok(Self {
             matcher: Some(matcher),
             replacements,
+            phrases,
         })
     }
 
@@ -145,6 +148,30 @@ impl ReplacementEngine {
         }
         out.push_str(&text[last_end..]);
         out
+    }
+
+    /// Returns true when the text ends with a complete-word prefix of a longer
+    /// dictionary phrase. Dictation can briefly retain such text so a phrase
+    /// split across streaming events is still replaced.
+    pub fn ends_with_phrase_prefix(&self, text: &str) -> bool {
+        let text = text.trim_end();
+        if text.is_empty() {
+            return false;
+        }
+
+        text.char_indices().any(|(start, _)| {
+            if start > 0 && is_word_char(text[..start].chars().next_back()) {
+                return false;
+            }
+            let candidate = &text[start..];
+            self.phrases.iter().any(|phrase| {
+                phrase.len() > candidate.len()
+                    && phrase
+                        .get(..candidate.len())
+                        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(candidate))
+                    && !is_word_char(phrase[candidate.len()..].chars().next())
+            })
+        })
     }
 
     pub fn is_empty(&self) -> bool {
@@ -408,6 +435,35 @@ mod tests {
         assert_eq!(dictionary.entries[0].phrases, vec!["OQTO".to_string()]);
         assert_eq!(dictionary.entries[1].replace, "Octo");
         assert_eq!(dictionary.entries[1].phrases, vec!["octo".to_string()]);
+    }
+
+    #[test]
+    fn detects_multi_word_phrase_prefix_at_stream_boundary() {
+        let dir = std::env::temp_dir().join(format!("ears-dict-test-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("global.toml");
+        let dictionary = ReplacementDictionary {
+            version: 1,
+            entries: vec![ReplacementEntry {
+                replace: "trx issue".to_string(),
+                phrases: vec!["tricks issue".to_string()],
+            }],
+        };
+        dictionary.save(&path).unwrap();
+        let engine = ReplacementEngine::from_config(&ReplacementConfig {
+            enabled: true,
+            dictionary_paths: vec![path.to_string_lossy().to_string()],
+            case_sensitive: false,
+        })
+        .unwrap();
+
+        assert!(engine.ends_with_phrase_prefix("tricks"));
+        assert!(engine.ends_with_phrase_prefix("okay, tricks"));
+        assert!(engine.ends_with_phrase_prefix("TRICKS"));
+        assert!(!engine.ends_with_phrase_prefix("trick"));
+        assert!(!engine.ends_with_phrase_prefix("tricks issue"));
+        assert!(!engine.ends_with_phrase_prefix("ordinary prose"));
+        assert_eq!(engine.replace("okay, tricks issue"), "okay, trx issue");
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
