@@ -385,7 +385,9 @@ ears dictionary test "cute eye inside pie agent"
 
 `dictionary add` is flag-based on purpose: `--replacement` is the canonical text, and each `--phrase` is an observed phrase to replace. Repeated adds for the same replacement merge into the existing entry. If a phrase already belongs to another entry, it is moved so each phrase has one owner. Use `dictionary remove --phrase "..."` to remove observed phrases, or `dictionary remove --replacement "..."` to remove an entire canonical entry.
 
-`ears-dictation` hot-reloads dictionary files when they change. Multi-word phrases may span separate streaming events: ordinary text is typed immediately, while a possible dictionary-phrase prefix is held for up to 1.5 seconds awaiting the next word. After installing a new eaRS binary you still need to restart `ears-dictation` once; after that, dictionary edits are picked up automatically.
+`ears-dictation` hot-reloads dictionary files when they change. Multi-word phrases may span separate streaming events: ordinary text is typed immediately, while a possible dictionary-phrase prefix of at least two characters is held for up to 1.5 seconds awaiting the next word. Single letters remain immediate. After installing a new eaRS binary you still need to restart `ears-dictation` once; after that, dictionary edits are picked up automatically.
+
+The ingress boundary VAD flushes the final uncommitted word after 300 ms of silence by default. Adjust the latency/phrase-pause trade-off with `ears server run --boundary-vad-hangover-ms <MS>` (or the equivalent `start`/`restart` command).
 
 ## Transcript history
 

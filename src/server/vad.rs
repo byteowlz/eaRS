@@ -11,9 +11,6 @@
 const DEFAULT_RMS_THRESHOLD: f32 = 0.0025;
 /// Continuous speech required before opening a turn (debounces noise bursts).
 const DEFAULT_MIN_SPEECH_MS: usize = 120;
-/// Continuous silence required before closing a turn (end-of-utterance hangover).
-const DEFAULT_HANGOVER_MS: usize = 500;
-
 /// Per-connection boundary detector. Hangover and minimum-speech are tracked in
 /// samples, so the detector is robust to variable client chunk sizes.
 pub(crate) struct BoundaryVad {
@@ -27,13 +24,13 @@ pub(crate) struct BoundaryVad {
 }
 
 impl BoundaryVad {
-    pub(crate) fn new(enabled: bool, sample_rate: usize) -> Self {
+    pub(crate) fn new(enabled: bool, sample_rate: usize, hangover_ms: usize) -> Self {
         let per_ms = sample_rate / 1000;
         Self {
             enabled,
             rms_threshold: DEFAULT_RMS_THRESHOLD,
             min_speech_samples: DEFAULT_MIN_SPEECH_MS * per_ms,
-            hangover_samples: DEFAULT_HANGOVER_MS * per_ms,
+            hangover_samples: hangover_ms.max(1) * per_ms,
             in_speech: false,
             speech_samples: 0,
             silence_samples: 0,
@@ -104,26 +101,26 @@ mod tests {
 
     #[test]
     fn disabled_never_fires() {
-        let mut vad = BoundaryVad::new(false, 24_000);
+        let mut vad = BoundaryVad::new(false, 24_000, 300);
         assert_eq!(vad.observe(&loud(24_000)), None);
     }
 
     #[test]
     fn opens_after_min_speech_and_closes_after_hangover() {
-        let mut vad = BoundaryVad::new(true, 24_000);
+        let mut vad = BoundaryVad::new(true, 24_000, 300);
         // 120 ms min-speech at 24 kHz = 2880 samples; one 3000-sample loud chunk opens.
         assert_eq!(vad.observe(&loud(3_000)), Some(true));
         // Still speaking: no transition.
         assert_eq!(vad.observe(&loud(3_000)), None);
-        // 500 ms hangover = 12000 samples; short silence does not close yet.
-        assert_eq!(vad.observe(&quiet(6_000)), None);
+        // 300 ms hangover = 7200 samples; short silence does not close yet.
+        assert_eq!(vad.observe(&quiet(3_600)), None);
         // Accumulated silence crosses the hangover: turn closes.
-        assert_eq!(vad.observe(&quiet(6_000)), Some(false));
+        assert_eq!(vad.observe(&quiet(3_600)), Some(false));
     }
 
     #[test]
     fn brief_noise_burst_does_not_open_a_turn() {
-        let mut vad = BoundaryVad::new(true, 24_000);
+        let mut vad = BoundaryVad::new(true, 24_000, 300);
         // 40 ms of loud (< 120 ms min-speech) then silence: never opens.
         assert_eq!(vad.observe(&loud(960)), None);
         assert_eq!(vad.observe(&quiet(960)), None);

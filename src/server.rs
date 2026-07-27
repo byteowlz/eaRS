@@ -525,7 +525,11 @@ async fn handle_connection(
         let mut ws_debug = WsDebugLog::from_env(session_id);
         let mut codec = SessionCodec::Pcm;
         // Single engine-agnostic speech-boundary detector for this connection.
-        let mut boundary_vad = vad::BoundaryVad::new(transcription_options.boundary_vad, 24_000);
+        let mut boundary_vad = vad::BoundaryVad::new(
+            transcription_options.boundary_vad,
+            24_000,
+            transcription_options.boundary_vad_hangover_ms,
+        );
         if let Some(msg) = first_msg {
             let msg_debug = WsMessageDebug::from_message(&msg);
             let result = handle_client_message(

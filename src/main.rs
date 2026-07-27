@@ -281,6 +281,10 @@ struct ServerStartArgs {
     #[arg(long, default_value_t = false)]
     vad: bool,
 
+    /// Silence before closing an utterance and flushing its trailing word.
+    #[arg(long, default_value_t = 300)]
+    boundary_vad_hangover_ms: usize,
+
     /// Maximum number of concurrent streaming sessions handled in parallel
     #[arg(long, default_value_t = 8)]
     max_sessions: usize,
@@ -346,6 +350,7 @@ impl Default for ServerStartArgs {
             cpu: false,
             timestamps: false,
             vad: false,
+            boundary_vad_hangover_ms: 300,
             max_sessions: 8,
             #[cfg(feature = "parakeet")]
             parakeet_repo: "istupakov/parakeet-tdt-0.6b-v3-onnx".to_string(),
@@ -794,6 +799,8 @@ fn append_server_args(cmd: &mut ProcessCommand, args: &ServerStartArgs) {
     if args.vad {
         cmd.arg("--vad");
     }
+    cmd.arg("--boundary-vad-hangover-ms")
+        .arg(args.boundary_vad_hangover_ms.to_string());
     cmd.arg("--max-sessions").arg(args.max_sessions.to_string());
     if args.hf_repo != "kyutai/stt-1b-en_fr-candle" {
         cmd.arg("--hf-repo").arg(&args.hf_repo);
@@ -848,6 +855,7 @@ fn build_server_options(args: &ServerStartArgs) -> Result<server::ServerOptions>
     let mut transcription = TranscriptionOptions::default();
     transcription.timestamps = args.timestamps;
     transcription.vad = args.vad;
+    transcription.boundary_vad_hangover_ms = args.boundary_vad_hangover_ms;
 
     Ok(server::ServerOptions {
         bind_addr,

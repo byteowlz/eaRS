@@ -102,6 +102,10 @@ struct Args {
     #[arg(long, default_value_t = false)]
     no_boundary_vad: bool,
 
+    /// Silence before closing an utterance and flushing its trailing word.
+    #[arg(long, default_value_t = 300)]
+    boundary_vad_hangover_ms: usize,
+
     /// Maximum number of concurrent streaming sessions handled in parallel
     #[arg(long, default_value_t = 8)]
     max_sessions: usize,
@@ -180,6 +184,7 @@ fn build_server_options(args: &Args) -> Result<server::ServerOptions> {
     transcription.timestamps = args.timestamps;
     transcription.vad = args.vad;
     transcription.boundary_vad = !args.no_boundary_vad;
+    transcription.boundary_vad_hangover_ms = args.boundary_vad_hangover_ms;
     transcription.verbose_injection = args.verbose_injection;
 
     Ok(server::ServerOptions {

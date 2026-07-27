@@ -164,6 +164,13 @@ impl ReplacementEngine {
                 return false;
             }
             let candidate = &text[start..];
+            // Holding a single letter makes ordinary words such as the article
+            // "a" lag because acronym phrases often begin with "A ". Prefer
+            // immediate dictation latency over matching a phrase split after
+            // only one spoken letter.
+            if candidate.chars().count() < 2 {
+                return false;
+            }
             self.phrases.iter().any(|phrase| {
                 phrase.len() > candidate.len()
                     && phrase
@@ -445,7 +452,7 @@ mod tests {
             version: 1,
             entries: vec![ReplacementEntry {
                 replace: "trx issue".to_string(),
-                phrases: vec!["tricks issue".to_string()],
+                phrases: vec!["tricks issue".to_string(), "a phrase".to_string()],
             }],
         };
         dictionary.save(&path).unwrap();
@@ -462,6 +469,7 @@ mod tests {
         assert!(!engine.ends_with_phrase_prefix("trick"));
         assert!(!engine.ends_with_phrase_prefix("tricks issue"));
         assert!(!engine.ends_with_phrase_prefix("ordinary prose"));
+        assert!(!engine.ends_with_phrase_prefix("a"));
         assert_eq!(engine.replace("okay, tricks issue"), "okay, trx issue");
         let _ = fs::remove_dir_all(dir);
     }

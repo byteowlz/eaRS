@@ -272,6 +272,8 @@ pub struct TranscriptionOptions {
     /// On by default so turn detection works for every engine; disable for pure
     /// dictation that does not want boundary events.
     pub boundary_vad: bool,
+    /// Silence required to close an utterance and flush a trailing word.
+    pub boundary_vad_hangover_ms: usize,
 }
 
 impl Default for TranscriptionOptions {
@@ -283,6 +285,7 @@ impl Default for TranscriptionOptions {
             vad_timeout: None,
             verbose_injection: false,
             boundary_vad: true,
+            boundary_vad_hangover_ms: 300,
         }
     }
 }
