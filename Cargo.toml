@@ -64,9 +64,16 @@ enigo = "0.6"
 rdev = "0.5"
 futures-util = "0.3"
 ctrlc = { version = "3.4", features = ["termination"] }
-# cudarc auto-detects CUDA version from the build system (nvcc)
-# Users can override by setting CUDARC_CUDA_VERSION environment variable
-cudarc = { version = "0.17", optional = true, features = ["cuda-version-from-build-system"] }
+# cudarc auto-detects CUDA version from the build system (nvcc).
+# Users can override by setting CUDARC_CUDA_VERSION environment variable.
+#
+# Must stay >= 0.19.9: candle-core already requires cudarc ^0.19, and each
+# cudarc release hard-codes the list of CUDA toolkit versions it recognizes.
+# The old `0.17` pin (a) could never unify with candle's 0.19 so both got
+# compiled, and (b) only knows up to CUDA 13.0, so `--features nvidia` failed
+# on newer toolkits (e.g. CUDA 13.3) with "Unsupported cuda toolkit version".
+# 0.19.4 caps at 13.2; 0.19.9 is the first that recognizes 13.3.
+cudarc = { version = "0.19.9", optional = true, features = ["cuda-version-from-build-system"] }
 notifica = "3.0.2"
 webrtc-vad = { version = "0.4", optional = true }
 # parakeet-rs (Nemotron streaming). Mutually exclusive in practice with the
@@ -75,11 +82,14 @@ webrtc-vad = { version = "0.4", optional = true }
 # prkt feature), so do not enable both `parakeet` and `parakeet-rs` together.
 parakeet-rs = { package = "parakeet-rs", git = "https://github.com/altunenes/parakeet-rs.git", rev = "086e3bb734dd9a3f01e4e99ef6895da0db85b47a", optional = true, default-features = false }
 
-# transcribe.cpp GGUF streaming engine. Pinned past the 0.1.3 crates.io
-# release because multitalker-parakeet streaming landed after it. Builds the
-# C++ library from source via cmake; backend features (metal/cuda) are
-# forwarded from eaRS's `apple`/`nvidia` features.
-transcribe-cpp = { git = "https://github.com/handy-computer/transcribe.cpp.git", rev = "5a5a49664a8ea1f0e5b3be1dfc544730d1b62561", optional = true, default-features = false }
+# transcribe.cpp GGUF streaming engine. Pinned to the 0.2.3 release (upgraded
+# from 0.1.3: brings ggml 0.20.2, a parakeet buffered-stream tail-loss fix, and
+# proper propagation of C BLAS link metadata). Backend features (metal/cuda)
+# are forwarded from eaRS's `apple`/`nvidia` features.
+# NOTE: on Arch, the build.rs cblas probe is still required — upstream links
+# what find_package(BLAS) returns, which on Arch is the Fortran-only libblas
+# (the C wrappers live in the separate `cblas` package).
+transcribe-cpp = { git = "https://github.com/handy-computer/transcribe.cpp.git", rev = "63a44d9239d610b3908e8a66b384924cd4a77217", optional = true, default-features = false }
 # `ears models refresh` fetches the maintained catalog.json. Reuses hf-hub's TLS
 # stack (native-tls); already in the tree, so this adds no new transitive cost.
 ureq = { version = "2.12", optional = true }

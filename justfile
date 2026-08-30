@@ -93,7 +93,6 @@ install:
             echo "Setting CUDA environment variables..."
             export PATH=/opt/cuda/bin:$PATH
             export CUDA_ROOT=/opt/cuda
-            export CUDARC_CUDA_VERSION=12060
             
             # Auto-detect GPU compute capability
             GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)
@@ -246,7 +245,6 @@ install-all:
             if command -v pacman &>/dev/null; then
                 export PATH=/opt/cuda/bin:$PATH
                 export CUDA_ROOT=/opt/cuda
-                export CUDARC_CUDA_VERSION=12060
                 
                 GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1 2>/dev/null || echo "unknown")
                 if [[ "$GPU_NAME" != "unknown" ]]; then
@@ -377,7 +375,6 @@ install-ears:
             echo "Setting CUDA environment variables for Arch Linux..."
             export PATH=/opt/cuda/bin:$PATH
             export CUDA_ROOT=/opt/cuda
-            export CUDARC_CUDA_VERSION=12060
             
             # Auto-detect GPU compute capability
             GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1 2>/dev/null || echo "unknown")
@@ -428,7 +425,6 @@ install-ears-features features:
         if command -v pacman &>/dev/null && command -v nvidia-smi &>/dev/null; then
             export PATH=/opt/cuda/bin:$PATH
             export CUDA_ROOT=/opt/cuda
-            export CUDARC_CUDA_VERSION=12060
             
             GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1 2>/dev/null || echo "unknown")
             if [[ "$GPU_NAME" != "unknown" ]]; then
@@ -493,7 +489,6 @@ install-ears-cuda:
         if command -v pacman &>/dev/null && command -v nvidia-smi &>/dev/null; then
             export PATH=/opt/cuda/bin:$PATH
             export CUDA_ROOT=/opt/cuda
-            export CUDARC_CUDA_VERSION=12060
             
             GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1 2>/dev/null || echo "unknown")
             if [[ "$GPU_NAME" != "unknown" ]]; then
@@ -530,7 +525,6 @@ install-ears-cuda-parakeet:
         if command -v pacman &>/dev/null && command -v nvidia-smi &>/dev/null; then
             export PATH=/opt/cuda/bin:$PATH
             export CUDA_ROOT=/opt/cuda
-            export CUDARC_CUDA_VERSION=12060
             
             GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1 2>/dev/null || echo "unknown")
             if [[ "$GPU_NAME" != "unknown" ]]; then
@@ -567,7 +561,6 @@ install-ears-parakeet:
         if command -v pacman &>/dev/null && command -v nvidia-smi &>/dev/null; then
             export PATH=/opt/cuda/bin:$PATH
             export CUDA_ROOT=/opt/cuda
-            export CUDARC_CUDA_VERSION=12060
             
             GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1 2>/dev/null || echo "unknown")
             if [[ "$GPU_NAME" != "unknown" ]]; then

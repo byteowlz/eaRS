@@ -51,7 +51,6 @@ fi
 echo -e "${GREEN}Step 4: Setting up environment variables...${NC}"
 export PATH=/opt/cuda/bin:$PATH
 export CUDA_ROOT=/opt/cuda
-export CUDARC_CUDA_VERSION=12060
 export SENTENCEPIECE_SYS_USE_PKG_CONFIG=1
 
 # Detect GPU compute capability
@@ -105,7 +104,6 @@ if [ $? -eq 0 ]; then
   echo -e "${YELLOW}Note: To build again in the future, set these environment variables:${NC}"
   echo "  export PATH=/opt/cuda/bin:\$PATH"
   echo "  export CUDA_ROOT=/opt/cuda"
-  echo "  export CUDARC_CUDA_VERSION=12060"
   echo "  export SENTENCEPIECE_SYS_USE_PKG_CONFIG=1"
 else
   echo -e "${RED}Build failed. Please check the error messages above.${NC}"

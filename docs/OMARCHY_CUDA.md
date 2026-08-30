@@ -43,7 +43,6 @@ yay -S sentencepiece
 ```bash
 export PATH=/opt/cuda/bin:$PATH
 export CUDA_ROOT=/opt/cuda
-export CUDARC_CUDA_VERSION=12060
 export SENTENCEPIECE_SYS_USE_PKG_CONFIG=1
 
 # Optional: Set CUDA architecture for your GPU
@@ -103,9 +102,27 @@ To make these environment variables permanent, add them to your `~/.bashrc` or `
 ```bash
 echo 'export PATH=/opt/cuda/bin:$PATH' >> ~/.bashrc
 echo 'export CUDA_ROOT=/opt/cuda' >> ~/.bashrc
-echo 'export CUDARC_CUDA_VERSION=12060' >> ~/.bashrc
 echo 'export SENTENCEPIECE_SYS_USE_PKG_CONFIG=1' >> ~/.bashrc
 ```
+
+### "Unsupported cuda toolkit version" Error
+
+cudarc's build script recognizes a fixed list of CUDA toolkit versions, and each
+cudarc release only knows about toolkits that existed when it shipped. eaRS
+requires cudarc >= 0.19.9 (the first release supporting CUDA 13.3) and pins it to
+match candle-core's own `cudarc ^0.19` requirement, so a current toolkit is
+detected automatically.
+
+If you hit this error on a very new toolkit, upgrade cudarc rather than forcing an
+older ABI:
+
+```bash
+cargo update -p cudarc
+```
+
+As a last resort you can still pin the version cudarc should target with
+`CUDARC_CUDA_VERSION` (e.g. `13030` for CUDA 13.3), but note this selects the
+binding set compiled in, not a compatibility shim -- prefer letting it auto-detect.
 
 ## Usage
 
