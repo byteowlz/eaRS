@@ -22,6 +22,16 @@
       "recommended": true
     },
     {
+      "slug": "diar_streaming_sortformer_4spk-v2.1",
+      "name": "Diar_Streaming_Sortformer_4Spk V2.1",
+      "languages": "English",
+      "streaming": true,
+      "default_quant": "Q8_0",
+      "default_size_mb": 139,
+      "description": "transcribe.cpp streaming model (English)",
+      "recommended": false
+    },
+    {
       "slug": "nemotron-speech-streaming-en-0.6b",
       "name": "Nemotron Speech Streaming EN",
       "languages": "English",
