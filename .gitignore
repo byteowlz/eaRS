@@ -15,4 +15,6 @@ dist/
 test_audio/generated/
 
 # Local test audio assets
-/test_audio/
+/test_audio/*
+# Pinned known-good spqx sample used by scripts/probe_trailing_word.py
+!test_audio/spqx_alpha_bravo.wav

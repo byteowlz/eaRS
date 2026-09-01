@@ -265,7 +265,7 @@ async fn main() -> Result<()> {
     }
     let mut replacement_reloader = ReplacementReloader::new(config.replacement.clone());
     let mut transcript_recorder = TranscriptRecorder::new(config.transcripts.clone());
-    let mut live_word_buffer = LiveWordBuffer::new(Duration::from_millis(1500));
+    let mut live_word_buffer = LiveWordBuffer::new(Duration::from_millis(700));
 
     // Handle --list-servers flag
     if args.list_servers {
@@ -870,6 +870,20 @@ fn handle_message(
                     }
                 }
             }
+            "speech" if is_capturing => {
+                // End of an utterance: no continuation can complete a pending
+                // dictionary phrase, so type everything immediately instead of
+                // waiting out the phrase-hold timer. This is what keeps the
+                // last word of an utterance from lagging behind.
+                let active = json.get("active").and_then(|v| v.as_bool()).unwrap_or(true);
+                if !active {
+                    live_word_buffer.flush_all(
+                        keyboard,
+                        replacement_reloader,
+                        transcript_recorder,
+                    )?;
+                }
+            }
             "final" if is_capturing => {
                 if let Some(text) = json.get("text").and_then(|v| v.as_str()) {
                     if !text.is_empty() {
@@ -1324,7 +1338,7 @@ mod tests {
         let mut history_config = TranscriptHistoryConfig::default();
         history_config.enabled = false;
         let mut recorder = TranscriptRecorder::new(history_config);
-        let mut buffer = LiveWordBuffer::new(Duration::from_millis(1500));
+        let mut buffer = LiveWordBuffer::new(Duration::from_millis(700));
         let recording_keyboard = RecordingKeyboard::default();
         let typed = Arc::clone(&recording_keyboard.typed);
         let mut keyboard: Box<dyn VirtualKeyboard> = Box::new(recording_keyboard);
@@ -1342,6 +1356,57 @@ mod tests {
         assert!(buffer.chunks.is_empty());
         assert_eq!(buffer.last_push, None);
         assert_eq!(&*typed.lock().unwrap(), "trx issue ");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn speech_boundary_flushes_held_words() {
+        let dir =
+            std::env::temp_dir().join(format!("ears-live-dict-test-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("global.toml");
+        ReplacementDictionary {
+            version: 1,
+            entries: vec![ears::replacement::ReplacementEntry {
+                replace: "trx issue".to_string(),
+                phrases: vec!["tricks issue".to_string()],
+            }],
+        }
+        .save(&path)
+        .unwrap();
+        let mut reloader = ReplacementReloader::new(ReplacementConfig {
+            enabled: true,
+            dictionary_paths: vec![path.to_string_lossy().to_string()],
+            case_sensitive: false,
+        });
+        let mut history_config = TranscriptHistoryConfig::default();
+        history_config.enabled = false;
+        let mut recorder = TranscriptRecorder::new(history_config);
+        let mut buffer = LiveWordBuffer::new(Duration::from_millis(700));
+        let recording_keyboard = RecordingKeyboard::default();
+        let typed = Arc::clone(&recording_keyboard.typed);
+        let mut keyboard: Box<dyn VirtualKeyboard> = Box::new(recording_keyboard);
+        let capturing = Arc::new(Mutex::new(true));
+
+        // A trailing word that starts a dictionary phrase is held...
+        buffer.push("tricks".to_string());
+        buffer
+            .flush_ready(&mut keyboard, &mut reloader, &mut recorder)
+            .unwrap();
+        assert_eq!(buffer.chunks, vec!["tricks"]);
+
+        // ...but an end-of-utterance boundary must type it immediately.
+        let boundary = serde_json::json!({"type": "speech", "active": false});
+        handle_message(
+            &boundary,
+            &mut keyboard,
+            &capturing,
+            &mut reloader,
+            &mut recorder,
+            &mut buffer,
+        )
+        .unwrap();
+        assert!(buffer.chunks.is_empty());
+        assert_eq!(&*typed.lock().unwrap(), "tricks ");
         let _ = fs::remove_dir_all(dir);
     }
 
