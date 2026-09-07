@@ -8,6 +8,13 @@ repository = "https://github.com/tommyfalkowski/eaRS"
 authors = ["Tommy Falkowski"]
 homepage = "https://byteowlz.com"
 
+[workspace]
+members = ["apps/ears-ui"]
+# simple_gui (Tauri) has its own lockfile/toolchain and is deprecated in favor
+# of apps/ears-ui; keep it out of the workspace so `cargo` in that directory
+# does not try to join this one.
+exclude = ["apps/simple_gui/src-tauri"]
+
 [build-dependencies]
 pkg-config = "0.3"
 
@@ -75,6 +82,8 @@ ctrlc = { version = "3.4", features = ["termination"] }
 # 0.19.4 caps at 13.2; 0.19.9 is the first that recognizes 13.3.
 cudarc = { version = "0.19.9", optional = true, features = ["cuda-version-from-build-system"] }
 notifica = "3.0.2"
+regex = "1.10"
+arboard = { version = "3.6", default-features = false }
 webrtc-vad = { version = "0.4", optional = true }
 # parakeet-rs (Nemotron streaming). Mutually exclusive in practice with the
 # `parakeet` (prkt) feature: prkt pins ort =2.0.0-rc.10 while parakeet-rs needs
@@ -106,6 +115,15 @@ openssl = { version = "0.10", features = ["vendored"] }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 sentencepiece = { version = "0.12", features = ["static"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Frontmost-app detection for context profiles (NSWorkspace + AX window title).
+objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSRunningApplication"] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSURL"] }
+objc2-core-foundation = { version = "0.3", features = ["CFBase", "CFString"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading"] }
 
 [features]
 default = []

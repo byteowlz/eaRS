@@ -2,6 +2,29 @@
 
 All notable changes to eaRS are documented in this file.
 
+## [Unreleased]
+
+### Features
+
+- **ui**: add `ears-ui` (apps/ears-ui), a GPUI companion UI: floating
+  dictation island (non-activating, all-spaces panel with live partials,
+  morph animation, island/notch mode, drag + click-through), tray/menu-bar
+  presence with launch-at-login, and a settings window (backend switcher,
+  dictionaries with live test, context-profile editor, overlay preferences).
+  Supersedes the deprecated Tauri `apps/simple_gui`.
+- **dictation**: extract the headless engine from the `ears-dictation`
+  binary into `ears::dictation` (library) with typed commands/events so
+  front ends can embed it; the binary is now a thin wrapper.
+- **dictation**: runtime-switchable hotkey mode and escape-cancels
+  (`SetHotkeyMode` / `SetEscapeCancels` commands).
+- **profiles**: context profiles (`ears profile add|list|remove|test`)
+  matching the frontmost application (bundle id / binary / window-title
+  regex) to dictionary sets, language and insertion mode.
+- **dictation**: insertion modes `clipboard` and `send_as_prompt` alongside
+  cursor insertion; `PromptReady` event for agent front ends.
+- **dictation**: backend identity + latency events; optional live text
+  observation for UIs.
+
 ## [0.6.0] - 2026-09-07
 
 ### Features

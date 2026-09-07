@@ -1,4 +1,8 @@
-# eaRS Live Transcription UI
+# eaRS Live Transcription UI (DEPRECATED)
+
+> **Deprecated.** This Tauri GUI is no longer maintained. It is superseded by
+> [`apps/ears-ui`](../ears-ui), the native GPUI companion UI (floating
+> dictation island, tray, settings). Kept for reference only.
 
 A modern, real-time speech-to-text web interface for eaRS, featuring live audio visualization and transcription display.
 

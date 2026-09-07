@@ -7,6 +7,7 @@
 - **Server management**: `ears server start|stop` launches and controls the inference backend.
 - **Client capture**: Running `ears` without subcommands streams microphone audio to the server and prints live transcripts.
 - **Dictation**: `ears dictation start|stop` enables system-wide dictation with hotkey control, dictionary replacements, and transcript history.
+- **Companion UI**: `ears-ui` (see `apps/ears-ui`) is an optional native desktop app (GPUI) with a floating dictation island, tray icon and settings for dictionaries, context profiles and overlay preferences.
 
 ## Installation
 

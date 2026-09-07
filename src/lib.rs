@@ -6,6 +6,9 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub mod config;
+pub mod dictation;
+pub mod frontmost;
+pub mod profiles;
 pub mod replacement;
 pub mod virtual_keyboard;
 pub use kaudio;

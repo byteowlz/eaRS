@@ -326,7 +326,7 @@ fn is_word_char(ch: Option<char>) -> bool {
     ch.is_some_and(|ch| ch.is_alphanumeric() || ch == '_')
 }
 
-fn expand_tilde(path: &str) -> PathBuf {
+pub fn expand_tilde(path: &str) -> PathBuf {
     if path == "~" {
         return dirs::home_dir().unwrap_or_else(|| PathBuf::from(path));
     }

@@ -177,6 +177,15 @@ pub struct HotkeyConfig {
     #[serde(default)]
     pub mode: DictationHotkeyMode,
     pub language_cycle: String,
+    /// Optional combo that cycles through context profiles (auto -> each
+    /// profile -> auto). Disabled when unset.
+    #[serde(default)]
+    pub profile_cycle: Option<String>,
+    /// When true, pressing Escape while capturing discards the pending words
+    /// and pauses dictation. Off by default so plain `ears dictation` keeps
+    /// its historical behaviour; the companion UI turns it on.
+    #[serde(default)]
+    pub escape_cancels: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -254,6 +263,8 @@ impl Default for HotkeyConfig {
             toggle: "ctrl+shift+v".to_string(),
             mode: DictationHotkeyMode::Toggle,
             language_cycle: "ctrl+shift+l".to_string(),
+            profile_cycle: None,
+            escape_cancels: false,
         }
     }
 }

@@ -59,6 +59,9 @@ enum Commands {
     Dictation(DictationCommand),
     #[command(subcommand)]
     Dictionary(DictionaryCommand),
+    /// Manage context profiles (per-app dictionary, language, insertion mode).
+    #[command(subcommand)]
+    Profile(ProfileCommand),
     /// List and download transcribe.cpp models.
     #[cfg(feature = "transcribe-cpp")]
     #[command(subcommand)]
@@ -114,6 +117,67 @@ enum DictionaryCommand {
     Remove(DictionaryRemoveArgs),
     #[command(about = "Test dictionary replacement on text")]
     Test(DictionaryTestArgs),
+}
+
+#[derive(Subcommand)]
+enum ProfileCommand {
+    #[command(about = "List context profiles in priority order")]
+    List,
+    #[command(about = "Show one profile")]
+    Show(ProfileNameArgs),
+    #[command(about = "Add or update a context profile")]
+    Add(ProfileAddArgs),
+    #[command(about = "Remove a context profile")]
+    Remove(ProfileNameArgs),
+    #[command(about = "Show the frontmost application and the profile it resolves to")]
+    Test(ProfileTestArgs),
+}
+
+#[derive(Args)]
+struct ProfileNameArgs {
+    /// Profile name
+    name: String,
+}
+
+#[derive(Args)]
+struct ProfileAddArgs {
+    /// Profile name (existing profile of the same name is replaced)
+    name: String,
+
+    /// Higher priority wins when several profiles match
+    #[arg(long, default_value_t = 0)]
+    priority: i32,
+
+    /// macOS bundle identifier to match. Repeat for several.
+    #[arg(long = "bundle-id", value_name = "ID")]
+    bundle_ids: Vec<String>,
+
+    /// Executable / application name to match. Repeat for several.
+    #[arg(long = "binary", value_name = "NAME")]
+    binaries: Vec<String>,
+
+    /// Regular expression matched against the focused window title
+    #[arg(long = "window-title", value_name = "REGEX")]
+    window_title: Option<String>,
+
+    /// Dictionary file used while the profile is active. Repeat for several.
+    #[arg(long = "dictionary", value_name = "PATH")]
+    dictionaries: Vec<String>,
+
+    /// Transcription language override (e.g. en, de)
+    #[arg(long)]
+    language: Option<String>,
+
+    /// Insertion mode override: insert_at_cursor | clipboard | send_as_prompt
+    #[arg(long = "insertion-mode", value_name = "MODE")]
+    insertion_mode: Option<String>,
+}
+
+#[derive(Args)]
+struct ProfileTestArgs {
+    /// Seconds to wait before sampling, so another window can be focused
+    #[arg(long, default_value_t = 0)]
+    delay: u64,
 }
 
 #[derive(Args)]
@@ -394,6 +458,10 @@ async fn main() -> Result<()> {
             handle_dictionary_command(dictionary_cmd)?;
             return Ok(());
         }
+        Some(Commands::Profile(profile_cmd)) => {
+            handle_profile_command(profile_cmd)?;
+            return Ok(());
+        }
         #[cfg(feature = "transcribe-cpp")]
         Some(Commands::Models(models_cmd)) => {
             handle_models_command(models_cmd)?;
@@ -559,6 +627,132 @@ fn primary_dictionary_path(config: &AppConfig) -> std::path::PathBuf {
         .into_iter()
         .next()
         .unwrap_or_else(ears::replacement::default_dictionary_path)
+}
+
+fn handle_profile_command(command: ProfileCommand) -> Result<()> {
+    use ears::profiles::ContextProfile;
+    use ears::profiles::ProfileMatch;
+    use ears::profiles::ProfilesConfig;
+    use ears::profiles::profiles_path;
+
+    match command {
+        ProfileCommand::List => {
+            let config = ProfilesConfig::load()?;
+            println!("Profiles: {}", profiles_path().display());
+            if config.profiles.is_empty() {
+                println!("(none) - add one with: ears profile add <name> --bundle-id <id> ...");
+                return Ok(());
+            }
+            println!("  {:4} {:16} {}", "PRIO", "NAME", "MATCH");
+            for name in config.names_by_priority() {
+                let profile = config.get(&name).expect("listed profile exists");
+                println!(
+                    "  {:4} {:16} {}",
+                    profile.priority,
+                    profile.name,
+                    describe_profile_match(&profile.matcher)
+                );
+            }
+            Ok(())
+        }
+        ProfileCommand::Show(args) => {
+            let config = ProfilesConfig::load()?;
+            let profile = config
+                .get(&args.name)
+                .ok_or_else(|| anyhow!("profile '{}' not found", args.name))?;
+            let text = toml::to_string_pretty(profile)?;
+            print!("{text}");
+            Ok(())
+        }
+        ProfileCommand::Add(args) => {
+            let insertion_mode = args
+                .insertion_mode
+                .as_deref()
+                .map(|mode| mode.parse::<ears::dictation::InsertionMode>())
+                .transpose()?;
+            let profile = ContextProfile {
+                name: args.name.clone(),
+                priority: args.priority,
+                matcher: ProfileMatch {
+                    bundle_id: args.bundle_ids,
+                    binary: args.binaries,
+                    window_title: args.window_title,
+                },
+                dictionaries: args.dictionaries,
+                language: args.language,
+                insertion_mode,
+            };
+            if profile.matcher.is_empty() {
+                return Err(anyhow!(
+                    "profile needs at least one match rule (--bundle-id, --binary or --window-title)"
+                ));
+            }
+            let mut config = ProfilesConfig::load()?;
+            config.upsert(profile);
+            config.save()?;
+            println!(
+                "saved profile '{}' to {}",
+                args.name,
+                profiles_path().display()
+            );
+            Ok(())
+        }
+        ProfileCommand::Remove(args) => {
+            let mut config = ProfilesConfig::load()?;
+            if !config.remove(&args.name) {
+                return Err(anyhow!("profile '{}' not found", args.name));
+            }
+            config.save()?;
+            println!("removed profile '{}'", args.name);
+            Ok(())
+        }
+        ProfileCommand::Test(args) => {
+            if args.delay > 0 {
+                println!("sampling frontmost application in {}s...", args.delay);
+                thread::sleep(Duration::from_secs(args.delay));
+            }
+            let Some(app) = ears::frontmost::frontmost_app() else {
+                println!("frontmost application: unknown (detection unavailable on this platform)");
+                return Ok(());
+            };
+            println!("frontmost application:");
+            println!("  name:         {}", app.name.as_deref().unwrap_or("-"));
+            println!(
+                "  bundle id:    {}",
+                app.bundle_id.as_deref().unwrap_or("-")
+            );
+            println!("  binary:       {}", app.binary.as_deref().unwrap_or("-"));
+            println!(
+                "  window title: {}",
+                app.window_title.as_deref().unwrap_or("-")
+            );
+            let config = ProfilesConfig::load()?;
+            let set = ears::profiles::ProfileSet::new(config)?;
+            match set.resolve(&app) {
+                Some(profile) => println!("resolved profile: {}", profile.name),
+                None => println!("resolved profile: (default)"),
+            }
+            Ok(())
+        }
+    }
+}
+
+fn describe_profile_match(matcher: &ears::profiles::ProfileMatch) -> String {
+    let mut parts = Vec::new();
+    if !matcher.bundle_id.is_empty() {
+        parts.push(format!("bundle={}", matcher.bundle_id.join("|")));
+    }
+    if !matcher.binary.is_empty() {
+        parts.push(format!("binary={}", matcher.binary.join("|")));
+    }
+    if let Some(title) = &matcher.window_title {
+        parts.push(format!("title=/{title}/"));
+    }
+    if parts.is_empty() {
+        "(no rules)".to_string()
+    } else {
+        parts.join(" ")
+    }
 }
 
 fn list_dictionary() -> Result<()> {
