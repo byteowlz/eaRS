@@ -356,9 +356,28 @@ install-all:
             ;;
     esac
 
+    # Companion UI (skipped gracefully when only a headless build is possible)
+    if command -v ears-ui >/dev/null 2>&1 || [[ "$OSTYPE" == "darwin"* ]] || [[ -n "${DISPLAY:-}" ]] || [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
+        just install-ui
+    else
+        echo "ℹ No desktop session detected, skipping ears-ui (run 'just install-ui' later)"
+    fi
+
     echo ""
     echo "✓ Installation complete!"
-    echo "Installed binaries: ears, ears-server, ears-dictation"
+    echo "Installed binaries: ears, ears-server, ears-dictation, ears-ui"
+
+# Install the ears-ui companion app (dictation island, tray, settings; macOS/Win no extra deps, Linux needs Wayland/X11; first GPUI build is slow)
+install-ui:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    echo "Installing ears-ui (GPUI companion UI)…"
+    cargo install --path apps/ears-ui --force
+    echo "✓ ears-ui installed."
+    echo "  On macOS, grant the binary Accessibility + Input Monitoring (typing)" 
+    echo "  and Microphone (capture) under System Settings → Privacy & Security."
+    echo "  Run it with: ears-ui [--settings] [--no-overlay]"
 
 # Install ears with interactive feature selection (checks dependencies first)
 install-ears:
