@@ -1,0 +1,15 @@
+{
+  "name": "@byteowlz/ears-browser",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Standalone browser recognition: local Moonshine or explicitly selected eaRS WebSocket",
+  "license": "MIT",
+  "exports": { ".": "./src/index.ts", "./stage-runtime": "./scripts/stage-runtime.mjs" },
+  "files": ["src", "scripts", "README.md", "LICENSE"],
+  "scripts": {
+    "test": "bun test",
+    "check": "tsc --noEmit",
+    "build": "bun build src/index.ts --target browser --outdir dist"
+  },
+  "devDependencies": { "@types/bun": "^1.3.0", "typescript": "^5.9.3" }
+}

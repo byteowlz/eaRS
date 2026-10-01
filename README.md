@@ -9,6 +9,13 @@
 - **Dictation**: `ears dictation start|stop` enables system-wide dictation with hotkey control, dictionary replacements, and transcript history.
 - **Companion UI**: `ears-ui` (see `apps/ears-ui`) is an optional native desktop app (GPUI) with a floating dictation island, tray icon and settings for dictionaries, context profiles and overlay preferences.
 
+## Browser recognition
+
+[`@byteowlz/ears-browser`](packages/browser/README.md) provides standalone
+English/German Moonshine CPU/WASM recognition and an explicit eaRS WebSocket
+adapter. Callers own capture and UI; browser-local mode needs no speech server.
+See the [runtime compatibility and browser proof](docs/browser-recognition.md).
+
 ## Installation
 
 ### Using just (Recommended)

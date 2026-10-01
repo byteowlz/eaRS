@@ -1,0 +1,12 @@
+check:
+    bun run check
+
+test:
+    bun test
+
+build:
+    bun run build
+
+# Requires agent-browser and externally stored public/consented WAV fixtures.
+browser-smoke english german: build
+    bun scripts/browser-smoke.mjs "{{english}}" "{{german}}"
