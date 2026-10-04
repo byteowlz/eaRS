@@ -1,0 +1,16 @@
+[package]
+name = "ears-parakeet-loader-spike"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT"
+
+[workspace]
+
+# Separate experiment: does not change eaRS dependency/features or production guards.
+[dependencies]
+transcribe-cpp = { git = "https://github.com/handy-computer/transcribe.cpp.git", rev = "63a44d9239d610b3908e8a66b384924cd4a77217", default-features = false }
+
+[[bin]]
+name = "loader-probe"
+path = "loader.rs"

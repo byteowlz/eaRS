@@ -1,0 +1,1177 @@
+{
+  "date": "2026-10-04T19:52:42.778115+00:00",
+  "issue": "trx-7nw3.6",
+  "vad_followup": "trx-7nw3.7",
+  "runtime_commit": "b3eaa487c72a6b9fb7bcb4915b1395e8950b612e",
+  "ggml_commit": "e705c5fed490514458bdd2eaddc43bd098fcce9b",
+  "weights_revision": "741158ae71e64ef5c89385862c18f777d07a97a1",
+  "hardware": {
+    "cpu": "Apple M2 Ultra",
+    "physical_cores": 24,
+    "memory_gib": 192,
+    "asr_cli_threads": 4,
+    "gpu_used": false,
+    "ternary_dispatch": "neon"
+  },
+  "dataset": {
+    "dataset": "google/fleurs",
+    "revision": "d7c758a6dceecd54a98cac43404d3d576e721f07",
+    "split": "test",
+    "license": "CC-BY-4.0"
+  },
+  "fixtures": [
+    {
+      "id": "de_de-10004059102127011984-clean",
+      "language": "de_de",
+      "condition": "clean",
+      "duration_s": 17.94,
+      "source_file": "10004059102127011984.wav",
+      "source_sha256": "1603ed8fcea31a7f32f51d137eaa3516d15aca947898b81a136f4a9732f08ad2",
+      "sha256": "7131c007c5c5c7b72c2fae333c9bccf5e2c02a4abb32b740f314e58b1488f149",
+      "noise_seed": null,
+      "clipped_fraction": 0
+    },
+    {
+      "id": "de_de-10004059102127011984-white5db",
+      "language": "de_de",
+      "condition": "white5db",
+      "duration_s": 17.94,
+      "source_file": "10004059102127011984.wav",
+      "source_sha256": "1603ed8fcea31a7f32f51d137eaa3516d15aca947898b81a136f4a9732f08ad2",
+      "sha256": "eb29b8ff0bcac47ae0bbc5275e5d73d8ad36b2722a01f1a137c9791d67e7b95d",
+      "noise_seed": 3965445710,
+      "clipped_fraction": 0.0
+    },
+    {
+      "id": "de_de-10009182821551087671-clean",
+      "language": "de_de",
+      "condition": "clean",
+      "duration_s": 11.16,
+      "source_file": "10009182821551087671.wav",
+      "source_sha256": "90d0470adf728783e98cc8dddd51e2c2cbf0d6bf360da65f7d2ac5c3e65876aa",
+      "sha256": "5ced4640ec223bd9f59601722534acbb2f47087c71167529c513741a86cdae01",
+      "noise_seed": null,
+      "clipped_fraction": 0
+    },
+    {
+      "id": "de_de-10009182821551087671-white5db",
+      "language": "de_de",
+      "condition": "white5db",
+      "duration_s": 11.16,
+      "source_file": "10009182821551087671.wav",
+      "source_sha256": "90d0470adf728783e98cc8dddd51e2c2cbf0d6bf360da65f7d2ac5c3e65876aa",
+      "sha256": "36345554a00aa62f37e47fc021874dd3c3810e98f3432e1557a341e297de5bd0",
+      "noise_seed": 354139727,
+      "clipped_fraction": 0.0
+    },
+    {
+      "id": "de_de-10014044777125235464-clean",
+      "language": "de_de",
+      "condition": "clean",
+      "duration_s": 12.42,
+      "source_file": "10014044777125235464.wav",
+      "source_sha256": "13041e21e6a44d30da9595905fbb4367056191a513245b84e64a13449c8d08ea",
+      "sha256": "d0859482db2b8461ba8726bce55e00f54760b3aae48aba674e67c893804d8d51",
+      "noise_seed": null,
+      "clipped_fraction": 0
+    },
+    {
+      "id": "de_de-10014044777125235464-white5db",
+      "language": "de_de",
+      "condition": "white5db",
+      "duration_s": 12.42,
+      "source_file": "10014044777125235464.wav",
+      "source_sha256": "13041e21e6a44d30da9595905fbb4367056191a513245b84e64a13449c8d08ea",
+      "sha256": "6f357d750fde8f4766e5293fda880307bb089ed4c24f7e377287696cfa6b1abe",
+      "noise_seed": 4202645689,
+      "clipped_fraction": 0.0
+    },
+    {
+      "id": "de_de-10030056357041867775-clean",
+      "language": "de_de",
+      "condition": "clean",
+      "duration_s": 10.68,
+      "source_file": "10030056357041867775.wav",
+      "source_sha256": "fda294888110e8bc13a0e468033a21f3b0f2f6a6e7efe40c32583c4760a58f0e",
+      "sha256": "bd345ef2d18cd274fb955cf510cb7f223c9ac6bb52c62fc4280eade47f9a56ee",
+      "noise_seed": null,
+      "clipped_fraction": 0
+    },
+    {
+      "id": "de_de-10030056357041867775-white5db",
+      "language": "de_de",
+      "condition": "white5db",
+      "duration_s": 10.68,
+      "source_file": "10030056357041867775.wav",
+      "source_sha256": "fda294888110e8bc13a0e468033a21f3b0f2f6a6e7efe40c32583c4760a58f0e",
+      "sha256": "0ba9e08fca5c044949d61837b69b7d6a6d7937088ab6d73e98cbd459197ad8a7",
+      "noise_seed": 699062988,
+      "clipped_fraction": 0.0
+    },
+    {
+      "id": "de_de-10058186628567796965-clean",
+      "language": "de_de",
+      "condition": "clean",
+      "duration_s": 9.9,
+      "source_file": "10058186628567796965.wav",
+      "source_sha256": "8859c90aaeeb54915cc3a7d0010aba564f996f1bc6f393f184a06825d0940090",
+      "sha256": "8bd38645c6abbb987e601e98b8c7ead49a81d849972fa26e658fe7345fab019f",
+      "noise_seed": null,
+      "clipped_fraction": 0
+    },
+    {
+      "id": "de_de-10058186628567796965-white5db",
+      "language": "de_de",
+      "condition": "white5db",
+      "duration_s": 9.9,
+      "source_file": "10058186628567796965.wav",
+      "source_sha256": "8859c90aaeeb54915cc3a7d0010aba564f996f1bc6f393f184a06825d0940090",
+      "sha256": "d92b491d4496fc1972751a30932739a8ec8b254866469786d3b98d53442e7cf4",
+      "noise_seed": 3931795039,
+      "clipped_fraction": 0.0
+    },
+    {
+      "id": "en_us-1003119935936341070-clean",
+      "language": "en_us",
+      "condition": "clean",
+      "duration_s": 10.56,
+      "source_file": "1003119935936341070.wav",
+      "source_sha256": "33aca50159ec2e3cbcc894eb26faa916d6badb1b49fb75994973561540a7f012",
+      "sha256": "7835bd6ffb54ce38a2a9bcde3905ba424faed94d50a474f21a9cbe9209b869df",
+      "noise_seed": null,
+      "clipped_fraction": 0
+    },
+    {
+      "id": "en_us-1003119935936341070-white5db",
+      "language": "en_us",
+      "condition": "white5db",
+      "duration_s": 10.56,
+      "source_file": "1003119935936341070.wav",
+      "source_sha256": "33aca50159ec2e3cbcc894eb26faa916d6badb1b49fb75994973561540a7f012",
+      "sha256": "c3c626786056cf58ad76400dd811f1db93a747ab7f2e329cab0d85d25f41679e",
+      "noise_seed": 2135778642,
+      "clipped_fraction": 0.0
+    },
+    {
+      "id": "en_us-10052240106321793346-clean",
+      "language": "en_us",
+      "condition": "clean",
+      "duration_s": 8.76,
+      "source_file": "10052240106321793346.wav",
+      "source_sha256": "7603cae3294309ef70d234180cefccc3b13865ee525262228a636069b9b62841",
+      "sha256": "ffd32e9953ffb14bed7f4e3a2d037ea7ac7de1ba5ad25d4c0f678fd06b24aab0",
+      "noise_seed": null,
+      "clipped_fraction": 0
+    },
+    {
+      "id": "en_us-10052240106321793346-white5db",
+      "language": "en_us",
+      "condition": "white5db",
+      "duration_s": 8.76,
+      "source_file": "10052240106321793346.wav",
+      "source_sha256": "7603cae3294309ef70d234180cefccc3b13865ee525262228a636069b9b62841",
+      "sha256": "b5ec0e1c744feef5903c450e91465a7dcb96ba09dade9dd2843512349392db48",
+      "noise_seed": 3595104856,
+      "clipped_fraction": 0.0
+    },
+    {
+      "id": "en_us-10167324587744183095-clean",
+      "language": "en_us",
+      "condition": "clean",
+      "duration_s": 11.46,
+      "source_file": "10167324587744183095.wav",
+      "source_sha256": "260bdd1a15e1d35bcc5d91667516ca3bc659285e10f94872182715bcd7880398",
+      "sha256": "b722d537c7eac36e3438f45e609676732ce4526b415d829347485a61030d6922",
+      "noise_seed": null,
+      "clipped_fraction": 0
+    },
+    {
+      "id": "en_us-10167324587744183095-white5db",
+      "language": "en_us",
+      "condition": "white5db",
+      "duration_s": 11.46,
+      "source_file": "10167324587744183095.wav",
+      "source_sha256": "260bdd1a15e1d35bcc5d91667516ca3bc659285e10f94872182715bcd7880398",
+      "sha256": "d08d21b6623e836bfb1a0348986e7967932d65a396c560fae6f6aa00360c130d",
+      "noise_seed": 2287039495,
+      "clipped_fraction": 0.0
+    },
+    {
+      "id": "en_us-10197164397713068203-clean",
+      "language": "en_us",
+      "condition": "clean",
+      "duration_s": 5.76,
+      "source_file": "10197164397713068203.wav",
+      "source_sha256": "b174be7730f0aab6a26762130b66f2125392b50550645727bd057d8479fb6219",
+      "sha256": "f4e95852e336403001191b6dbfc9f00c5263cea304c10761608d6d5fce23da3f",
+      "noise_seed": null,
+      "clipped_fraction": 0
+    },
+    {
+      "id": "en_us-10197164397713068203-white5db",
+      "language": "en_us",
+      "condition": "white5db",
+      "duration_s": 5.76,
+      "source_file": "10197164397713068203.wav",
+      "source_sha256": "b174be7730f0aab6a26762130b66f2125392b50550645727bd057d8479fb6219",
+      "sha256": "ee5766f254728e219513eca58a5f2223e752aa4bd55bc10c478ac7f979df094a",
+      "noise_seed": 111890285,
+      "clipped_fraction": 0.0
+    },
+    {
+      "id": "en_us-10233995782544396174-clean",
+      "language": "en_us",
+      "condition": "clean",
+      "duration_s": 4.32,
+      "source_file": "10233995782544396174.wav",
+      "source_sha256": "bfa2f3fb72a05cbcb7c0000a460435f2d0eedca7c5cc90f01aacc89127df7f63",
+      "sha256": "5a03997a964d1246207b2345564783cadc33d3e62810546bb4b1238c0e8b82f0",
+      "noise_seed": null,
+      "clipped_fraction": 0
+    },
+    {
+      "id": "en_us-10233995782544396174-white5db",
+      "language": "en_us",
+      "condition": "white5db",
+      "duration_s": 4.32,
+      "source_file": "10233995782544396174.wav",
+      "source_sha256": "bfa2f3fb72a05cbcb7c0000a460435f2d0eedca7c5cc90f01aacc89127df7f63",
+      "sha256": "f925e1b82d31ac95104a7bc1675fe4681f83a22117cd9cc84cc798b5ba810c58",
+      "noise_seed": 2969577374,
+      "clipped_fraction": 0.0
+    }
+  ],
+  "results": {
+    "redux-packed": {
+      "mode": "buffered/offline",
+      "warmup": "upstream discards one per process",
+      "runs": [
+        {
+          "process_wall_ms": 10888.03599998937,
+          "peak_rss_bytes": 595902464,
+          "load_ms": 1579.032
+        },
+        {
+          "process_wall_ms": 9440.367875009542,
+          "peak_rss_bytes": 599785472,
+          "load_ms": 60.441
+        },
+        {
+          "process_wall_ms": 17081.681292009307,
+          "peak_rss_bytes": 603062272,
+          "load_ms": 59.815
+        }
+      ],
+      "groups": {
+        "de_de/clean": {
+          "wer_pct": 7.017543859649122,
+          "cer_pct": 1.1251758087201125,
+          "clips": 5,
+          "words": 114,
+          "median_rtfx": 24.51289018817295
+        },
+        "de_de/white5db": {
+          "wer_pct": 23.684210526315788,
+          "cer_pct": 11.39240506329114,
+          "clips": 5,
+          "words": 114,
+          "median_rtfx": 24.411519249524645
+        },
+        "en_us/clean": {
+          "wer_pct": 6.796116504854369,
+          "cer_pct": 1.9400352733686066,
+          "clips": 5,
+          "words": 103,
+          "median_rtfx": 23.16375116711632
+        },
+        "en_us/white5db": {
+          "wer_pct": 23.300970873786408,
+          "cer_pct": 12.16931216931217,
+          "clips": 5,
+          "words": 103,
+          "median_rtfx": 23.742948588323074
+        }
+      },
+      "score_stable_across_runs": true,
+      "model": "redux-packed.gguf",
+      "model_sha256": "574614b9a4d9f72ab202877a7ad6a1f4bf819dd1d27b9d42dfe8cd429fcebdd5",
+      "threads": 4,
+      "cli_sha256": "8320c1d0e2a3257e8f473a6885226cb2faab4413bfcc9b47357837ce68910c11"
+    },
+    "ultra-q8_0": {
+      "mode": "buffered/offline",
+      "warmup": "upstream discards one per process",
+      "runs": [
+        {
+          "process_wall_ms": 24018.932208011393,
+          "peak_rss_bytes": 1158594560,
+          "load_ms": 3107.232
+        },
+        {
+          "process_wall_ms": 17307.582125009503,
+          "peak_rss_bytes": 1161019392,
+          "load_ms": 149.747
+        },
+        {
+          "process_wall_ms": 16932.62195799616,
+          "peak_rss_bytes": 1166786560,
+          "load_ms": 115.626
+        }
+      ],
+      "groups": {
+        "de_de/clean": {
+          "wer_pct": 2.631578947368421,
+          "cer_pct": 0.42194092827004215,
+          "clips": 5,
+          "words": 114,
+          "median_rtfx": 13.417926046700865
+        },
+        "de_de/white5db": {
+          "wer_pct": 14.035087719298245,
+          "cer_pct": 5.20393811533052,
+          "clips": 5,
+          "words": 114,
+          "median_rtfx": 13.294254077814418
+        },
+        "en_us/clean": {
+          "wer_pct": 2.912621359223301,
+          "cer_pct": 1.0582010582010581,
+          "clips": 5,
+          "words": 103,
+          "median_rtfx": 12.857830658027645
+        },
+        "en_us/white5db": {
+          "wer_pct": 8.737864077669903,
+          "cer_pct": 4.938271604938271,
+          "clips": 5,
+          "words": 103,
+          "median_rtfx": 12.930817594140056
+        }
+      },
+      "score_stable_across_runs": true,
+      "model": "ultra-q8_0.gguf",
+      "model_sha256": "c2fb452a9df468a141012b01c8c168a25ce93f710897c7de6e353c6cc250986a",
+      "threads": 4,
+      "cli_sha256": "8320c1d0e2a3257e8f473a6885226cb2faab4413bfcc9b47357837ce68910c11"
+    },
+    "v3-q8_0": {
+      "mode": "buffered/offline",
+      "warmup": "upstream discards one per process",
+      "runs": [
+        {
+          "process_wall_ms": 16662.24204201717,
+          "peak_rss_bytes": 1158610944,
+          "load_ms": 136.982
+        },
+        {
+          "process_wall_ms": 16899.58391597611,
+          "peak_rss_bytes": 1160167424,
+          "load_ms": 111.138
+        },
+        {
+          "process_wall_ms": 16815.283292002277,
+          "peak_rss_bytes": 1157005312,
+          "load_ms": 111.457
+        }
+      ],
+      "groups": {
+        "de_de/clean": {
+          "wer_pct": 4.385964912280701,
+          "cer_pct": 0.7032348804500703,
+          "clips": 5,
+          "words": 114,
+          "median_rtfx": 13.653936258324558
+        },
+        "de_de/white5db": {
+          "wer_pct": 15.789473684210526,
+          "cer_pct": 6.751054852320674,
+          "clips": 5,
+          "words": 114,
+          "median_rtfx": 13.628253718143133
+        },
+        "en_us/clean": {
+          "wer_pct": 5.825242718446602,
+          "cer_pct": 1.763668430335097,
+          "clips": 5,
+          "words": 103,
+          "median_rtfx": 13.525497350015442
+        },
+        "en_us/white5db": {
+          "wer_pct": 11.650485436893204,
+          "cer_pct": 5.82010582010582,
+          "clips": 5,
+          "words": 103,
+          "median_rtfx": 13.292629129791498
+        }
+      },
+      "score_stable_across_runs": true,
+      "model": "tdt-0.6b-v3-q8_0.gguf",
+      "model_sha256": "4d69a4a6683f4f2d952bad794c1357ca6eb628027695b4699c5a9ad4cd07d757",
+      "threads": 4,
+      "cli_sha256": "8320c1d0e2a3257e8f473a6885226cb2faab4413bfcc9b47357837ce68910c11"
+    },
+    "redux-vad": {
+      "mode": "clip-level VAD; NOT streaming proof",
+      "matched_options": {
+        "threshold": 0.5,
+        "min_pause": 0.2,
+        "min_speech": 0.1,
+        "speech_pad": 0
+      },
+      "cold_process_results": [
+        {
+          "process_wall_ms": 257.65308301197365,
+          "peak_rss_bytes": 152207360,
+          "file": "de_de-10004059102127011984-clean.wav",
+          "sha256": "7131c007c5c5c7b72c2fae333c9bccf5e2c02a4abb32b740f314e58b1488f149",
+          "duration": 17.94,
+          "frame_sec": 0.08,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 4.24,
+              "end": 11.76
+            },
+            {
+              "start": 12.0,
+              "end": 13.92
+            }
+          ]
+        },
+        {
+          "process_wall_ms": 199.664790998213,
+          "peak_rss_bytes": 152289280,
+          "file": "de_de-10004059102127011984-white5db.wav",
+          "sha256": "eb29b8ff0bcac47ae0bbc5275e5d73d8ad36b2722a01f1a137c9791d67e7b95d",
+          "duration": 17.94,
+          "frame_sec": 0.08,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 4.24,
+              "end": 11.76
+            },
+            {
+              "start": 12.08,
+              "end": 13.92
+            }
+          ]
+        },
+        {
+          "process_wall_ms": 40.25579200242646,
+          "peak_rss_bytes": 40927232,
+          "file": "silence.wav",
+          "sha256": "d303811b8c84619667cd0501342f84ec6cbe69f7aa3856dcf52fabda374c92b8",
+          "duration": 3.0,
+          "frame_sec": 0.08,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 0.24,
+              "end": 2.88
+            }
+          ]
+        },
+        {
+          "process_wall_ms": 48.195040988503024,
+          "peak_rss_bytes": 40976384,
+          "file": "noise.wav",
+          "sha256": "ef961a8e5771a3c01cdb633a63e75f1977ab8ffb4572132bd99d0844ca58940b",
+          "duration": 3.0,
+          "frame_sec": 0.08,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 0.24,
+              "end": 2.96
+            }
+          ]
+        },
+        {
+          "process_wall_ms": 48.43204200733453,
+          "peak_rss_bytes": 40550400,
+          "file": "Danke-padded.wav",
+          "sha256": "aafc2d374e8245bca861a3c5a70c59d432508162041e0d9efb70f84c502b88d6",
+          "duration": 2.95,
+          "frame_sec": 0.08,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 1.2,
+              "end": 2.0
+            }
+          ]
+        },
+        {
+          "process_wall_ms": 24.07283298089169,
+          "peak_rss_bytes": 26165248,
+          "file": "Danke.wav",
+          "sha256": "42e79c4c4c9b1414005bd34f6f560746b8224df99907336d27b0981ea3e9420b",
+          "duration": 0.95,
+          "frame_sec": 0.08,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 0.24,
+              "end": 0.95
+            }
+          ]
+        },
+        {
+          "process_wall_ms": 48.310000012861565,
+          "peak_rss_bytes": 39813120,
+          "file": "Ja-padded.wav",
+          "sha256": "04655a554bde1aec6e0d5160ab5bb869d4e88cc20bf536db189f72980b25aca0",
+          "duration": 2.85,
+          "frame_sec": 0.08,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 1.2,
+              "end": 1.92
+            }
+          ]
+        },
+        {
+          "process_wall_ms": 24.289000022690743,
+          "peak_rss_bytes": 25411584,
+          "file": "Ja.wav",
+          "sha256": "7a532d2c6cbcae81c730a43e436c4ffd34901591e8a7f8e958cc11983bcfe36a",
+          "duration": 0.85,
+          "frame_sec": 0.08,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 0.24,
+              "end": 0.85
+            }
+          ]
+        },
+        {
+          "process_wall_ms": 48.16262499662116,
+          "peak_rss_bytes": 40337408,
+          "file": "Nein-padded.wav",
+          "sha256": "53a3706091fd5d354f47ec8b6788fd6a53e33728f5edda79887cf77c24412ba1",
+          "duration": 2.925,
+          "frame_sec": 0.08,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 1.2,
+              "end": 1.92
+            }
+          ]
+        },
+        {
+          "process_wall_ms": 24.336625006981194,
+          "peak_rss_bytes": 25985024,
+          "file": "Nein.wav",
+          "sha256": "43a4666f16fb7e6a24a3cc4a20426063c784eedad5fc35613e6db134e32196e8",
+          "duration": 0.925,
+          "frame_sec": 0.08,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 0.24,
+              "end": 0.88
+            }
+          ]
+        },
+        {
+          "process_wall_ms": 320.98674998269416,
+          "peak_rss_bytes": 261128192,
+          "file": "de-repeat-33s.wav",
+          "sha256": "0b150334750560eb49fe1a2b357ea492f75181baa44f114343bdf7bb6ddfa68b",
+          "duration": 33.0,
+          "frame_sec": 0.08,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 4.24,
+              "end": 11.76
+            },
+            {
+              "start": 12.0,
+              "end": 13.92
+            },
+            {
+              "start": 22.16,
+              "end": 29.68
+            },
+            {
+              "start": 30.0,
+              "end": 31.92
+            }
+          ]
+        }
+      ],
+      "model": "redux-vad.gguf",
+      "model_sha256": "588e1d6e2ee5b6cdfd9ec5ea98dc0993d5bea498d9cc4ec8d6077041eef8a34f",
+      "threads": 4,
+      "cli_sha256": "8320c1d0e2a3257e8f473a6885226cb2faab4413bfcc9b47357837ce68910c11",
+      "capi": {
+        "model": "redux-vad.gguf",
+        "audio": "de-repeat-33s.wav",
+        "errors": {
+          "bad_options": "invalid VAD option threshold: must be in (0, 1]",
+          "missing_audio": "failed to load audio: /nonexistent/ears-spike.wav",
+          "vad_only_asr": "context holds a VAD-only model: only parakeet_capi_vad_* calls work with it"
+        },
+        "recovery": true,
+        "warm_median_ms": 263.1115420081187,
+        "thread_budget": "native library default 8 (not CLI benchmark 4)",
+        "streaming_vad": {
+          "supported": false,
+          "error": "context does not hold a Silero VAD model"
+        },
+        "output": {
+          "mode": "speech",
+          "duration": 33.0,
+          "frame_sec": 0.08,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 4.24,
+              "end": 11.76
+            },
+            {
+              "start": 12.0,
+              "end": 13.92
+            },
+            {
+              "start": 22.16,
+              "end": 29.68
+            },
+            {
+              "start": 30.0,
+              "end": 31.92
+            }
+          ]
+        }
+      }
+    },
+    "ultra-vad-q8_0": {
+      "mode": "clip-level VAD; NOT streaming proof",
+      "matched_options": {
+        "threshold": 0.5,
+        "min_pause": 0.2,
+        "min_speech": 0.1,
+        "speech_pad": 0
+      },
+      "cold_process_results": [
+        {
+          "process_wall_ms": 192.3505830054637,
+          "peak_rss_bytes": 149061632,
+          "file": "de_de-10004059102127011984-clean.wav",
+          "sha256": "7131c007c5c5c7b72c2fae333c9bccf5e2c02a4abb32b740f314e58b1488f149",
+          "duration": 17.94,
+          "frame_sec": 0.08,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 4.24,
+              "end": 11.76
+            },
+            {
+              "start": 12.0,
+              "end": 13.84
+            }
+          ]
+        },
+        {
+          "process_wall_ms": 200.58099998277612,
+          "peak_rss_bytes": 147488768,
+          "file": "de_de-10004059102127011984-white5db.wav",
+          "sha256": "eb29b8ff0bcac47ae0bbc5275e5d73d8ad36b2722a01f1a137c9791d67e7b95d",
+          "duration": 17.94,
+          "frame_sec": 0.08,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 4.16,
+              "end": 11.76
+            },
+            {
+              "start": 12.0,
+              "end": 14.0
+            }
+          ]
+        },
+        {
+          "process_wall_ms": 43.76554201007821,
+          "peak_rss_bytes": 37076992,
+          "file": "silence.wav",
+          "sha256": "d303811b8c84619667cd0501342f84ec6cbe69f7aa3856dcf52fabda374c92b8",
+          "duration": 3.0,
+          "frame_sec": 0.08,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 0.0,
+              "end": 3.0
+            }
+          ]
+        },
+        {
+          "process_wall_ms": 48.22587498347275,
+          "peak_rss_bytes": 37765120,
+          "file": "noise.wav",
+          "sha256": "ef961a8e5771a3c01cdb633a63e75f1977ab8ffb4572132bd99d0844ca58940b",
+          "duration": 3.0,
+          "frame_sec": 0.08,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 0.0,
+              "end": 3.0
+            }
+          ]
+        },
+        {
+          "process_wall_ms": 47.73129097884521,
+          "peak_rss_bytes": 36651008,
+          "file": "Danke-padded.wav",
+          "sha256": "aafc2d374e8245bca861a3c5a70c59d432508162041e0d9efb70f84c502b88d6",
+          "duration": 2.95,
+          "frame_sec": 0.08,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 1.2,
+              "end": 2.08
+            }
+          ]
+        },
+        {
+          "process_wall_ms": 24.486750015057623,
+          "peak_rss_bytes": 22233088,
+          "file": "Danke.wav",
+          "sha256": "42e79c4c4c9b1414005bd34f6f560746b8224df99907336d27b0981ea3e9420b",
+          "duration": 0.95,
+          "frame_sec": 0.08,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 0.24,
+              "end": 0.95
+            }
+          ]
+        },
+        {
+          "process_wall_ms": 47.727958008181304,
+          "peak_rss_bytes": 36225024,
+          "file": "Ja-padded.wav",
+          "sha256": "04655a554bde1aec6e0d5160ab5bb869d4e88cc20bf536db189f72980b25aca0",
+          "duration": 2.85,
+          "frame_sec": 0.08,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 1.04,
+              "end": 2.0
+            }
+          ]
+        },
+        {
+          "process_wall_ms": 24.624167010188103,
+          "peak_rss_bytes": 21676032,
+          "file": "Ja.wav",
+          "sha256": "7a532d2c6cbcae81c730a43e436c4ffd34901591e8a7f8e958cc11983bcfe36a",
+          "duration": 0.85,
+          "frame_sec": 0.08,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 0.24,
+              "end": 0.85
+            }
+          ]
+        },
+        {
+          "process_wall_ms": 47.1775830083061,
+          "peak_rss_bytes": 36831232,
+          "file": "Nein-padded.wav",
+          "sha256": "53a3706091fd5d354f47ec8b6788fd6a53e33728f5edda79887cf77c24412ba1",
+          "duration": 2.925,
+          "frame_sec": 0.08,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 1.2,
+              "end": 2.08
+            }
+          ]
+        },
+        {
+          "process_wall_ms": 24.49170799809508,
+          "peak_rss_bytes": 22085632,
+          "file": "Nein.wav",
+          "sha256": "43a4666f16fb7e6a24a3cc4a20426063c784eedad5fc35613e6db134e32196e8",
+          "duration": 0.925,
+          "frame_sec": 0.08,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 0.24,
+              "end": 0.88
+            }
+          ]
+        },
+        {
+          "process_wall_ms": 317.55724997492507,
+          "peak_rss_bytes": 259014656,
+          "file": "de-repeat-33s.wav",
+          "sha256": "0b150334750560eb49fe1a2b357ea492f75181baa44f114343bdf7bb6ddfa68b",
+          "duration": 33.0,
+          "frame_sec": 0.08,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 4.24,
+              "end": 11.76
+            },
+            {
+              "start": 12.0,
+              "end": 13.84
+            },
+            {
+              "start": 22.16,
+              "end": 29.68
+            },
+            {
+              "start": 30.0,
+              "end": 31.84
+            }
+          ]
+        }
+      ],
+      "model": "ultra-vad-q8_0.gguf",
+      "model_sha256": "8b891a4435e97438104ca07c72530d0c5fe62b986baee48b2dd4e1500c1d4758",
+      "threads": 4,
+      "cli_sha256": "8320c1d0e2a3257e8f473a6885226cb2faab4413bfcc9b47357837ce68910c11",
+      "capi": {
+        "model": "ultra-vad-q8_0.gguf",
+        "audio": "de-repeat-33s.wav",
+        "errors": {
+          "bad_options": "invalid VAD option threshold: must be in (0, 1]",
+          "missing_audio": "failed to load audio: /nonexistent/ears-spike.wav",
+          "vad_only_asr": "context holds a VAD-only model: only parakeet_capi_vad_* calls work with it"
+        },
+        "recovery": true,
+        "warm_median_ms": 246.00491698947735,
+        "thread_budget": "native library default 8 (not CLI benchmark 4)",
+        "streaming_vad": {
+          "supported": false,
+          "error": "context does not hold a Silero VAD model"
+        },
+        "output": {
+          "mode": "speech",
+          "duration": 33.0,
+          "frame_sec": 0.08,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 4.24,
+              "end": 11.76
+            },
+            {
+              "start": 12.0,
+              "end": 13.84
+            },
+            {
+              "start": 22.16,
+              "end": 29.68
+            },
+            {
+              "start": 30.0,
+              "end": 31.84
+            }
+          ]
+        }
+      }
+    },
+    "silero-vad-f32": {
+      "mode": "clip-level VAD; NOT streaming proof",
+      "matched_options": {
+        "threshold": 0.5,
+        "min_pause": 0.2,
+        "min_speech": 0.1,
+        "speech_pad": 0
+      },
+      "cold_process_results": [
+        {
+          "process_wall_ms": 141.48354099597782,
+          "peak_rss_bytes": 14352384,
+          "file": "de_de-10004059102127011984-clean.wav",
+          "sha256": "7131c007c5c5c7b72c2fae333c9bccf5e2c02a4abb32b740f314e58b1488f149",
+          "duration": 17.94,
+          "frame_sec": 0.032,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 4.288,
+              "end": 11.648
+            },
+            {
+              "start": 12.096,
+              "end": 13.856
+            }
+          ]
+        },
+        {
+          "process_wall_ms": 88.43337500002235,
+          "peak_rss_bytes": 14352384,
+          "file": "de_de-10004059102127011984-white5db.wav",
+          "sha256": "eb29b8ff0bcac47ae0bbc5275e5d73d8ad36b2722a01f1a137c9791d67e7b95d",
+          "duration": 17.94,
+          "frame_sec": 0.032,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 4.32,
+              "end": 11.744
+            },
+            {
+              "start": 12.096,
+              "end": 13.92
+            }
+          ]
+        },
+        {
+          "process_wall_ms": 24.113250023219734,
+          "peak_rss_bytes": 11108352,
+          "file": "silence.wav",
+          "sha256": "d303811b8c84619667cd0501342f84ec6cbe69f7aa3856dcf52fabda374c92b8",
+          "duration": 3.0,
+          "frame_sec": 0.032,
+          "backend": "cpu",
+          "segments": []
+        },
+        {
+          "process_wall_ms": 24.17429201886989,
+          "peak_rss_bytes": 11157504,
+          "file": "noise.wav",
+          "sha256": "ef961a8e5771a3c01cdb633a63e75f1977ab8ffb4572132bd99d0844ca58940b",
+          "duration": 3.0,
+          "frame_sec": 0.032,
+          "backend": "cpu",
+          "segments": []
+        },
+        {
+          "process_wall_ms": 23.75958301126957,
+          "peak_rss_bytes": 11124736,
+          "file": "Danke-padded.wav",
+          "sha256": "aafc2d374e8245bca861a3c5a70c59d432508162041e0d9efb70f84c502b88d6",
+          "duration": 2.95,
+          "frame_sec": 0.032,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 1.312,
+              "end": 1.792
+            }
+          ]
+        },
+        {
+          "process_wall_ms": 24.40633298829198,
+          "peak_rss_bytes": 10993664,
+          "file": "Danke.wav",
+          "sha256": "42e79c4c4c9b1414005bd34f6f560746b8224df99907336d27b0981ea3e9420b",
+          "duration": 0.95,
+          "frame_sec": 0.032,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 0.288,
+              "end": 0.95
+            }
+          ]
+        },
+        {
+          "process_wall_ms": 23.94008301780559,
+          "peak_rss_bytes": 11157504,
+          "file": "Ja-padded.wav",
+          "sha256": "04655a554bde1aec6e0d5160ab5bb869d4e88cc20bf536db189f72980b25aca0",
+          "duration": 2.85,
+          "frame_sec": 0.032,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 1.28,
+              "end": 1.856
+            }
+          ]
+        },
+        {
+          "process_wall_ms": 23.947292007505894,
+          "peak_rss_bytes": 10993664,
+          "file": "Ja.wav",
+          "sha256": "7a532d2c6cbcae81c730a43e436c4ffd34901591e8a7f8e958cc11983bcfe36a",
+          "duration": 0.85,
+          "frame_sec": 0.032,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 0.288,
+              "end": 0.832
+            }
+          ]
+        },
+        {
+          "process_wall_ms": 24.191916978452355,
+          "peak_rss_bytes": 11141120,
+          "file": "Nein-padded.wav",
+          "sha256": "53a3706091fd5d354f47ec8b6788fd6a53e33728f5edda79887cf77c24412ba1",
+          "duration": 2.925,
+          "frame_sec": 0.032,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 1.248,
+              "end": 1.792
+            }
+          ]
+        },
+        {
+          "process_wall_ms": 23.78829100052826,
+          "peak_rss_bytes": 11108352,
+          "file": "Nein.wav",
+          "sha256": "43a4666f16fb7e6a24a3cc4a20426063c784eedad5fc35613e6db134e32196e8",
+          "duration": 0.925,
+          "frame_sec": 0.032,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 0.288,
+              "end": 0.768
+            }
+          ]
+        },
+        {
+          "process_wall_ms": 146.99995800037868,
+          "peak_rss_bytes": 17203200,
+          "file": "de-repeat-33s.wav",
+          "sha256": "0b150334750560eb49fe1a2b357ea492f75181baa44f114343bdf7bb6ddfa68b",
+          "duration": 33.0,
+          "frame_sec": 0.032,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 4.288,
+              "end": 11.648
+            },
+            {
+              "start": 12.096,
+              "end": 13.856
+            },
+            {
+              "start": 22.24,
+              "end": 29.568
+            },
+            {
+              "start": 30.048,
+              "end": 31.808
+            }
+          ]
+        }
+      ],
+      "model": "silero-vad-f32.gguf",
+      "model_sha256": "1398e5ce230bd8f20c06f825ed3a41dc4528ef7e6fe8f8ec8a5b7aedefbee943",
+      "threads": 4,
+      "cli_sha256": "8320c1d0e2a3257e8f473a6885226cb2faab4413bfcc9b47357837ce68910c11",
+      "capi": {
+        "model": "silero-vad-f32.gguf",
+        "audio": "de-repeat-33s.wav",
+        "errors": {
+          "bad_options": "invalid VAD option threshold: must be in (0, 1]",
+          "missing_audio": "failed to load audio: /nonexistent/ears-spike.wav",
+          "vad_only_asr": "context has no loaded model"
+        },
+        "recovery": true,
+        "warm_median_ms": 103.11662501771934,
+        "thread_budget": "native library default 8 (not CLI benchmark 4)",
+        "streaming_vad": {
+          "supported": true,
+          "partition_probability_parity": true,
+          "events": [
+            {
+              "type": "start",
+              "time": 4.288
+            },
+            {
+              "type": "end",
+              "time": 11.648
+            },
+            {
+              "type": "start",
+              "time": 12.096
+            },
+            {
+              "type": "end",
+              "time": 13.856
+            },
+            {
+              "type": "start",
+              "time": 22.24
+            },
+            {
+              "type": "end",
+              "time": 29.568
+            },
+            {
+              "type": "start",
+              "time": 30.048
+            },
+            {
+              "type": "end",
+              "time": 31.808
+            }
+          ]
+        },
+        "output": {
+          "mode": "speech",
+          "duration": 33.0,
+          "frame_sec": 0.032,
+          "backend": "cpu",
+          "segments": [
+            {
+              "start": 4.288,
+              "end": 11.648
+            },
+            {
+              "start": 12.096,
+              "end": 13.856
+            },
+            {
+              "start": 22.24,
+              "end": 29.568
+            },
+            {
+              "start": 30.048,
+              "end": 31.808
+            }
+          ]
+        }
+      }
+    }
+  },
+  "known_gate_failures": {
+    "zero_pcm_speech": {
+      "ultra-vad-q8_0": [
+        [
+          0,
+          3
+        ]
+      ],
+      "redux-vad": [
+        [
+          0.24,
+          2.88
+        ]
+      ],
+      "silero-vad-f32": []
+    },
+    "parent_slice_silence_json_parity": true,
+    "fixed": false
+  }
+}

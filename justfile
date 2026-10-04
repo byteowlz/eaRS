@@ -18,6 +18,23 @@ build-release:
 check:
     cargo check --all-features
 
+# === Opt-in parakeet.cpp spike (no production adapter/default changes) ===
+
+parakeet-spike-test:
+    cd experiments/parakeet-cpp && uv run python -m unittest -v && cargo check && cargo fmt --check
+
+parakeet-spike-setup:
+    bash experiments/parakeet-cpp/setup.sh
+
+parakeet-spike-fixtures out count="5":
+    uv run --project experiments/parakeet-cpp experiments/parakeet-cpp/fixtures.py --out "$1" --count "$2"
+
+parakeet-spike *args:
+    uv run --project experiments/parakeet-cpp experiments/parakeet-cpp/bench.py "$@"
+
+parakeet-spike-loader *models:
+    cargo run --release --manifest-path experiments/parakeet-cpp/Cargo.toml --bin loader-probe -- "$@"
+
 # === Code Quality ===
 
 # Format code

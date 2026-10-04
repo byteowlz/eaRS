@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+target/
+fixtures/
+results/
+*.wav
+*.gguf

@@ -25,6 +25,13 @@ All notable changes to eaRS are documented in this file.
 - **dictation**: backend identity + latency events; optional live text
   observation for UIs.
 
+### Experiments
+
+- **ASR/VAD**: add opt-in pinned `parakeet.cpp` Ultra/Redux CPU spike with
+  English/German noisy fixtures, native memory/timing evidence, C API recovery
+  probes and eaRS loader compatibility checks. Ultra merits buffered evaluation;
+  VAD heads fail no-speech controls. Production engines and live Silero unchanged.
+
 ## [0.6.0] - 2026-09-07
 
 ### Features
