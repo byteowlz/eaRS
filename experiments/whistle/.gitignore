@@ -1,0 +1,5 @@
+__pycache__/
+*.f32
+*.wav
+*.cact
+results/

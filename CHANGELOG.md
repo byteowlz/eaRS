@@ -27,6 +27,10 @@ All notable changes to eaRS are documented in this file.
 
 ### Experiments
 
+- **ASR**: add an opt-in pinned Whistle native spike with same-corpus
+  English/German comparisons, OS-contained inference, schema/input gates and
+  a preserved nonstationary-noise hallucination gate. Tiny footprint/fast CPU
+  inference does not justify a German default change; production unchanged.
 - **ASR/VAD**: add opt-in pinned `parakeet.cpp` Ultra/Redux CPU spike with
   English/German noisy fixtures, native memory/timing evidence, C API recovery
   probes and eaRS loader compatibility checks. Ultra merits buffered evaluation;

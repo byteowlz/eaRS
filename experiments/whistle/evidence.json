@@ -1,0 +1,256 @@
+{
+  "date": "2026-10-08T19:07:05.988896+00:00",
+  "issue": "trx-7nw3.8",
+  "followups": [
+    "trx-7nw3.9",
+    "trx-7nw3.10"
+  ],
+  "code_repository_commit": "af2654dffa4987f7e2cbbacdf59c2f854fd18302",
+  "model_revision": "b358ddadd89b7a713b5aa131f23032d3cca1b251",
+  "engine_revision": "2ae11323dc000f5e70c49f7403efa6af12ba9e67",
+  "model_sha256": "b6e02f048568ac5d01a2042556c658061e699acbc0aa2a1439f52f3d461dffeb",
+  "model_bytes": 16919407,
+  "archive_sha256": "98da47c15e1065b4cdc7ddc55e825be78414d4586832db3becaeded39a373df4",
+  "hardware": {
+    "cpu": "Apple M2 Ultra",
+    "ram_gib": 192,
+    "gpu": false,
+    "parakeet_threads": 4,
+    "whistle_thread_policy": "C API compiled default; CLI documents fast cores capped at 4, no public setter"
+  },
+  "corpus": "Same pinned FLEURS pairs and scoring as ../parakeet-cpp/evidence.json; 5 clips/114 words German, 5 clips/103 words English; seeded 5dB white noise",
+  "privacy": {
+    "initial_public_fixture_smoke_contained": false,
+    "subsequent_native_runs_network_denied": true,
+    "telemetry_env_disabled": true,
+    "direct_http_control_denied": true
+  },
+  "results": {
+    "auto": {
+      "groups": {
+        "de_de/clean": {
+          "wer_pct": 16.666666666666664,
+          "cer_pct": 5.063291139240507,
+          "median_rtfx": 94.10930318198558,
+          "clips": 5,
+          "words": 114,
+          "scores_stable": true
+        },
+        "de_de/white5db": {
+          "wer_pct": 78.94736842105263,
+          "cer_pct": 45.14767932489451,
+          "median_rtfx": 80.74236165556947,
+          "clips": 5,
+          "words": 114,
+          "scores_stable": true
+        },
+        "en_us/clean": {
+          "wer_pct": 8.737864077669903,
+          "cer_pct": 5.291005291005291,
+          "median_rtfx": 115.87347501318675,
+          "clips": 5,
+          "words": 103,
+          "scores_stable": true
+        },
+        "en_us/white5db": {
+          "wer_pct": 36.89320388349515,
+          "cer_pct": 18.69488536155203,
+          "median_rtfx": 115.4956689124158,
+          "clips": 5,
+          "words": 103,
+          "scores_stable": true
+        }
+      },
+      "peak_rss_bytes_max": 87425024,
+      "load_ms": [
+        5.21083,
+        5.57204,
+        5.42208
+      ],
+      "warmup_ms": [
+        118.874,
+        119.751,
+        109.02
+      ],
+      "reported_ttft_ms": {
+        "min": 6.3,
+        "median": 18.5,
+        "max": 30.7
+      },
+      "small_buffer_return_codes": [
+        47,
+        47,
+        47
+      ],
+      "small_buffer_canaries_intact": true
+    },
+    "forced": {
+      "groups": {
+        "de_de/clean": {
+          "wer_pct": 16.666666666666664,
+          "cer_pct": 5.063291139240507,
+          "median_rtfx": 93.83145091225022,
+          "clips": 5,
+          "words": 114,
+          "scores_stable": true
+        },
+        "de_de/white5db": {
+          "wer_pct": 75.43859649122807,
+          "cer_pct": 49.789029535864984,
+          "median_rtfx": 77.62141000978707,
+          "clips": 5,
+          "words": 114,
+          "scores_stable": true
+        },
+        "en_us/clean": {
+          "wer_pct": 8.737864077669903,
+          "cer_pct": 5.291005291005291,
+          "median_rtfx": 116.32044774547286,
+          "clips": 5,
+          "words": 103,
+          "scores_stable": true
+        },
+        "en_us/white5db": {
+          "wer_pct": 36.89320388349515,
+          "cer_pct": 18.69488536155203,
+          "median_rtfx": 118.35159344518708,
+          "clips": 5,
+          "words": 103,
+          "scores_stable": true
+        }
+      },
+      "peak_rss_bytes_max": 86786048,
+      "load_ms": [
+        5.30592,
+        5.51337,
+        5.07996,
+        5.25292,
+        5.10367,
+        5.10196
+      ],
+      "warmup_ms": [
+        117.561,
+        75.3691,
+        115.972,
+        70.0992,
+        113.618,
+        74.125
+      ],
+      "reported_ttft_ms": {
+        "min": 8.0,
+        "median": 18.2,
+        "max": 31.8
+      },
+      "small_buffer_return_codes": [
+        47,
+        30,
+        47,
+        30,
+        47,
+        30
+      ],
+      "small_buffer_canaries_intact": true
+    },
+    "redux-packed": {
+      "groups": {
+        "de_de/clean": {
+          "wer_pct": 7.017543859649122,
+          "cer_pct": 1.1251758087201125,
+          "clips": 5,
+          "words": 114,
+          "median_rtfx": 23.92455098125333
+        },
+        "de_de/white5db": {
+          "wer_pct": 23.684210526315788,
+          "cer_pct": 11.39240506329114,
+          "clips": 5,
+          "words": 114,
+          "median_rtfx": 23.90342554179173
+        },
+        "en_us/clean": {
+          "wer_pct": 6.796116504854369,
+          "cer_pct": 1.9400352733686066,
+          "clips": 5,
+          "words": 103,
+          "median_rtfx": 23.696407610687626
+        },
+        "en_us/white5db": {
+          "wer_pct": 23.300970873786408,
+          "cer_pct": 12.16931216931217,
+          "clips": 5,
+          "words": 103,
+          "median_rtfx": 23.575624904076168
+        }
+      },
+      "model_sha256": "574614b9a4d9f72ab202877a7ad6a1f4bf819dd1d27b9d42dfe8cd429fcebdd5",
+      "peak_rss_bytes_max": 602701824
+    },
+    "ultra-q8_0": {
+      "groups": {
+        "de_de/clean": {
+          "wer_pct": 2.631578947368421,
+          "cer_pct": 0.42194092827004215,
+          "clips": 5,
+          "words": 114,
+          "median_rtfx": 12.020293972645218
+        },
+        "de_de/white5db": {
+          "wer_pct": 14.035087719298245,
+          "cer_pct": 5.20393811533052,
+          "clips": 5,
+          "words": 114,
+          "median_rtfx": 12.798479186189843
+        },
+        "en_us/clean": {
+          "wer_pct": 2.912621359223301,
+          "cer_pct": 1.0582010582010581,
+          "clips": 5,
+          "words": 103,
+          "median_rtfx": 12.054576608810995
+        },
+        "en_us/white5db": {
+          "wer_pct": 8.737864077669903,
+          "cer_pct": 4.938271604938271,
+          "clips": 5,
+          "words": 103,
+          "median_rtfx": 11.346728359989534
+        }
+      },
+      "model_sha256": "c2fb452a9df468a141012b01c8c168a25ce93f710897c7de6e353c6cc250986a",
+      "peak_rss_bytes_max": 1161592832
+    }
+  },
+  "controls": {
+    "silence": {
+      "empty_text": true,
+      "empty_language": true,
+      "stream_empty": true
+    },
+    "noise": {
+      "empty_text": true,
+      "empty_language": true,
+      "stream_empty": true
+    },
+    "pulse-noise": {
+      "offline": [
+        "Vielen Dank."
+      ],
+      "stream": [
+        "Vielen Dank.",
+        ""
+      ],
+      "wav_sha256": "0889b474e55b14e8fc15645d4942dc521c47cb9fd9ce103550e93f02f73e614b",
+      "definition": "seed 43, sigma 0.00005 Gaussian x Hann(48000), PCM16 16kHz, no speech"
+    },
+    "leading-prefix": {
+      "offline": [
+        "Vielen Dank."
+      ],
+      "stream": [
+        "Vielen Dank.",
+        ""
+      ],
+      "wav_sha256": "bfa974d0ae75dde64f88bd280d6e28d4abddebd251be1bc4f62181732d0571f8"
+    }
+  }
+}

@@ -35,6 +35,17 @@ parakeet-spike *args:
 parakeet-spike-loader *models:
     cargo run --release --manifest-path experiments/parakeet-cpp/Cargo.toml --bin loader-probe -- "$@"
 
+# === Opt-in Whistle spike (macOS arm64, isolated from production) ===
+
+whistle-spike-setup:
+    bash experiments/whistle/setup.sh
+
+whistle-spike-test:
+    uv run --project experiments/parakeet-cpp python -m unittest discover -v -s experiments/whistle
+
+whistle-spike *args:
+    uv run --project experiments/parakeet-cpp experiments/whistle/run.py "$@"
+
 # === Code Quality ===
 
 # Format code
