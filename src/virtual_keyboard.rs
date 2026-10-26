@@ -212,7 +212,7 @@ fn char_to_key(ch: char) -> Result<keyboard::Key> {
         '\n' => Enter,
         '\t' => Tab,
 
-        _ => return Err(anyhow!("Unsupported character: '{}'", ch)),
+        _ => return Err(anyhow::anyhow!("Unsupported character: '{}'", ch)),
     };
 
     Ok(key)
