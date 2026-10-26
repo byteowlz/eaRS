@@ -239,7 +239,11 @@ pub(crate) async fn run(
 
     let mut engine = Engine {
         history,
-        router: Router::new(config.voice_commands.mode),
+        router: {
+            let mut router = Router::new(config.voice_commands.mode);
+            router.set_stop_phrases(&config.dictation.wake.stop_phrases);
+            router
+        },
         registry: Registry::new(
             config
                 .voice_commands
@@ -864,6 +868,9 @@ impl Engine {
             // the live dictation/router fallback, even in Dictation mode.
             return Ok(());
         }
+        if self.shared.take_wake_started() {
+            self.router.arm_wake_strip(&self.config.dictation.wake.strip_words, 3);
+        }
         if let Some(safe) = self.router.word(word) {
             self.buffer.push(safe);
             if let Some(typed) = self.buffer.flush_ready(
@@ -1013,7 +1020,7 @@ impl Engine {
                 self.shared.emit(DictationEvent::VoiceMode {
                     status: self.router.status(),
                 });
-                if key == "ears cancel" {
+                if key == "ears cancel" || key == super::voice_commands::STOP_KEY {
                     self.shared.emit(DictationEvent::Cancelled);
                     self.shared.set_capturing(false);
                 }
@@ -1058,6 +1065,70 @@ mod tests {
     use crate::virtual_keyboard::VirtualKeyboard;
     use std::sync::Arc;
     use std::time::Duration;
+
+    #[test]
+    fn wake_started_utterance_drops_the_phrase_and_stop_phrase_pauses() {
+        let dir = std::env::temp_dir().join(format!("ears-engine-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut config = AppConfig::default();
+        config.replacement.enabled = false;
+        config.transcripts.enabled = false;
+        config.dictation.wake.stop_phrases = vec!["okto stopp".into()];
+        let (events_tx, events_rx) = unbounded();
+        let (commands_tx, commands_rx) = unbounded();
+        let shared = Arc::new(Shared::new(&config, true, events_tx, commands_tx, true));
+        let recording = RecordingKeyboard::default();
+        let typed = recording.typed.clone();
+        let mut inserter = Inserter::new(InsertionMode::Clipboard).unwrap();
+        *inserter.keyboard() = Box::new(recording);
+        let mut router = Router::new(VoiceMode::Dictation);
+        router.set_stop_phrases(&config.dictation.wake.stop_phrases);
+        let mut engine = Engine {
+            replacement: ReplacementReloader::new(config.replacement.clone()),
+            recorder: TranscriptRecorder::new(config.transcripts.clone()),
+            buffer: LiveWordBuffer::new(Duration::from_millis(700)),
+            inserter,
+            profiles: None,
+            backend: BackendInfo::default(),
+            writer: None,
+            base_lang: None,
+            effective_lang: None,
+            base_insertion_mode: InsertionMode::Clipboard,
+            active_profile: None,
+            pinned_profile: None,
+            last_profile_eval: None,
+            was_capturing: true,
+            utterance: Vec::new(),
+            router,
+            registry: Registry::new(dir.join("commands.toml")),
+            just_finished: false,
+            ping_sent: Arc::new(Mutex::new(None)),
+            history: None,
+            config,
+            options: DictationOptions::default(),
+            shared: shared.clone(),
+            commands: commands_rx,
+        };
+        let say = |engine: &mut Engine, words: &[&str]| {
+            for word in words {
+                engine.handle_message(&serde_json::json!({"type":"word","word":word})).unwrap();
+            }
+            engine.handle_message(&serde_json::json!({"type":"speech","active":false})).unwrap();
+        };
+        // the wake path set capture on and marked the pre-roll
+        shared.mark_wake_started();
+        say(&mut engine, &["Hey", "Okto,", "schreib", "bitte"]);
+        assert_eq!(&*typed.lock().unwrap(), "schreib bitte ");
+        // a stop phrase pauses capture and types nothing
+        say(&mut engine, &["Okto,", "stopp."]);
+        assert_eq!(&*typed.lock().unwrap(), "schreib bitte ");
+        assert!(!shared.is_capturing(), "stop phrase paused capture");
+        assert!(events_rx.try_iter().any(|e| matches!(e, DictationEvent::Cancelled)));
+        // a hotkey start does not strip anything
+        shared.set_capturing(true);
+        say(&mut engine, &["Hey", "Anna"]);
+        assert_eq!(&*typed.lock().unwrap(), "schreib bitte Hey Anna ");
+    }
 
     #[test]
     fn message_path_previews_each_word_without_partial_execution() {

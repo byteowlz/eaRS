@@ -152,6 +152,20 @@ const CONTROLS: [&str; 7] = [
     "ears what mode",
 ];
 
+/// Control key returned for a configured stop phrase (pauses capture like `eaRS cancel`).
+pub const STOP_KEY: &str = "stop phrase";
+
+/// Looser comparison for spoken wake/stop phrases: every punctuation mark is a word
+/// boundary ("Okto, stopp." == "okto stopp"), so ASR punctuation cannot defeat them.
+pub fn loose(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' { c.to_lowercase().next().unwrap_or(c) } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Route {
     Type(String),
@@ -168,6 +182,14 @@ pub struct Router {
     typing: bool,
     pending: Vec<String>,
     streaming: bool,
+    /// Configured stop phrases (loose form). Utterance-initial words that could start
+    /// one are held like the `eaRS` prefix; a whole-utterance match pauses capture.
+    stop_phrases: Vec<String>,
+    /// After a wake, the pre-roll audio begins with the wake phrase itself: drop up to
+    /// `strip_budget` leading words found in `strip_words`, once.
+    strip_words: Vec<String>,
+    strip_budget: usize,
+    stripped: usize,
 }
 
 impl Router {
@@ -177,7 +199,26 @@ impl Router {
             typing: false,
             pending: Vec::new(),
             streaming: false,
+            stop_phrases: Vec::new(),
+            strip_words: Vec::new(),
+            strip_budget: 0,
+            stripped: 0,
         }
+    }
+
+    pub fn set_stop_phrases(&mut self, phrases: &[String]) {
+        self.stop_phrases = phrases.iter().map(|p| loose(p)).filter(|p| !p.is_empty()).collect();
+    }
+
+    /// Arm a one-shot strip of the wake phrase at the start of the next utterance.
+    pub fn arm_wake_strip(&mut self, words: &[String], max_words: usize) {
+        self.strip_words = words.iter().map(|w| loose(w)).collect();
+        self.strip_budget = max_words;
+        self.stripped = 0;
+    }
+
+    fn holds_stop_prefix(&self, candidate: &str) -> bool {
+        self.stop_phrases.iter().any(|p| p == candidate || p.starts_with(&format!("{candidate} ")))
     }
 
     fn live(&self) -> bool {
@@ -190,6 +231,14 @@ impl Router {
         if self.streaming {
             return Some(word.to_owned());
         }
+        if self.strip_budget > 0 && self.pending.is_empty() {
+            if self.strip_words.contains(&loose(word)) {
+                self.strip_budget -= 1;
+                self.stripped += 1;
+                return None;
+            }
+            self.strip_budget = 0;
+        }
         self.pending.push(word.to_owned());
         if !self.live() {
             return None;
@@ -198,6 +247,7 @@ impl Router {
         if CONTROLS
             .iter()
             .any(|control| *control == candidate || control.starts_with(&(candidate.clone() + " ")))
+            || self.holds_stop_prefix(&loose(&self.pending.join(" ")))
         {
             None
         } else {
@@ -210,6 +260,29 @@ impl Router {
         let raw = self.pending.join(" ");
         self.pending.clear();
         let streamed = std::mem::replace(&mut self.streaming, false);
+        // Drop the stripped wake-phrase words from the boundary text as well.
+        let stripped = std::mem::take(&mut self.stripped);
+        self.strip_budget = 0;
+        let kept: String;
+        let normalized = if stripped > 0 {
+            let mut words = normalized.split_whitespace().peekable();
+            for _ in 0..stripped {
+                if words.peek().is_some_and(|w| self.strip_words.contains(&loose(w))) {
+                    words.next();
+                }
+            }
+            kept = words.collect::<Vec<_>>().join(" ");
+            if kept.is_empty() {
+                return Route::Discard; // only the wake phrase was heard
+            }
+            kept.as_str()
+        } else {
+            normalized
+        };
+        if !streamed && !self.stop_phrases.is_empty() && self.stop_phrases.contains(&loose(normalized)) {
+            self.cancel();
+            return Route::Control(STOP_KEY.to_owned());
+        }
         // A control is eligible only if the leading raw token was eaRS and
         // nothing has already been inserted. Never retract speculative keys.
         let key = canonical(normalized);
@@ -287,6 +360,57 @@ mod tests {
         fs::write(&path, "[[command]]\nphrase = 'open notes'\nrisk = 'safe'\naction = { type = 'literal_text', text = 'NOTES' }\n").unwrap();
         Registry::new(path)
     }
+    #[test]
+    fn stop_phrase_pauses_without_typing_and_only_at_utterance_start() {
+        let reg = registry();
+        let mut r = Router::new(VoiceMode::Dictation);
+        r.set_stop_phrases(&["oqto stopp".into(), "okto stopp".into()]);
+        assert_eq!(r.word("Okto,"), None, "a possible stop prefix is held");
+        assert_eq!(r.word("stopp."), None);
+        assert_eq!(r.finish("Okto, stopp.", &reg), Route::Control(STOP_KEY.into()));
+        // the same word followed by something else is released and typed
+        assert_eq!(r.word("Okto"), None);
+        assert_eq!(r.word("ist"), Some("Okto ist".into()));
+        assert_eq!(r.finish("Okto ist", &reg), Route::Streamed);
+        // mid-utterance it is ordinary dictation
+        assert_eq!(r.word("ich"), Some("ich".into()));
+        assert_eq!(r.word("sage"), Some("sage".into()));
+        assert_eq!(r.word("Okto"), Some("Okto".into()));
+        assert_eq!(r.word("stopp"), Some("stopp".into()));
+        assert_eq!(r.finish("ich sage Okto stopp", &reg), Route::Streamed);
+        // no stop phrases configured: nothing is held
+        let mut plain = Router::new(VoiceMode::Dictation);
+        assert_eq!(plain.word("Okto"), Some("Okto".into()));
+    }
+
+    #[test]
+    fn wake_strip_drops_the_phrase_once() {
+        let reg = registry();
+        let words: Vec<String> = ["hey", "okto", "oqto"].map(String::from).to_vec();
+        let mut r = Router::new(VoiceMode::Dictation);
+        r.arm_wake_strip(&words, 3);
+        assert_eq!(r.word("Hey,"), None);
+        assert_eq!(r.word("Okto."), None);
+        assert_eq!(r.word("Schreib"), Some("Schreib".into()));
+        assert_eq!(r.word("Okto"), Some("Okto".into()), "only leading words are stripped");
+        assert_eq!(r.finish("Hey, Okto. Schreib Okto", &reg), Route::Streamed);
+        // the next utterance is untouched
+        assert_eq!(r.word("Hey"), Some("Hey".into()));
+        assert_eq!(r.finish("Hey", &reg), Route::Streamed);
+        // only the wake phrase was heard: nothing is typed at the boundary
+        r.arm_wake_strip(&words, 3);
+        assert_eq!(r.word("Hey"), None);
+        assert_eq!(r.word("Okto"), None);
+        assert_eq!(r.finish("Hey Okto", &reg), Route::Discard);
+        // in command-aware mode the boundary text loses the phrase too
+        let mut c = Router::new(VoiceMode::CommandAware);
+        c.arm_wake_strip(&words, 3);
+        c.word("Hey");
+        c.word("Okto");
+        c.word("hallo");
+        assert_eq!(c.finish("Hey Okto hallo", &reg), Route::Type("hallo".into()));
+    }
+
     #[test]
     fn routing_and_prefix() {
         let reg = registry();

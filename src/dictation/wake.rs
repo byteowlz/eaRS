@@ -31,7 +31,7 @@ pub enum WakeAction {
 }
 
 /// `[dictation.wake]`. Off by default; nothing runs unless `enabled` and `command` are set.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WakeConfig {
     pub enabled: bool,
@@ -42,6 +42,38 @@ pub struct WakeConfig {
     pub actions: HashMap<String, WakeAction>,
     /// Optional extra floor on top of the detector's own threshold.
     pub min_score: Option<f32>,
+    /// Audio before the detection sent to the server after a wake, so the first words
+    /// after the phrase are not lost. The phrase itself is then stripped (`strip_words`).
+    pub preroll_ms: u32,
+    /// Leading words dropped once after a wake (the wake phrase as the ASR spells it).
+    pub strip_words: Vec<String>,
+    /// Whole utterances that pause capture without typing (e.g. "oqto stopp"). Works
+    /// with or without a detector; matched after punctuation is removed.
+    pub stop_phrases: Vec<String>,
+    /// Write every detection and near miss (no audio) to a local JSONL log.
+    pub log: bool,
+    /// Log path; empty = $XDG_STATE_HOME/ears/wake-log.jsonl.
+    pub log_path: String,
+}
+
+impl Default for WakeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            command: Vec::new(),
+            actions: HashMap::new(),
+            min_score: None,
+            preroll_ms: 1500,
+            strip_words: [
+                "hey", "hi", "he", "hej", "ey", "oqto", "okto", "octo", "otto", "ok", "to", "okay",
+            ]
+            .map(String::from)
+            .to_vec(),
+            stop_phrases: Vec::new(),
+            log: true,
+            log_path: String::new(),
+        }
+    }
 }
 
 impl WakeConfig {
@@ -82,6 +114,8 @@ pub struct Ready {
 #[derive(Debug, Clone, PartialEq)]
 pub enum WakeMessage {
     Detection(Detection),
+    /// Near miss below the detector's threshold: logged, never acted upon.
+    Candidate(Detection),
     Error(String),
     Exited,
 }
@@ -259,9 +293,14 @@ fn read_events(
                 readied = true;
                 let _ = ready.send(serde_json::from_value(value).map_err(|e| e.to_string()));
             }
-            Some("detection") => {
+            Some(kind @ ("detection" | "candidate")) => {
+                let candidate = kind == "candidate";
                 if let Ok(d) = serde_json::from_value::<Detection>(value) {
-                    let _ = events.send(WakeMessage::Detection(d));
+                    let _ = events.send(if candidate {
+                        WakeMessage::Candidate(d)
+                    } else {
+                        WakeMessage::Detection(d)
+                    });
                 }
             }
             Some("error") => {
@@ -286,9 +325,55 @@ fn read_events(
     let _ = events.send(WakeMessage::Exited);
 }
 
-/// Start the detector and the tee: every captured chunk goes to the engine; while capture is
-/// paused it also goes to the detector. If the detector cannot start, audio still flows to
-/// the engine and the failure is reported, so dictation never depends on the wake path.
+/// Local JSONL log of detections and near misses (no audio). Failures disable it quietly.
+struct WakeLog(Option<std::fs::File>);
+
+impl WakeLog {
+    fn open(config: &WakeConfig) -> Self {
+        if !config.log {
+            return Self(None);
+        }
+        let path = if config.log_path.is_empty() {
+            let state = std::env::var_os("XDG_STATE_HOME")
+                .map(std::path::PathBuf::from)
+                .or_else(|| dirs::home_dir().map(|h| h.join(".local/state")));
+            match state {
+                Some(dir) => dir.join("ears").join("wake-log.jsonl"),
+                None => return Self(None),
+            }
+        } else {
+            std::path::PathBuf::from(&config.log_path)
+        };
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).append(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        Self(options.open(&path).ok())
+    }
+
+    fn write(&mut self, kind: &str, d: &Detection, outcome: &str) {
+        let line = serde_json::json!({
+            "at": time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
+            "type": kind, "phrase": d.phrase, "score": d.score, "at_sample": d.at_sample, "outcome": outcome,
+        });
+        if let Some(file) = self.0.as_mut() {
+            let _ = writeln!(file, "{line}");
+        }
+    }
+}
+
+/// Pre-roll position requested by a wake: detector-domain (16 kHz) sample of the detection.
+type PrerollRequest = std::sync::Arc<std::sync::Mutex<Option<u64>>>;
+
+/// Start the detector and the tee. While capture is paused, captured audio goes to the
+/// detector and into a short ring buffer, not to the engine. When a mapped phrase starts
+/// capture, the ring from `preroll_ms` before the detection is sent to the engine first,
+/// so words right after the wake phrase are not lost; while capturing, every chunk goes
+/// to the engine as before. If the detector cannot start, audio flows to the engine
+/// exactly as without wake support and the failure is reported.
 pub(crate) fn spawn_tee(
     config: &WakeConfig,
     capture_rx: Receiver<Vec<f32>>,
@@ -322,27 +407,55 @@ pub(crate) fn spawn_tee(
             None
         }
     };
+    let preroll: PrerollRequest = Default::default();
 
     if let Some(client) = &client {
         let messages = client.messages.clone();
         let config = config.clone();
         let shared = shared.clone();
+        let preroll = preroll.clone();
+        let mut log = WakeLog::open(&config);
         std::thread::Builder::new()
             .name("ears-wake-events".into())
             .spawn(move || {
                 for message in messages {
                     match message {
                         WakeMessage::Detection(d) => {
-                            if shared.is_capturing() {
-                                continue;
-                            }
-                            if config.decide(&d.phrase, d.score) == Some(WakeAction::StartDictation)
-                                && shared.set_capturing(true)
-                            {
-                                shared.emit(super::DictationEvent::Wake {
-                                    phrase: d.phrase,
-                                    score: d.score,
-                                });
+                            let outcome = if shared.is_capturing() {
+                                "already_capturing"
+                            } else {
+                                match config.decide(&d.phrase, d.score) {
+                                    Some(WakeAction::StartDictation) => {
+                                        *preroll.lock().unwrap() = Some(d.at_sample);
+                                        shared.mark_wake_started();
+                                        if shared.set_capturing(true) {
+                                            shared.emit(super::DictationEvent::Wake {
+                                                phrase: d.phrase.clone(),
+                                                score: d.score,
+                                            });
+                                            "started"
+                                        } else {
+                                            "already_capturing"
+                                        }
+                                    }
+                                    _ if config.actions.get(&d.phrase)
+                                        == Some(&WakeAction::Ignore) =>
+                                    {
+                                        "ignored"
+                                    }
+                                    _ if config.actions.contains_key(&d.phrase) => {
+                                        "below_min_score"
+                                    }
+                                    _ => "unmapped",
+                                }
+                            };
+                            eprintln!("wake: {} {:.2} -> {outcome}", d.phrase, d.score);
+                            log.write("detection", &d, outcome);
+                        }
+                        WakeMessage::Candidate(d) => {
+                            if !shared.is_capturing() {
+                                eprintln!("wake: near miss {} {:.2}", d.phrase, d.score);
+                                log.write("candidate", &d, "none");
                             }
                         }
                         WakeMessage::Error(message) => shared.emit(super::DictationEvent::Error {
@@ -360,31 +473,69 @@ pub(crate) fn spawn_tee(
             .context("spawning wake event thread")?;
     }
 
+    let preroll_samples = config.preroll_ms as u64 * CAPTURE_RATE as u64 / 1000;
     std::thread::Builder::new()
         .name("ears-wake-tee".into())
         .spawn(move || {
             let mut client = client;
             let mut was_capturing = true; // reset the detector on the first paused chunk
+            let mut ring: std::collections::VecDeque<f32> = std::collections::VecDeque::new();
+            let ring_cap = CAPTURE_RATE * 4;
+            let mut fed: u64 = 0; // capture-rate samples fed to the detector since its last reset
             for chunk in capture_rx {
                 let capturing = shared.is_capturing();
-                if let Some(detector) = client.as_mut().filter(|_| !capturing) {
-                    let result = if was_capturing {
-                        detector.reset()
-                    } else {
-                        Ok(())
+                if client.is_none() {
+                    // No detector: behave exactly like eaRS without wake support.
+                    if engine_tx.send(chunk).is_err() {
+                        break;
                     }
-                    .and_then(|_| detector.push_capture(&chunk));
-                    if let Err(err) = result {
-                        shared.emit(super::DictationEvent::Error {
-                            message: format!("wake detector stopped: {err}"),
-                        });
-                        client = None;
+                    continue;
+                }
+                if capturing {
+                    if !was_capturing {
+                        if let Some(at) = preroll.lock().unwrap().take() {
+                            let at_capture = at * CAPTURE_RATE as u64 / DETECTOR_RATE as u64;
+                            let start = at_capture.saturating_sub(preroll_samples);
+                            let ring_start = fed - ring.len() as u64;
+                            let skip = start.saturating_sub(ring_start) as usize;
+                            let audio: Vec<f32> = ring.iter().skip(skip).copied().collect();
+                            for piece in audio.chunks(CAPTURE_RATE / 50) {
+                                if engine_tx.send(piece.to_vec()).is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                        ring.clear();
                     }
+                    was_capturing = true;
+                    if engine_tx.send(chunk).is_err() {
+                        break;
+                    }
+                    continue;
                 }
-                was_capturing = capturing;
-                if engine_tx.send(chunk).is_err() {
-                    break;
+                let detector = client.as_mut().unwrap();
+                let mut result = Ok(());
+                if was_capturing {
+                    result = detector.reset();
+                    ring.clear();
+                    fed = 0;
+                    preroll.lock().unwrap().take();
                 }
+                if result.is_ok() {
+                    result = detector.push_capture(&chunk);
+                }
+                if let Err(err) = result {
+                    shared.emit(super::DictationEvent::Error {
+                        message: format!("wake detector stopped: {err}"),
+                    });
+                    client = None;
+                }
+                fed += chunk.len() as u64;
+                ring.extend(chunk.iter().copied());
+                while ring.len() > ring_cap {
+                    ring.pop_front();
+                }
+                was_capturing = false;
             }
         })
         .context("spawning wake tee thread")?;
@@ -482,14 +633,19 @@ mod tests {
         vec!["python3".into(), script.to_string_lossy().into_owned()]
     }
 
+    /// Runs the tee with a fake detector. Each captured sample's value encodes its index
+    /// (index * 1e-6), so the engine side can tell exactly which audio it received.
     fn run_tee(
         command: Vec<String>,
         actions: &[(&str, WakeAction)],
-    ) -> (bool, Vec<super::super::DictationEvent>) {
+        preroll_ms: u32,
+    ) -> (bool, Vec<super::super::DictationEvent>, Vec<f32>) {
         use super::super::{DictationEvent, Shared};
         let mut wake = WakeConfig {
             enabled: true,
             command,
+            preroll_ms,
+            log: false,
             ..Default::default()
         };
         for (phrase, action) in actions {
@@ -502,28 +658,36 @@ mod tests {
         let (capture_tx, capture_rx) = unbounded();
         let (engine_tx, engine_rx) = unbounded();
         spawn_tee(&wake, capture_rx, engine_tx, shared.clone()).unwrap();
+        let mut index = 0usize;
+        let mut chunk = || {
+            let c: Vec<f32> = (index..index + 480).map(|i| i as f32 * 1e-6).collect();
+            index += 480;
+            c
+        };
         for _ in 0..100 {
-            capture_tx.send(vec![0.01f32; 480]).unwrap(); // 2 s of 24 kHz audio in capture-sized chunks
+            capture_tx.send(chunk()).unwrap(); // 2 s paused
         }
-        for _ in 0..100 {
-            engine_rx
-                .recv_timeout(Duration::from_secs(5))
-                .expect("engine still receives every chunk");
+        std::thread::sleep(Duration::from_millis(800)); // the fake detector reports after 1 s of audio
+        for _ in 0..10 {
+            capture_tx.send(chunk()).unwrap(); // 0.2 s more, after the wake (if any)
         }
-        std::thread::sleep(Duration::from_millis(800));
+        std::thread::sleep(Duration::from_millis(300));
+        let received: Vec<f32> = engine_rx.try_iter().flatten().collect();
         let events: Vec<DictationEvent> = events_rx.try_iter().collect();
-        (shared.is_capturing(), events)
+        (shared.is_capturing(), events, received)
     }
 
     #[test]
-    fn detection_starts_dictation_and_unmapped_phrases_do_not() {
+    fn detection_starts_dictation_with_preroll_and_unmapped_phrases_do_not() {
         use super::super::DictationEvent;
         let dir = std::env::temp_dir().join(format!("ears-wake-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
+        // detection at 16 kHz sample 16000 = capture sample 24000 (1.0 s)
         let line = r#"{"type":"detection","phrase":"hey_oqto","score":0.91,"at_sample":16000}"#;
-        let (capturing, events) = run_tee(
+        let (capturing, events, received) = run_tee(
             fake_detector(&dir, line),
             &[("hey_oqto", WakeAction::StartDictation)],
+            500,
         );
         assert!(capturing, "a mapped detection starts capture");
         assert!(
@@ -531,14 +695,35 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, DictationEvent::Wake { phrase, .. } if phrase == "hey_oqto"))
         );
+        let first = (received[0] / 1e-6).round() as i64;
+        assert!(
+            (first - 12_000).abs() < 50,
+            "pre-roll starts 500 ms before the detection, got sample {first}"
+        );
+        let mut previous = first - 1;
+        for &x in &received {
+            let i = (x / 1e-6).round() as i64;
+            assert_eq!(
+                i,
+                previous + 1,
+                "pre-roll then live audio, contiguous, no duplicates"
+            );
+            previous = i;
+        }
+        assert_eq!(
+            previous,
+            110 * 480 - 1,
+            "every chunk after the wake reached the engine"
+        );
 
         let other = r#"{"type":"detection","phrase":"oqto","score":0.99,"at_sample":16000}"#;
-        let (capturing, events) = run_tee(
+        let (capturing, events, received) = run_tee(
             fake_detector(&dir, other),
             &[
                 ("hey_oqto", WakeAction::StartDictation),
                 ("oqto", WakeAction::Ignore),
             ],
+            500,
         );
         assert!(!capturing, "an ignored phrase does nothing");
         assert!(
@@ -546,13 +731,20 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, DictationEvent::Wake { .. }))
         );
+        assert!(received.is_empty(), "paused audio never reaches the engine");
 
-        let (capturing, events) = run_tee(
+        let (capturing, events, received) = run_tee(
             vec!["/nonexistent/wake-detector".into()],
             &[("hey_oqto", WakeAction::StartDictation)],
+            500,
         );
         assert!(!capturing);
         assert!(events.iter().any(|e| matches!(e, DictationEvent::Error { message } if message.contains("wake detector unavailable"))));
+        assert_eq!(
+            received.len(),
+            110 * 480,
+            "without a detector, audio flows to the engine as before"
+        );
     }
 
     /// Real detector over the real protocol, with 24 kHz input as captured by eaRS.

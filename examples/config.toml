@@ -113,8 +113,16 @@ pause_on_secure_input = true
 # does: start capture. It never authenticates a speaker or runs an action itself.
 [dictation.wake]
 enabled = false
-command = ["wake", "listen", "--manifest", "/path/to/wake-models/<release>"]
+# --report-above makes the detector also report near misses (logged only)
+command = ["wake", "listen", "--manifest", "/path/to/wake-models/<release>", "--report-above", "0.3"]
 # min_score = 0.6           # optional floor on top of the detector's own threshold
+preroll_ms = 1500           # audio before the detection sent after a wake (first words are kept)
+# strip_words: leading words dropped once after a wake (the phrase as the ASR spells it)
+# strip_words = ["hey", "hi", "he", "hej", "ey", "oqto", "okto", "octo", "otto", "ok", "to", "okay"]
+# Whole utterances that pause capture without typing; work with or without a detector
+stop_phrases = ["oqto stopp", "okto stopp", "otto stopp", "oqto stop", "okto stop", "octo stop"]
+log = true                  # detections and near misses (no audio), $XDG_STATE_HOME/ears/wake-log.jsonl
+# log_path = ""
 [dictation.wake.actions]
 hey_oqto = "start_dictation"
 # oqto = "ignore"           # recognised, deliberately unused

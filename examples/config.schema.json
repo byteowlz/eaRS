@@ -302,6 +302,52 @@
               "maximum": 1,
               "default": null,
               "description": "Optional extra score floor on top of the detector's threshold"
+            },
+            "preroll_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4000,
+              "default": 1500,
+              "description": "Audio before the detection sent to the server after a wake so the first words are kept"
+            },
+            "strip_words": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": [
+                "hey",
+                "hi",
+                "he",
+                "hej",
+                "ey",
+                "oqto",
+                "okto",
+                "octo",
+                "otto",
+                "ok",
+                "to",
+                "okay"
+              ],
+              "description": "Leading words dropped once after a wake (the wake phrase as the ASR spells it)"
+            },
+            "stop_phrases": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": [],
+              "description": "Whole utterances that pause capture without typing; punctuation is ignored"
+            },
+            "log": {
+              "type": "boolean",
+              "default": true,
+              "description": "Write detections and near misses (no audio) to a local JSONL log"
+            },
+            "log_path": {
+              "type": "string",
+              "default": "",
+              "description": "Log path; empty uses $XDG_STATE_HOME/ears/wake-log.jsonl"
             }
           },
           "additionalProperties": false

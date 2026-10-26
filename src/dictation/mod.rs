@@ -300,6 +300,9 @@ pub(crate) struct Shared {
     hooks: crate::config::DictationHooksConfig,
     events: Sender<DictationEvent>,
     commands: Sender<DictationCommand>,
+    /// Set by the wake path right before it starts capture: the next utterance begins
+    /// with pre-roll audio that contains the wake phrase.
+    wake_started: AtomicBool,
 }
 
 impl Shared {
@@ -322,7 +325,16 @@ impl Shared {
             hooks: config.dictation.hooks.clone(),
             events,
             commands,
+            wake_started: AtomicBool::new(false),
         }
+    }
+
+    pub(crate) fn mark_wake_started(&self) {
+        self.wake_started.store(true, Ordering::SeqCst);
+    }
+
+    pub(crate) fn take_wake_started(&self) -> bool {
+        self.wake_started.swap(false, Ordering::SeqCst)
     }
 
     pub(crate) fn is_running(&self) -> bool {
@@ -373,6 +385,9 @@ impl Shared {
         }
         *guard = on;
         drop(guard);
+        if !on {
+            self.wake_started.store(false, Ordering::SeqCst);
+        }
         self.set_state(if on {
             DictationState::Listening
         } else {
