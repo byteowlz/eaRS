@@ -65,6 +65,9 @@ pub struct AppModel {
     pub backend: Option<BackendInfo>,
     pub partial: String,
     pub voice_mode: String,
+    /// Audio retention is on (trx-63fk). Not rendered yet: the indicator
+    /// needs a Design Studio decision.
+    pub audio_history: bool,
     pub last_utterance: Option<String>,
     pub last_prompt: Option<String>,
     pub speech_active: bool,
@@ -104,6 +107,7 @@ impl AppModel {
             backend: None,
             partial: String::new(),
             voice_mode: "Dictation".into(),
+            audio_history: false,
             last_utterance: None,
             last_prompt: None,
             speech_active: false,
@@ -255,6 +259,9 @@ impl AppModel {
             }
             DictationEvent::Language(lang) => {
                 self.language = Some(lang);
+            }
+            DictationEvent::AudioHistory { active, .. } => {
+                self.audio_history = active;
             }
             DictationEvent::PromptReady { text } => {
                 self.last_prompt = Some(text);

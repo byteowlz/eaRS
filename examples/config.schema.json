@@ -189,6 +189,59 @@
           },
           "additionalProperties": false
         },
+        "audio_history": {
+          "type": "object",
+          "description": "Opt-in local retention of dictation audio for the owner's own training/evaluation data. Off by default; local only; never marks data training-eligible.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "Keep one WAV plus metadata per committed dictation utterance"
+            },
+            "path": {
+              "type": "string",
+              "default": "default",
+              "description": "History directory, or \"default\" for $XDG_STATE_HOME/ears/audio-history. Must not be inside a git repository"
+            },
+            "max_total_mb": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 2048,
+              "description": "Total size cap; oldest utterances are deleted first"
+            },
+            "max_age_days": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 90,
+              "description": "Delete utterances older than this (0 keeps them indefinitely)"
+            },
+            "pre_roll_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 1000,
+              "description": "Audio kept before the first recognised word"
+            },
+            "max_utterance_secs": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 120,
+              "description": "Longest utterance kept"
+            },
+            "excluded_apps": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Bundle ids, binaries or app names (case-insensitive) during which nothing is retained; defaults to common password managers"
+            },
+            "pause_on_secure_input": {
+              "type": "boolean",
+              "default": true,
+              "description": "Pause retention while macOS Secure Event Input is active"
+            }
+          },
+          "additionalProperties": false
+        },
         "hooks": {
           "type": "object",
           "description": "Dictation hooks (requires compiling with --features hooks)",

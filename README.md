@@ -416,6 +416,31 @@ Unchanged live words omit the `replaced` field by default:
 
 Buffers flush every few seconds, after enough events, on disconnect, and on shutdown. This avoids writing to disk for every live word while keeping recent dictation persisted.
 
+## Audio history (opt-in)
+
+With `[dictation.audio_history] enabled = true`, dictation also keeps the audio of every committed utterance, so your own dictation becomes training and evaluation data (your voice, microphones and vocabulary). It is off by default and never enabled implicitly. While it is on, the "Dictation enabled" notification says `(audio history on)` and `ears dictation status` reports it.
+
+```text
+$XDG_STATE_HOME/ears/audio-history/index.jsonl                 # one record per utterance
+$XDG_STATE_HOME/ears/audio-history/audio/YYYY-MM-DD/<id>.wav   # mono 16-bit, 24 kHz
+```
+
+Each record holds the utterance ID, UTC time, session ID, engine, backend, language, input device, duration, SHA-256, raw and dictionary-replaced transcript, the inserted text and the target app's bundle id (never a window title), with `label_status = "unreviewed"` and `training_eligible = false`.
+
+- Local only: directories are `0700`, files `0600`, and a path inside a git repository is refused.
+- Nothing is kept while an excluded app (password managers by default) is frontmost or while macOS Secure Event Input is active.
+- `max_total_mb` and `max_age_days` delete the oldest utterances first.
+- Only enable it for your own speech; do not retain meetings or other people. Keeping audio is not consent to voice cloning, speaker enrollment, upload or redistribution.
+
+```bash
+ears dictation history path                       # directory and whether retention is on
+ears dictation history list [--json]
+ears dictation history export --out DIR           # copies audio + manifest.jsonl with session-disjoint split hints
+ears dictation history purge --id ID | --session ID | --before YYYY-MM-DD | --all
+```
+
+Utterance audio is cut from the first recognised word (minus `pre_roll_ms`) to the server's end-of-speech boundary, by arrival time. It is suitable as training data but is not authoritative speaker-gate evidence.
+
 ## Configuration
 
 Runtime configuration lives at:

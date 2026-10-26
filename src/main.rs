@@ -105,6 +105,53 @@ enum DictationCommand {
     Status,
     #[command(about = "Run dictation in foreground with debug output")]
     Debug(DictationStartArgs),
+    /// Inspect, export or delete retained dictation audio
+    /// ([dictation.audio_history], off by default).
+    #[command(subcommand)]
+    History(HistoryCommand),
+}
+
+#[derive(Subcommand)]
+enum HistoryCommand {
+    /// Print the audio history directory and whether retention is enabled.
+    Path,
+    /// List retained utterances, oldest first.
+    List(HistoryListArgs),
+    /// Copy all retained audio plus a manifest.jsonl (session-disjoint split
+    /// hints) to a directory.
+    Export(HistoryExportArgs),
+    /// Delete utterances together with their audio. Filters combine.
+    Purge(HistoryPurgeArgs),
+}
+
+#[derive(Args)]
+struct HistoryListArgs {
+    /// One JSON record per line.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args)]
+struct HistoryExportArgs {
+    /// Target directory (created; must not already contain an export).
+    #[arg(long)]
+    out: std::path::PathBuf,
+}
+
+#[derive(Args)]
+struct HistoryPurgeArgs {
+    /// Delete everything.
+    #[arg(long, conflicts_with_all = ["before", "session", "id"])]
+    all: bool,
+    /// Delete utterances recorded before this UTC date (YYYY-MM-DD).
+    #[arg(long)]
+    before: Option<String>,
+    /// Delete one dictation session.
+    #[arg(long)]
+    session: Option<String>,
+    /// Delete one utterance.
+    #[arg(long)]
+    id: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -495,7 +542,78 @@ fn handle_dictation_command(command: DictationCommand) -> Result<()> {
         DictationCommand::Stop => stop_dictation(),
         DictationCommand::Status => check_dictation_status(),
         DictationCommand::Debug(args) => run_dictation_foreground(&args),
+        DictationCommand::History(command) => handle_history_command(command),
     }
+}
+
+fn handle_history_command(command: HistoryCommand) -> Result<()> {
+    use ears::dictation::audio_history;
+    let config = AppConfig::load()?;
+    let history = &config.dictation.audio_history;
+    let dir = audio_history::history_dir(&history.path);
+    match command {
+        HistoryCommand::Path => {
+            println!("{}", dir.display());
+            println!(
+                "retention: {}",
+                if history.enabled {
+                    "enabled"
+                } else {
+                    "disabled ([dictation.audio_history] enabled = false)"
+                }
+            );
+        }
+        HistoryCommand::List(args) => {
+            let records = audio_history::load_records(&dir)?;
+            for record in &records {
+                if args.json {
+                    println!("{}", serde_json::to_string(record)?);
+                } else {
+                    println!(
+                        "{}  {}  {:>5.1}s  session {}  {}",
+                        record.recorded_at,
+                        record.id,
+                        record.duration_secs,
+                        &record.session_id[..8.min(record.session_id.len())],
+                        record.replaced_transcript
+                    );
+                }
+            }
+            if !args.json {
+                let bytes: u64 = records.iter().map(|r| r.bytes).sum();
+                println!(
+                    "{} utterance(s), {:.1} MB in {}",
+                    records.len(),
+                    bytes as f64 / 1_048_576.0,
+                    dir.display()
+                );
+            }
+        }
+        HistoryCommand::Export(args) => {
+            if args.out.join("manifest.jsonl").exists() {
+                return Err(anyhow!(
+                    "{} already contains an export",
+                    args.out.display()
+                ));
+            }
+            let count = audio_history::export(&dir, &args.out)?;
+            println!(
+                "exported {count} utterance(s) to {} (manifest.jsonl); records stay training_eligible=false until you decide otherwise",
+                args.out.display()
+            );
+        }
+        HistoryCommand::Purge(args) => {
+            let filter = audio_history::PurgeFilter {
+                all: args.all,
+                before: args.before,
+                session_id: args.session,
+                id: args.id,
+            };
+            let removed = audio_history::purge(&dir, &filter)?;
+            println!("deleted {} utterance(s) and their audio", removed.len());
+        }
+    }
+    Ok(())
 }
 
 fn handle_dictionary_command(command: DictionaryCommand) -> Result<()> {
@@ -2184,6 +2302,15 @@ fn stop_dictation() -> Result<()> {
 }
 
 fn check_dictation_status() -> Result<()> {
+    if let Ok(config) = AppConfig::load() {
+        if config.dictation.audio_history.enabled {
+            println!(
+                "audio history: ON ({})",
+                ears::dictation::audio_history::history_dir(&config.dictation.audio_history.path)
+                    .display()
+            );
+        }
+    }
     match read_dictation_pid()? {
         Some(pid) => {
             if server::is_process_alive(pid) {

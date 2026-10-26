@@ -12,6 +12,7 @@
 //! through [`DictationHandle`]. All behaviour lives here; front ends only render
 //! state and forward user intent.
 
+pub mod audio_history;
 mod engine;
 pub mod hotkeys;
 pub mod typing;
@@ -183,6 +184,9 @@ pub enum DictationEvent {
     /// In [`InsertionMode::SendAsPrompt`], capture stopped and this is the
     /// accumulated text.
     PromptReady { text: String },
+    /// Audio retention state: `active` while utterance audio is being kept.
+    /// `note` explains a skipped utterance (excluded app, secure input).
+    AudioHistory { active: bool, note: Option<String> },
     /// Non-fatal error worth showing to the user.
     Error { message: String },
     /// The engine loop exited.
@@ -286,6 +290,8 @@ pub(crate) struct Shared {
     escape_cancels: Mutex<bool>,
     running: AtomicBool,
     notifications: DictationNotificationConfig,
+    /// Audio retention is configured on; the listening notification says so.
+    audio_history: bool,
     #[cfg(feature = "hooks")]
     hooks: crate::config::DictationHooksConfig,
     events: Sender<DictationEvent>,
@@ -307,6 +313,7 @@ impl Shared {
             running: AtomicBool::new(true),
             escape_cancels: Mutex::new(escape_cancels),
             notifications: config.dictation.notifications.clone(),
+            audio_history: config.dictation.audio_history.enabled,
             #[cfg(feature = "hooks")]
             hooks: config.dictation.hooks.clone(),
             events,
@@ -394,7 +401,7 @@ impl Shared {
         *guard = new_state;
         drop(guard);
         self.emit(DictationEvent::State(new_state));
-        send_toggle_notification(new_state, &self.notifications);
+        send_toggle_notification(new_state, &self.notifications, self.audio_history);
         #[cfg(feature = "hooks")]
         if let Err(err) = run_hook_command(new_state, &self.hooks) {
             eprintln!("Failed to run dictation hook command: {}", err);
@@ -402,7 +409,11 @@ impl Shared {
     }
 }
 
-fn send_toggle_notification(state: DictationState, notifications: &DictationNotificationConfig) {
+fn send_toggle_notification(
+    state: DictationState,
+    notifications: &DictationNotificationConfig,
+    audio_history: bool,
+) {
     if !notifications.enabled {
         return;
     }
@@ -414,7 +425,13 @@ fn send_toggle_notification(state: DictationState, notifications: &DictationNoti
     if message.trim().is_empty() {
         return;
     }
-    if let Err(err) = notify("eaRS Dictation", message) {
+    // Retention must never be silent: every listening notice says it is on.
+    let message = if audio_history && state == DictationState::Listening {
+        format!("{message} (audio history on)")
+    } else {
+        message.to_string()
+    };
+    if let Err(err) = notify("eaRS Dictation", &message) {
         eprintln!("Failed to send dictation notification: {}", err);
     }
 }

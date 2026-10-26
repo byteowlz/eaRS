@@ -141,6 +141,9 @@ pub struct DictationConfig {
     pub servers: HashMap<String, DictationServerConfig>,
     #[serde(default)]
     pub notifications: DictationNotificationConfig,
+    /// Opt-in local retention of dictation audio (off by default).
+    #[serde(default)]
+    pub audio_history: crate::dictation::audio_history::AudioHistoryConfig,
     #[cfg(feature = "hooks")]
     #[serde(default)]
     pub hooks: DictationHooksConfig,
@@ -316,6 +319,7 @@ impl Default for DictationConfig {
             default_server: default_server_alias(),
             servers: default_servers(),
             notifications: DictationNotificationConfig::default(),
+            audio_history: Default::default(),
             #[cfg(feature = "hooks")]
             hooks: DictationHooksConfig::default(),
         }
@@ -522,15 +526,29 @@ mod tests {
     #[test]
     fn speaker_policy_is_opt_in_and_example_is_not_readiness() {
         use crate::speaker_gate::{Mode, Policy};
-        assert_eq!(AppConfig::default().voice_commands.speaker_policy, Policy::default());
+        assert_eq!(
+            AppConfig::default().voice_commands.speaker_policy,
+            Policy::default()
+        );
         let legacy: VoiceCommandsConfig = toml::from_str("mode = 'dictation'").unwrap();
         assert_eq!(legacy.speaker_policy.mode, Mode::Disabled);
-        let example: AppConfig = toml::from_str(include_str!("../examples/speaker-policy.toml")).unwrap();
+        let example: AppConfig =
+            toml::from_str(include_str!("../examples/speaker-policy.toml")).unwrap();
         assert_eq!(example.voice_commands.speaker_policy.mode, Mode::Allowlist);
-        assert_eq!(example.voice_commands.speaker_policy.allowed_voice_ids.len(), 2);
+        assert_eq!(
+            example
+                .voice_commands
+                .speaker_policy
+                .allowed_voice_ids
+                .len(),
+            2
+        );
         let saved = toml::to_string(&example).unwrap();
         let restored: AppConfig = toml::from_str(&saved).unwrap();
-        assert_eq!(restored.voice_commands.speaker_policy, example.voice_commands.speaker_policy);
+        assert_eq!(
+            restored.voice_commands.speaker_policy,
+            example.voice_commands.speaker_policy
+        );
         assert!(toml::from_str::<Policy>("mode = 'allowlist'\nready = true").is_err());
     }
 
@@ -556,6 +574,33 @@ ref_audio = "~/.local/share/ears/ref_audio"
         )))
         .expect("examples/config.toml must stay in sync with AppConfig");
         assert_eq!(config.parakeet_rs.language, "auto");
+        assert!(!config.dictation.audio_history.enabled);
+    }
+
+    #[test]
+    fn audio_history_is_off_unless_configured() {
+        let base = r#"
+[storage]
+model_dir = "default"
+ref_audio = "~/.local/share/ears/ref_audio"
+
+[dictation]
+enabled = false
+type_live_words = true
+"#;
+        let config: AppConfig = toml::from_str(base).unwrap();
+        assert!(!config.dictation.audio_history.enabled);
+        assert!(!config.dictation.audio_history.excluded_apps.is_empty());
+
+        let config: AppConfig = toml::from_str(&format!(
+            "{base}\n[dictation.audio_history]\nenabled = true\nmax_total_mb = 64\nexcluded_apps = [\"com.example.Vault\"]\n"
+        ))
+        .unwrap();
+        let history = &config.dictation.audio_history;
+        assert!(history.enabled);
+        assert_eq!(history.max_total_mb, 64);
+        assert_eq!(history.excluded_apps, vec!["com.example.Vault"]);
+        assert_eq!(history.max_age_days, 90);
     }
 
     #[test]

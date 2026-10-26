@@ -6,6 +6,7 @@ All notable changes to eaRS are documented in this file.
 
 ### Features
 
+- **dictation**: opt-in local audio history (`[dictation.audio_history]`, off by default): one private WAV plus metadata per committed utterance, excluded apps and macOS Secure Event Input pause it, size/age limits evict oldest first, and `ears dictation history path|list|export|purge` manage it. Export writes a manifest with session-disjoint split hints; nothing is marked training-eligible.
 - **speaker gate**: add bounded completed-audio ASR/evidence joining and single-use, scoped instruction dispatch with synthetic regression proof. The optional prepared-voqx adapter is evidence-only; enabled legacy WebSocket consumers fail closed because exact audio/final binding is unsupported. Ordinary disabled dictation is unchanged. See `docs/speaker-gate.md`; no live-filter or robot-readiness claim.
 - **dictation**: add opt-in client-side deterministic command-aware and command-only modes with exact reserved `eaRS` controls, VAD-bounded literal-text commands, fail-closed TOML registry and word-by-word provisional island preview. Normal dictation remains streaming; no speculative keystroke retraction. See `docs/voice-commands.md` for current adapter limits.
 - **evaluation**: run pinned local Kev-0.5B offline against synthetic completed utterances with a reproducible shadow runner; results in `docs/kev-shadow.md`. Kev is not in the production command path.

@@ -1312,6 +1312,13 @@ pub mod audio {
     use crossbeam_channel::Sender;
     use std::thread;
 
+    /// Name of the default input device, as used by `start_audio_capture(_, None)`.
+    pub fn default_input_device_name() -> Option<String> {
+        cpal::default_host()
+            .default_input_device()
+            .and_then(|device| device.name().ok())
+    }
+
     pub fn list_audio_devices() -> Result<()> {
         let host = cpal::default_host();
 

@@ -91,6 +91,21 @@ pause_message = "Dictation paused"
 # Message shown when dictation stops completely
 stop_message = "Dictation disabled"
 
+# Opt-in local retention of dictation audio (one WAV + metadata per utterance)
+# for your own training/evaluation data. Off by default; local only; nothing is
+# marked training-eligible. Only enable it for your own speech, not meetings or
+# other people. Manage it with `ears dictation history path|list|export|purge`.
+[dictation.audio_history]
+enabled = false
+path = "default"            # $XDG_STATE_HOME/ears/audio-history; never inside a git repo
+max_total_mb = 2048         # oldest utterances are deleted first
+max_age_days = 90           # 0 keeps them indefinitely
+pre_roll_ms = 1000
+max_utterance_secs = 120
+pause_on_secure_input = true
+# excluded_apps defaults to common password managers; setting it replaces the list.
+# excluded_apps = ["com.1password.1password", "com.bitwarden.desktop"]
+
 # Dictation hooks require compiling with `--features hooks`
 [dictation.hooks]
 # Command executed when dictation resumes typing input (leave blank to disable)

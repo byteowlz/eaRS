@@ -11,6 +11,7 @@ use super::InsertionMode;
 use super::Shared;
 use super::VERBOSE;
 use super::alias_for_url;
+use super::audio_history::{AudioHistory, CommitContext, Skip};
 use super::ensure_server_running;
 use super::extract_local_port;
 use super::hotkeys;
@@ -95,6 +96,8 @@ struct Engine {
     /// Suppress an authoritative final repeated after a word/VAD boundary.
     just_finished: bool,
     ping_sent: Arc<Mutex<Option<Instant>>>,
+    /// Opt-in utterance audio retention; `None` when disabled.
+    history: Option<AudioHistory>,
 }
 
 pub(crate) async fn run(
@@ -199,7 +202,35 @@ pub(crate) async fn run(
         }
     );
 
+    let history = match AudioHistory::from_config(
+        &config.dictation.audio_history,
+        crate::audio::default_input_device_name(),
+        backend.alias.clone().or_else(|| Some(backend.url.clone())),
+    ) {
+        Ok(Some(mut history)) => {
+            history.set_engine(options.engine.clone());
+            eprintln!(
+                "audio history ON: keeping utterance audio in {}",
+                history.dir().display()
+            );
+            shared.emit(DictationEvent::AudioHistory {
+                active: true,
+                note: None,
+            });
+            Some(history)
+        }
+        Ok(None) => None,
+        Err(err) => {
+            eprintln!("audio history disabled: {err:#}");
+            shared.emit(DictationEvent::Error {
+                message: format!("audio history disabled: {err:#}"),
+            });
+            None
+        }
+    };
+
     let mut engine = Engine {
+        history,
         router: Router::new(config.voice_commands.mode),
         registry: Registry::new(
             config
@@ -349,6 +380,7 @@ impl Engine {
         };
         let audio_writer = writer_tx.clone();
         let audio_shared = self.shared.clone();
+        let audio_tap = self.history.as_ref().map(AudioHistory::tap);
         thread::spawn(move || {
             if let Some(enc) = opus_encoder.as_ref() {
                 let _ = audio_writer.send(WriterCommand::Audio(enc.header_data().to_vec()));
@@ -356,6 +388,9 @@ impl Engine {
             while let Ok(chunk) = audio_rx.recv() {
                 if !audio_shared.is_capturing() {
                     continue;
+                }
+                if let Some(tap) = &audio_tap {
+                    tap.push(&chunk);
                 }
                 let bytes = match opus_encoder.as_mut() {
                     Some(enc) => match enc.encode_page(&chunk) {
@@ -482,7 +517,7 @@ impl Engine {
                         &mut self.replacement,
                         &mut self.recorder,
                     )? {
-                        self.shared.emit(DictationEvent::Typed { text: typed });
+                        self.emit_typed(typed);
                     }
                     self.recorder.flush_if_due()?;
                 }
@@ -493,6 +528,7 @@ impl Engine {
         // half-heard command or let it join the first words after reconnect.
         self.router.discard_pending();
         self.utterance.clear();
+        self.discard_history();
         self.buffer.discard();
         let _ = writer_tx.send(WriterCommand::Stop);
         let _ = writer_handle.await;
@@ -503,7 +539,7 @@ impl Engine {
             &mut self.replacement,
             &mut self.recorder,
         )? {
-            self.shared.emit(DictationEvent::Typed { text: typed });
+            self.emit_typed(typed);
         }
         self.recorder.flush()?;
         Ok(flow)
@@ -529,6 +565,7 @@ impl Engine {
                 self.router.mode = VoiceMode::Dictation; // Escape is always a way out.
                 self.sync_escape_policy();
                 self.utterance.clear();
+                self.discard_history();
                 self.shared.emit(DictationEvent::Cancelled);
                 self.shared.emit(DictationEvent::VoiceMode {
                     status: self.router.status(),
@@ -541,6 +578,7 @@ impl Engine {
                 self.router.mode = mode;
                 self.sync_escape_policy();
                 self.utterance.clear();
+                self.discard_history();
                 self.shared.emit(DictationEvent::VoiceMode {
                     status: self.router.status(),
                 });
@@ -618,6 +656,9 @@ impl Engine {
         if capturing {
             self.router.discard_pending();
             self.utterance.clear();
+            if let Some(history) = self.history.as_mut() {
+                history.begin_session();
+            }
             self.inserter.begin_session()?;
             self.last_profile_eval = None;
             self.evaluate_profiles(true)?;
@@ -629,7 +670,18 @@ impl Engine {
                 &mut self.replacement,
                 &mut self.recorder,
             )? {
-                self.shared.emit(DictationEvent::Typed { text: typed });
+                self.emit_typed(typed);
+            }
+            // No audio follows a release, so no end-of-speech boundary will
+            // arrive: what was said up to here is the utterance.
+            if !self.utterance.is_empty() && !self.speaker_gate_enabled() {
+                let raw = self.utterance.join(" ");
+                let text = super::typing::normalize_punctuation_spacing(
+                    &self.replacement.replace(&raw),
+                );
+                self.commit_history(&raw, &text);
+            } else {
+                self.discard_history();
             }
             self.router.discard_pending();
             self.utterance.clear();
@@ -752,6 +804,14 @@ impl Engine {
                     self.on_final(text)?;
                 }
             }
+            "enginechanged" => {
+                if let (Some(history), Some(engine)) = (
+                    self.history.as_mut(),
+                    json.get("engine").and_then(|v| v.as_str()),
+                ) {
+                    history.set_engine(Some(engine.to_string()));
+                }
+            }
             "error" => {
                 let message = json
                     .get("message")
@@ -784,6 +844,11 @@ impl Engine {
             return Ok(());
         }
         self.utterance.push(word.to_owned());
+        if self.utterance.len() == 1 {
+            if let Some(history) = self.history.as_mut() {
+                history.begin_utterance();
+            }
+        }
         // Preview is independent of OS keystrokes, including held prefixes.
         self.emit_partial();
         if self.speaker_gate_enabled() {
@@ -798,7 +863,7 @@ impl Engine {
                 &mut self.replacement,
                 &mut self.recorder,
             )? {
-                self.shared.emit(DictationEvent::Typed { text: typed });
+                self.emit_typed(typed);
             }
         }
         Ok(())
@@ -826,6 +891,60 @@ impl Engine {
         self.shared.emit(DictationEvent::Partial { text });
     }
 
+    /// Report typed text to the UI and to the utterance being retained.
+    fn emit_typed(&mut self, text: String) {
+        if let Some(history) = self.history.as_mut() {
+            history.note_inserted(&text);
+        }
+        self.shared.emit(DictationEvent::Typed { text });
+    }
+
+    fn discard_history(&mut self) {
+        if let Some(history) = self.history.as_mut() {
+            history.discard();
+        }
+    }
+
+    /// Keep the audio of a finished utterance when retention is on. Failures
+    /// are reported but never interrupt dictation.
+    fn commit_history(&mut self, raw: &str, replaced: &str) {
+        let Some(history) = self.history.as_mut() else {
+            return;
+        };
+        let app = frontmost_app();
+        let ctx = CommitContext {
+            raw: raw.to_string(),
+            replaced: replaced.to_string(),
+            language: self.effective_lang.clone(),
+            app_bundle_id: app.as_ref().and_then(|a| a.bundle_id.clone()),
+            app_binary: app.as_ref().and_then(|a| a.binary.clone()),
+            app_name: app.as_ref().and_then(|a| a.name.clone()),
+            secure_input: crate::frontmost::secure_input_active(),
+        };
+        match history.commit(&ctx) {
+            Ok(Ok(record)) => vlog!(
+                "[audio-history] kept {} ({:.1}s)",
+                record.id,
+                record.duration_secs
+            ),
+            Ok(Err(Skip::NoAudio)) => {}
+            Ok(Err(skip)) => {
+                let note = match skip {
+                    Skip::ExcludedApp(app) => format!("not kept: excluded app {app}"),
+                    Skip::SecureInput => "not kept: secure input active".to_string(),
+                    Skip::NoAudio => unreachable!(),
+                };
+                self.shared.emit(DictationEvent::AudioHistory {
+                    active: true,
+                    note: Some(note),
+                });
+            }
+            Err(err) => self.shared.emit(DictationEvent::Error {
+                message: format!("audio history: {err:#}"),
+            }),
+        }
+    }
+
     fn speaker_gate_enabled(&self) -> bool {
         self.config.voice_commands.speaker_policy.mode != crate::speaker_gate::Mode::Disabled
     }
@@ -842,6 +961,7 @@ impl Engine {
             self.utterance.clear();
             self.buffer.discard();
             self.router.discard_pending();
+            self.discard_history();
             self.shared.emit(DictationEvent::VoiceDecision {
                 raw: String::new(), normalized: String::new(),
                 outcome: "speaker_gate_unavailable_audio_binding".into(),
@@ -864,10 +984,10 @@ impl Engine {
                     &mut self.replacement,
                     &mut self.recorder,
                 )? {
-                    self.shared.emit(DictationEvent::Typed { text: typed });
+                    self.emit_typed(typed);
                 }
                 let formatted = self.buffer.type_formatted(self.inserter.keyboard(), text)?;
-                self.shared.emit(DictationEvent::Typed { text: formatted });
+                self.emit_typed(formatted);
             }
             Route::Discard => self.buffer.discard(),
             Route::Streamed => {
@@ -876,7 +996,7 @@ impl Engine {
                     &mut self.replacement,
                     &mut self.recorder,
                 )? {
-                    self.shared.emit(DictationEvent::Typed { text: typed });
+                    self.emit_typed(typed);
                 }
             }
             Route::Control(key) => {
@@ -900,6 +1020,7 @@ impl Engine {
         };
         self.recorder
             .record(&format!("voice_decision_{outcome}"), &raw, &text)?;
+        self.commit_history(&raw, &text);
         self.shared.emit(DictationEvent::VoiceDecision {
             raw,
             normalized: text.clone(),
@@ -971,6 +1092,7 @@ mod tests {
             registry: Registry::new(path),
             just_finished: false,
             ping_sent: Arc::new(Mutex::new(None)),
+            history: None,
             config,
             options: DictationOptions::default(),
             shared,
@@ -1084,6 +1206,141 @@ mod tests {
                 DictationEvent::Typed { .. } | DictationEvent::Utterance { .. } | DictationEvent::PromptReady { .. })));
         }
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn retention_engine(config: AppConfig, history: Option<AudioHistory>) -> (Engine, Arc<Mutex<String>>) {
+        let (events_tx, _events_rx) = unbounded();
+        let (commands_tx, commands_rx) = unbounded();
+        let shared = Arc::new(Shared::new(&config, true, events_tx, commands_tx, true));
+        let recording = RecordingKeyboard::default();
+        let typed = recording.typed.clone();
+        let mut inserter = Inserter::new(InsertionMode::Clipboard).unwrap();
+        *inserter.keyboard() = Box::new(recording);
+        let engine = Engine {
+            replacement: ReplacementReloader::new(config.replacement.clone()),
+            recorder: TranscriptRecorder::new(config.transcripts.clone()),
+            buffer: LiveWordBuffer::new(Duration::from_millis(700)),
+            inserter,
+            profiles: None,
+            backend: BackendInfo::default(),
+            writer: None,
+            base_lang: None,
+            effective_lang: Some("de".into()),
+            base_insertion_mode: InsertionMode::Clipboard,
+            active_profile: None,
+            pinned_profile: None,
+            last_profile_eval: None,
+            was_capturing: true,
+            utterance: Vec::new(),
+            router: Router::new(VoiceMode::Dictation),
+            registry: Registry::new(std::env::temp_dir().join("ears-no-commands.toml")),
+            just_finished: false,
+            ping_sent: Arc::new(Mutex::new(None)),
+            history,
+            config,
+            options: DictationOptions::default(),
+            shared,
+            commands: commands_rx,
+        };
+        (engine, typed)
+    }
+
+    /// Synthetic audio through the dictation message path, as the session's
+    /// audio thread would feed it, without a microphone or server.
+    fn dictate(engine: &mut Engine, tap: Option<&super::super::audio_history::AudioTap>, words: &[&str]) {
+        let chunk: Vec<f32> = (0..1920).map(|i| (i as f32 * 0.07).sin() * 0.2).collect();
+        let feed = |n: usize| {
+            if let Some(tap) = tap {
+                for _ in 0..n {
+                    tap.push(&chunk);
+                }
+            }
+        };
+        feed(10);
+        for word in words {
+            feed(5);
+            engine
+                .handle_message(&serde_json::json!({"type":"word","word":word}))
+                .unwrap();
+        }
+        feed(5);
+        engine
+            .handle_message(&serde_json::json!({"type":"speech","active":false}))
+            .unwrap();
+    }
+
+    #[test]
+    fn audio_history_keeps_one_wav_per_utterance_only_when_enabled() {
+        use super::super::audio_history::{self, AudioHistoryConfig};
+        let root = std::env::temp_dir().join(format!("ears-engine-history-{}", uuid::Uuid::new_v4()));
+
+        // Off (the default): a whole dictation session writes nothing.
+        let mut config = AppConfig::default();
+        config.replacement.enabled = false;
+        config.transcripts.enabled = false;
+        config.dictation.audio_history.path = root.join("off").to_string_lossy().to_string();
+        assert!(!config.dictation.audio_history.enabled);
+        let history = AudioHistory::from_config(&config.dictation.audio_history, None, None).unwrap();
+        assert!(history.is_none());
+        let (mut engine, typed) = retention_engine(config, history);
+        dictate(&mut engine, None, &["hallo", "welt"]);
+        assert_eq!(&*typed.lock().unwrap(), "hallo welt ");
+        assert!(!root.join("off").exists());
+
+        // On: one WAV per committed utterance; cancelled words keep nothing.
+        let dir = root.join("on");
+        let mut config = AppConfig::default();
+        config.replacement.enabled = false;
+        config.transcripts.enabled = false;
+        config.dictation.audio_history = AudioHistoryConfig {
+            enabled: true,
+            path: dir.to_string_lossy().to_string(),
+            excluded_apps: Vec::new(),
+            pause_on_secure_input: false,
+            ..AudioHistoryConfig::default()
+        };
+        let history = AudioHistory::from_config(&config.dictation.audio_history, Some("Test Mic".into()), None)
+            .unwrap()
+            .unwrap();
+        let tap = history.tap();
+        let (mut engine, _typed) = retention_engine(config, Some(history));
+        engine
+            .handle_message(&serde_json::json!({"type":"enginechanged","engine":"parakeet-rs"}))
+            .unwrap();
+        dictate(&mut engine, Some(&tap), &["erste", "zeile"]);
+        dictate(&mut engine, Some(&tap), &["zweite"]);
+        engine
+            .handle_message(&serde_json::json!({"type":"word","word":"verworfen"}))
+            .unwrap();
+        engine.handle_command(DictationCommand::Cancel).unwrap();
+
+        let records = audio_history::load_records(&dir).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].raw_transcript, "erste zeile");
+        assert_eq!(records[0].inserted_text, "erste zeile");
+        assert_eq!(records[1].raw_transcript, "zweite");
+        assert_eq!(records[0].session_id, records[1].session_id);
+        assert_eq!(records[0].engine.as_deref(), Some("parakeet-rs"));
+        assert_eq!(records[0].language.as_deref(), Some("de"));
+        for record in &records {
+            assert!(dir.join(&record.audio_path).exists());
+            assert!(record.duration_secs > 0.5);
+        }
+        let wavs: usize = std::fs::read_dir(dir.join("audio"))
+            .unwrap()
+            .map(|day| std::fs::read_dir(day.unwrap().path()).unwrap().count())
+            .sum();
+        assert_eq!(wavs, 2);
+
+        // Export keeps IDs aligned with the audio and index.
+        let out = root.join("export");
+        assert_eq!(audio_history::export(&dir, &out).unwrap(), 2);
+        let manifest = std::fs::read_to_string(out.join("manifest.jsonl")).unwrap();
+        for record in &records {
+            assert!(manifest.contains(&record.id));
+            assert!(out.join(&record.audio_path).exists());
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

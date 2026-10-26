@@ -48,6 +48,19 @@ pub fn frontmost_app() -> Option<FrontmostApp> {
     platform::frontmost_app()
 }
 
+/// Whether macOS Secure Event Input is active, i.e. a password field or
+/// credential prompt has keyboard focus. Always false on other platforms.
+pub fn secure_input_active() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        platform::secure_input_active()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
 fn file_stem_of(path: &str) -> Option<String> {
     std::path::Path::new(path)
         .file_name()
@@ -77,6 +90,16 @@ mod platform {
             value: *mut *const CFType,
         ) -> i32;
         fn CFRelease(cf: *const c_void);
+    }
+
+    #[link(name = "Carbon", kind = "framework")]
+    unsafe extern "C" {
+        fn IsSecureEventInputEnabled() -> u8;
+    }
+
+    pub fn secure_input_active() -> bool {
+        // SAFETY: argument-free query of global HIToolbox state.
+        unsafe { IsSecureEventInputEnabled() != 0 }
     }
 
     pub fn frontmost_app() -> Option<FrontmostApp> {
