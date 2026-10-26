@@ -80,12 +80,12 @@ The `just install-ears` command will:
 If you prefer not to use just:
 
 ```bash
-cargo install --path .                               # CPU only
-cargo install --path . --features apple              # Apple Silicon
-cargo install --path . --features nvidia             # NVIDIA GPU
-cargo install --path . --features parakeet-rs        # Nemotron streaming
-cargo install --path . --features apple,parakeet-rs  # Kyutai Metal + Nemotron
-cargo install --path . --features apple,transcribe-cpp # Kyutai Metal + transcribe.cpp (GGUF, Metal)
+cargo install --locked --path .                               # CPU only
+cargo install --locked --path . --features apple              # Apple Silicon
+cargo install --locked --path . --features nvidia             # NVIDIA GPU
+cargo install --locked --path . --features parakeet-rs        # Nemotron streaming
+cargo install --locked --path . --features apple,parakeet-rs  # Kyutai Metal + Nemotron
+cargo install --locked --path . --features apple,transcribe-cpp # Kyutai Metal + transcribe.cpp (GGUF, Metal)
 ```
 
 ## System Dependencies

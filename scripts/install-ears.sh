@@ -59,7 +59,7 @@ fi
 cargo build --release "${FEATURE_FLAG[@]}"
 
 echo "Installing ears..."
-cargo install --path "${ROOT_DIR}" --force "${FEATURE_FLAG[@]}"
+cargo install --locked --path "${ROOT_DIR}" --force "${FEATURE_FLAG[@]}"
 
 echo ""
 echo "Installation complete. Binaries are available in \$HOME/.cargo/bin."

@@ -60,7 +60,7 @@ cargo build --release @FEATURE_FLAG
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "Installing ears..."
-cargo install --path "$ROOT_DIR" --force @FEATURE_FLAG
+cargo install --locked --path "$ROOT_DIR" --force @FEATURE_FLAG
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host ""

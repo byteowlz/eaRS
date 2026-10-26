@@ -4,6 +4,10 @@ All notable changes to eaRS are documented in this file.
 
 ## [Unreleased]
 
+### Fixes
+
+- **installation**: activate the exact ONNX Runtime Rust binding pin for `parakeet-rs` and use `--locked` in installers. Fresh `cargo install` no longer selects incompatible `ort` rc.15 (`Session::builder` E0061) on macOS or Linux.
+
 ### Features
 
 - **dictation**: opt-in local audio history (`[dictation.audio_history]`, off by default): one private WAV plus metadata per committed utterance, excluded apps and macOS Secure Event Input pause it, size/age limits evict oldest first, and `ears dictation history path|list|export|purge` manage it. Export writes a manifest with session-disjoint split hints; nothing is marked training-eligible.

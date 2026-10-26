@@ -320,7 +320,7 @@ install-all:
     read -rp "Proceed with installation? [Y/n/custom]: " choice
     case "${choice:-y}" in
         [Yy]|"")
-            cargo install --path . --force --features "$FEATURE_STRING"
+            cargo install --locked --path . --force --features "$FEATURE_STRING"
             ;;
         [Cc]*)
             echo ""
@@ -348,7 +348,7 @@ install-all:
             FEATURE_STRING=$(IFS=,; echo "${FEATURES[*]}")
             
             echo "Installing with features: $FEATURE_STRING"
-            cargo install --path . --force --features "$FEATURE_STRING"
+            cargo install --locked --path . --force --features "$FEATURE_STRING"
             ;;
         *)
             echo "Installation cancelled"
@@ -373,7 +373,7 @@ install-ui:
     set -euo pipefail
 
     echo "Installing ears-ui (GPUI companion UI)…"
-    cargo install --path apps/ears-ui --force
+    cargo install --locked --path apps/ears-ui --force
     echo "✓ ears-ui installed."
     echo "  On macOS, grant the binary Accessibility + Input Monitoring (typing)" 
     echo "  and Microphone (capture) under System Settings → Privacy & Security."
@@ -466,7 +466,7 @@ install-ears-features features:
         export SENTENCEPIECE_SYS_USE_PKG_CONFIG=1
     fi
     
-    cargo install --path . --force --features {{features}}
+    cargo install --locked --path . --force --features {{features}}
 
 # Install ears with default features (CPU only)
 install-ears-default:
@@ -486,7 +486,7 @@ install-ears-default:
         export SENTENCEPIECE_SYS_USE_PKG_CONFIG=1
     fi
     
-    cargo install --path . --force
+    cargo install --locked --path . --force
 
 # Install ears with Metal acceleration (macOS)
 install-ears-metal:
@@ -494,7 +494,7 @@ install-ears-metal:
     set -euo pipefail
     
     just check-deps
-    cargo install --path . --force --features apple
+    cargo install --locked --path . --force --features apple
 
 # Install ears with CUDA acceleration (NVIDIA)
 install-ears-cuda:
@@ -529,7 +529,7 @@ install-ears-cuda:
         export SENTENCEPIECE_SYS_USE_PKG_CONFIG=1
     fi
     
-    cargo install --path . --force --features nvidia
+    cargo install --locked --path . --force --features nvidia
 
 # Install ears with Kyutai CUDA + parakeet-rs Nemotron
 # (kept under the old recipe name for compatibility)
@@ -565,7 +565,7 @@ install-ears-cuda-parakeet:
         export SENTENCEPIECE_SYS_USE_PKG_CONFIG=1
     fi
     
-    cargo install --path . --force --features nvidia,parakeet-rs
+    cargo install --locked --path . --force --features nvidia,parakeet-rs
 
 # Install ears with parakeet-rs Nemotron streaming engine
 # (kept under the old recipe name for compatibility)
@@ -601,7 +601,7 @@ install-ears-parakeet:
         export SENTENCEPIECE_SYS_USE_PKG_CONFIG=1
     fi
     
-    cargo install --path . --force --features parakeet-rs
+    cargo install --locked --path . --force --features parakeet-rs
 
 # === Offline ModernBERT adapter experiment (not connected to dictation) ===
 
