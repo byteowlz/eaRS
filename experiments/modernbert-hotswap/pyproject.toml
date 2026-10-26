@@ -1,0 +1,9 @@
+[project]
+name = "ears-modernbert-hotswap-proof"
+version = "0.1.0"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "torch==2.8.0",
+    "transformers==4.57.6",
+    "peft==0.21.0",
+]

@@ -603,6 +603,46 @@ install-ears-parakeet:
     
     cargo install --path . --force --features parakeet-rs
 
+# === Offline ModernBERT adapter experiment (not connected to dictation) ===
+
+modernbert-proof-train data="../slopbert/dataset_example.csv":
+    uv run --locked --project experiments/modernbert-hotswap --no-dev experiments/modernbert-hotswap/train_demo.py --data "{{data}}" --steps 4
+
+modernbert-proof-test:
+    HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 uv run --locked --project experiments/modernbert-hotswap --no-dev python -m unittest discover -s experiments/modernbert-hotswap -p 'test_*.py' -v
+
+modernbert-proof-bench:
+    HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 uv run --locked --project experiments/modernbert-hotswap --no-dev experiments/modernbert-hotswap/bench_swaps.py
+
+# Synthetic voice-intent proof (remote generator only; local training/inference)
+modernbert-intent-generate:
+    uv run --locked --project experiments/modernbert-hotswap --no-dev experiments/modernbert-hotswap/generate_intent.py
+
+modernbert-intent-train:
+    HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 uv run --locked --project experiments/modernbert-hotswap --no-dev experiments/modernbert-hotswap/train_intent.py
+
+modernbert-intent-eval:
+    HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 uv run --locked --project experiments/modernbert-hotswap --no-dev experiments/modernbert-hotswap/eval_intent.py
+
+modernbert-intent-compare-all:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for name in intent_adapter intent_ettin32 intent_ettin68 intent_minilm33_tuned intent_minilm33; do
+        HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 uv run --locked --project experiments/modernbert-hotswap --no-dev \
+            experiments/modernbert-hotswap/compare_intent.py \
+            --adapter "experiments/modernbert-hotswap/artifacts/$name" \
+            --output "experiments/modernbert-hotswap/artifacts/compare-$name.json"
+    done
+
+modernbert-dgemma-eval:
+    uv run --locked --project experiments/modernbert-hotswap --no-dev experiments/modernbert-hotswap/compare_dgemma.py
+
+modernbert-sys1-eval:
+    uv run --locked --project experiments/modernbert-hotswap --no-dev experiments/modernbert-hotswap/compare_sys1.py
+
+modernbert-clm-eval:
+    uv run --locked --project experiments/modernbert-hotswap --no-dev experiments/modernbert-hotswap/compare_clm.py
+
 # Bounded speaker-gate software proof; no microphone/model inference.
 test-speaker-gate:
     cargo nextest run --no-fail-fast -p eaRS --lib --no-default-features -E 'test(speaker_gate::) | test(dictation::) | test(config::)'
