@@ -28,13 +28,13 @@ Write-Host ""
 Write-Host "Select additional speech recognition engine:"
 Write-Host "(Kyutai moshi is always enabled)"
 Write-Host "  1) none"
-Write-Host "  2) whisper"
-Write-Host "  3) parakeet"
+Write-Host "  2) transcribe-cpp (GGUF)"
+Write-Host "  3) parakeet-rs (Nemotron)"
 $engine_choice = Read-Host "Enter choice [1-3]"
 
 switch ($engine_choice) {
-    "2" { $FEATURES += "whisper" }
-    "3" { $FEATURES += "parakeet" }
+    "2" { $FEATURES += "transcribe-cpp" }
+    "3" { $FEATURES += "parakeet-rs" }
 }
 
 # Hooks selection

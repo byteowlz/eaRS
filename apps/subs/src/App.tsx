@@ -46,7 +46,7 @@ function App() {
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([])
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('')
   const [subsStyle, setSubsStyle] = useState<SubsStyle>({ border_radius: 5, border_thickness: 1 })
-  const [engine, setEngine] = useState<'kyutai' | 'parakeet'>('kyutai')
+  const [engine, setEngine] = useState<'kyutai' | 'parakeet-rs'>('kyutai')
   
   // Listener mode settings
   const [listenerMode, setListenerMode] = useState(false)
@@ -240,7 +240,7 @@ function App() {
             break
           case 'enginechanged':
             if (message.engine) {
-              setEngine(message.engine as 'kyutai' | 'parakeet')
+              setEngine(message.engine as 'kyutai' | 'parakeet-rs')
             }
             break
         }
@@ -312,7 +312,7 @@ function App() {
     }
   }
 
-  const handleEngineChange = (value: 'kyutai' | 'parakeet') => {
+  const handleEngineChange = (value: 'kyutai' | 'parakeet-rs') => {
     setEngine(value)
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: 'setengine', engine: value }))
@@ -565,7 +565,7 @@ function App() {
                 <Label htmlFor="engine">Engine</Label>
                 <Select
                   value={engine}
-                  onValueChange={(value) => handleEngineChange(value as 'kyutai' | 'parakeet')}
+                  onValueChange={(value) => handleEngineChange(value as 'kyutai' | 'parakeet-rs')}
                   disabled={listenerMode}
                 >
                   <SelectTrigger id="engine" className="bg-white/10 border-white/20">
@@ -573,11 +573,11 @@ function App() {
                   </SelectTrigger>
                   <SelectContent className="bg-black/95 border-white/20">
                     <SelectItem value="kyutai">Kyutai</SelectItem>
-                    <SelectItem value="parakeet">Parakeet</SelectItem>
+                    <SelectItem value="parakeet-rs">Nemotron</SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-white/50">
-                  Choose transcription engine (Parakeet requires server build with `parakeet` feature).
+                  Choose transcription engine (Nemotron requires server build with `parakeet-rs` feature).
                 </p>
               </div>
             </div>

@@ -4,6 +4,10 @@ All notable changes to eaRS are documented in this file.
 
 ## [Unreleased]
 
+### Removed
+
+- **engines**: remove the legacy prkt-based `parakeet` engine, vendored prkt crate, legacy model/device/chunk flags and `parakeet-*` acceleration features. Nemotron (`parakeet-rs`) and its model/language flags are unchanged; use `apple,parakeet-rs` or `nvidia,parakeet-rs` rather than the removed feature aliases. Installers, benchmark clients and older app selectors now request the supported engine.
+
 ### Fixes
 
 - **installation**: activate the exact ONNX Runtime Rust binding pin for `parakeet-rs` and use `--locked` in installers. Fresh `cargo install` no longer selects incompatible `ort` rc.15 (`Session::builder` E0061) on macOS or Linux.

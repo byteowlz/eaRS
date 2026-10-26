@@ -218,11 +218,11 @@ def main():
     parser = argparse.ArgumentParser(description="Benchmark eaRS against reference transcriptions")
     parser.add_argument("--manifest", required=True, help="Path to manifest.json")
     parser.add_argument("--ws", default="ws://[::1]:8765", help="WebSocket URL")
-    parser.add_argument("--engines", nargs="+", default=["parakeet"], choices=["parakeet", "kyutai", "both"])
+    parser.add_argument("--engines", nargs="+", default=["parakeet-rs"], choices=["parakeet-rs", "kyutai", "both"])
     parser.add_argument("--chunk-ms", type=int, default=80, help="Audio chunk size in ms")
     args = parser.parse_args()
     
-    engines = ["parakeet", "kyutai"] if "both" in args.engines else args.engines
+    engines = ["parakeet-rs", "kyutai"] if "both" in args.engines else args.engines
     asyncio.run(benchmark_manifest(args.manifest, args.ws, engines, args.chunk_ms))
 
 

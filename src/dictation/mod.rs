@@ -231,7 +231,7 @@ pub struct DictationOptions {
     pub server: Option<String>,
     /// Transcription language sent on connect.
     pub lang: Option<String>,
-    /// Engine name sent on connect (`kyutai`, `parakeet`, ...).
+    /// Engine name sent on connect (`kyutai`, `parakeet-rs`, ...).
     pub engine: Option<String>,
     /// Audio codec override (`pcm` / `opus`).
     pub codec: Option<String>,

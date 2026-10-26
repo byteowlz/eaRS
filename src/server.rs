@@ -17,8 +17,6 @@ use tokio_tungstenite::{accept_async, tungstenite::Message};
 use crate::config::{AppConfig, ensure_ref_audio};
 use crate::{Model, TranscriptionOptions, TranscriptionSink, WebSocketMessage};
 use engine::{EngineManager, EngineSession, send_engine_changed};
-#[cfg(feature = "parakeet")]
-use parakeet::{ParakeetEngine, ParakeetEngineConfig};
 #[cfg(feature = "parakeet-rs")]
 use parakeet_rs::ParakeetRsEngine;
 #[cfg(feature = "transcribe-cpp")]
@@ -28,8 +26,6 @@ use transcribe_cpp::TranscribeCppEngine;
 pub mod catalog;
 mod engine;
 pub mod listener;
-#[cfg(feature = "parakeet")]
-mod parakeet;
 #[cfg(feature = "parakeet-rs")]
 mod parakeet_rs;
 mod parallel;
@@ -37,8 +33,6 @@ mod parallel;
 pub mod transcribe_cpp;
 mod vad;
 pub use engine::EngineKind;
-#[cfg(feature = "parakeet")]
-pub use parakeet::ParakeetDevice;
 #[cfg(feature = "parakeet-rs")]
 pub use parakeet_rs::ParakeetRsEngineConfig;
 #[cfg(feature = "transcribe-cpp")]
@@ -261,18 +255,6 @@ pub struct ServerOptions {
     pub default_engine: EngineKind,
     /// Load Kyutai even when it is not the default engine.
     pub with_kyutai: bool,
-    #[cfg(feature = "parakeet")]
-    pub parakeet_repo: String,
-    #[cfg(feature = "parakeet")]
-    pub parakeet_model_dir: Option<PathBuf>,
-    #[cfg(feature = "parakeet")]
-    pub parakeet_device: ParakeetDevice,
-    #[cfg(feature = "parakeet")]
-    pub parakeet_chunk_seconds: f32,
-    #[cfg(feature = "parakeet")]
-    pub parakeet_overlap_seconds: f32,
-    #[cfg(feature = "parakeet")]
-    pub parakeet_noise_gate_rms: f32,
     #[cfg(feature = "parakeet-rs")]
     pub parakeet_rs_model_dir: Option<PathBuf>,
     #[cfg(feature = "parakeet-rs")]
@@ -311,35 +293,6 @@ pub async fn run(options: ServerOptions) -> Result<()> {
         let prime_languages = config.model.prime_languages.clone();
         let kyutai_engine = parallel::spawn_parallel_engine(model, prime_languages);
         engine_manager.register(Arc::new(kyutai_engine));
-    }
-
-    #[cfg(feature = "parakeet")]
-    {
-        let model_dir = if let Some(dir) = options.parakeet_model_dir.clone() {
-            Some(PathBuf::from(dir))
-        } else if config.storage.model_dir != "default" {
-            Some(config.model_dir_path())
-        } else {
-            None
-        };
-
-        let parakeet_cfg = ParakeetEngineConfig {
-            model_repo: options.parakeet_repo.clone(),
-            model_dir,
-            device: options.parakeet_device,
-            chunk_seconds: options.parakeet_chunk_seconds,
-            overlap_seconds: options.parakeet_overlap_seconds,
-            noise_gate_rms: options.parakeet_noise_gate_rms,
-        };
-
-        match ParakeetEngine::load(parakeet_cfg, options.transcription.clone(), batch_size) {
-            Ok(engine) => {
-                engine_manager.register(Arc::new(engine));
-            }
-            Err(err) => {
-                eprintln!("[ears-server] failed to initialize parakeet engine: {err:#}");
-            }
-        }
     }
 
     #[cfg(feature = "parakeet-rs")]

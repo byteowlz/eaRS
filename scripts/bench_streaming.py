@@ -2,7 +2,7 @@
 """
 eaRS Streaming ASR Benchmark Tool
 
-Streams audio files to eaRS server via WebSocket, comparing Kyutai vs Parakeet
+Streams audio files to eaRS server via WebSocket, comparing Kyutai vs Nemotron
 transcription quality in real-time. Measures:
 - Word Error Rate (WER) with jiwer
 - Word duplication count
@@ -12,7 +12,7 @@ transcription quality in real-time. Measures:
 Usage:
     python3 bench_streaming.py --audio audio.wav --reference "ground truth text"
     python3 bench_streaming.py --audio audio.wav --kyutai-only
-    python3 bench_streaming.py --audio audio.wav --parakeet-only
+    python3 bench_streaming.py --audio audio.wav --engine parakeet-rs
     python3 bench_streaming.py --audio audio.wav --both  # default
 """
 
@@ -290,7 +290,7 @@ def compare_results(kyutai: StreamResult, parakeet: StreamResult, reference: Opt
         p_wer = wer(reference, parakeet.final_text) * 100 if parakeet.final_text else 999
         k_cer = cer(reference, kyutai.final_text) * 100 if kyutai.final_text else 999
         p_cer = cer(reference, parakeet.final_text) * 100 if parakeet.final_text else 999
-        print(f"  {'Metric':<25} {'Kyutai':>10} {'Parakeet':>10} {'Delta':>10}")
+        print(f"  {'Metric':<25} {'Kyutai':>10} {'Nemotron':>10} {'Delta':>10}")
         print(f"  {'-'*55}")
         print(f"  {'WER (%)':<25} {k_wer:>10.1f} {p_wer:>10.1f} {p_wer-k_wer:>+10.1f}")
         print(f"  {'CER (%)':<25} {k_cer:>10.1f} {p_cer:>10.1f} {p_cer-k_cer:>+10.1f}")
@@ -311,7 +311,7 @@ async def main():
     parser.add_argument("--ws", default="ws://[::1]:8765", help="eaRS WebSocket URL")
     parser.add_argument(
         "--engine",
-        choices=["both", "kyutai", "parakeet", "sherpa"],
+        choices=["both", "kyutai", "parakeet-rs", "sherpa"],
         default="both",
     )
     parser.add_argument("--language", default=None, help="Language code (de, en, fr, etc.)")
@@ -348,10 +348,10 @@ async def main():
         results["kyutai"] = r
         print_result(r, reference, duration)
 
-    if args.engine in ("both", "parakeet"):
+    if args.engine in ("both", "parakeet-rs"):
         print(f"\nStreaming to PARAKEET...")
-        r = await stream_to_engine(audio, sr, "parakeet", args.ws, args.chunk_ms, args.language)
-        results["parakeet"] = r
+        r = await stream_to_engine(audio, sr, "parakeet-rs", args.ws, args.chunk_ms, args.language)
+        results["parakeet-rs"] = r
         print_result(r, reference, duration)
 
     # Parse --switch-at args
@@ -372,8 +372,8 @@ async def main():
         results["sherpa"] = r
         print_result(r, reference, duration)
 
-    if "kyutai" in results and "parakeet" in results:
-        compare_results(results["kyutai"], results["parakeet"], reference)
+    if "kyutai" in results and "parakeet-rs" in results:
+        compare_results(results["kyutai"], results["parakeet-rs"], reference)
 
 
 if __name__ == "__main__":

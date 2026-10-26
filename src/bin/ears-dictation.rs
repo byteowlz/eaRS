@@ -10,22 +10,8 @@ use ears::dictation::DictationEvent;
 use ears::dictation::DictationOptions;
 use ears::dictation::InsertionMode;
 
-#[derive(Clone, Debug, clap::ValueEnum)]
-enum EngineArg {
-    Kyutai,
-    #[cfg(feature = "parakeet")]
-    Parakeet,
-}
-
-impl EngineArg {
-    fn as_str(&self) -> &'static str {
-        match self {
-            EngineArg::Kyutai => "kyutai",
-            #[cfg(feature = "parakeet")]
-            EngineArg::Parakeet => "parakeet",
-        }
-    }
-}
+// Use the server's engine registry for CLI choices as well.
+type EngineArg = ears::server::EngineKind;
 
 #[derive(Debug, Parser)]
 #[command(name = "ears-dictation", about = "Dictation client for eaRS")]
@@ -36,11 +22,7 @@ struct Args {
     )]
     lang: Option<String>,
 
-    #[arg(
-        long,
-        value_enum,
-        help = "Select transcription engine (kyutai|parakeet)"
-    )]
+    #[arg(long, value_enum, help = "Select transcription engine")]
     engine: Option<EngineArg>,
 
     #[arg(

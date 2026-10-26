@@ -7,11 +7,9 @@ use crate::{TranscriptionSink, WebSocketMessage};
 
 use super::SessionSink;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, clap::ValueEnum)]
 pub enum EngineKind {
     Kyutai,
-    #[cfg(feature = "parakeet")]
-    Parakeet,
     #[cfg(feature = "parakeet-rs")]
     ParakeetRs,
     #[cfg(feature = "transcribe-cpp")]
@@ -22,8 +20,6 @@ impl EngineKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             EngineKind::Kyutai => "kyutai",
-            #[cfg(feature = "parakeet")]
-            EngineKind::Parakeet => "parakeet",
             #[cfg(feature = "parakeet-rs")]
             EngineKind::ParakeetRs => "parakeet-rs",
             #[cfg(feature = "transcribe-cpp")]
@@ -34,8 +30,6 @@ impl EngineKind {
     pub fn from_str(value: &str) -> Option<Self> {
         match value.to_lowercase().as_str() {
             "kyutai" | "moshi" => Some(EngineKind::Kyutai),
-            #[cfg(feature = "parakeet")]
-            "parakeet" | "prkt" => Some(EngineKind::Parakeet),
             #[cfg(feature = "parakeet-rs")]
             "parakeet-rs" | "parakeet_rs" | "nemotron" => Some(EngineKind::ParakeetRs),
             #[cfg(feature = "transcribe-cpp")]
@@ -75,11 +69,9 @@ mod tests {
         assert_eq!(EngineKind::from_str("kyutai"), Some(EngineKind::Kyutai));
         assert_eq!(EngineKind::from_str("KYUTAI"), Some(EngineKind::Kyutai));
         assert_eq!(EngineKind::from_str("moshi"), Some(EngineKind::Kyutai));
-        #[cfg(feature = "parakeet")]
-        {
-            assert_eq!(EngineKind::from_str("parakeet"), Some(EngineKind::Parakeet));
-            assert_eq!(EngineKind::from_str("PRKT"), Some(EngineKind::Parakeet));
-        }
+        // Removed legacy engines must not silently select Nemotron.
+        assert_eq!(EngineKind::from_str("parakeet"), None);
+        assert_eq!(EngineKind::from_str("prkt"), None);
         #[cfg(feature = "parakeet-rs")]
         {
             assert_eq!(

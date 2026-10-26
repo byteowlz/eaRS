@@ -311,7 +311,7 @@ ears server restart --engine parakeet-rs --parakeet-rs-lang de
 ```
 
 - `--bind`: Override the default bind address (`0.0.0.0:<port-from-config>`).
-- `--engine`: Choose the default engine (`kyutai` or `parakeet-rs` when compiled with that feature). The server refuses to start if the default engine cannot be loaded instead of silently serving another one.
+- `--engine`: Choose the default engine (`kyutai`, or `parakeet-rs` / `transcribe-cpp` when compiled with their features). The server refuses to start if the default engine cannot be loaded instead of silently serving another one. The legacy prkt-based `parakeet` engine and `parakeet-*` acceleration features have been removed; for Nemotron use `parakeet-rs` with `apple` or `nvidia` as needed.
 - `--with-kyutai`: Also load Kyutai when another engine is the default, so clients can switch to it with `setengine`. Without it a `parakeet-rs` server neither downloads nor loads Kyutai (about 2.6 GB RSS instead of ~5 GB).
 - `--hf-repo`: Choose a different Kyutai Speech repository.
 - `--parakeet-rs-model`: Override `[parakeet_rs].model_dir`. parakeet-rs loads ONNX Runtime >= 1.24 at runtime: set `ORT_DYLIB_PATH`, or the server looks next to the `ears` binary, its sibling `lib/`, `/opt/homebrew/lib`, `/usr/local/lib` and the usual Linux library directories (`brew install onnxruntime` / `pacman -S onnxruntime`).

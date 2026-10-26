@@ -51,16 +51,11 @@ crossbeam-channel = "0.5"
 hf-hub = "0.4.3"
 kaudio = "0.2.1"
 moshi = "0.6.4"
-# prkt must come before sentencepiece to ensure ort's protobuf symbols are used
-# (both bundle protobuf-lite, and the linker uses the first definition)
-prkt = { path = "prkt", optional = true }
-# Pin ort to a version compatible with both prkt (caret ^2.0.0-rc.10) and
-# parakeet-rs (caret ^2.0.0-rc.12). Both engine features must activate this
-# exact pin: cargo install ignores Cargo.lock unless --locked is passed, and
-# newer ort pre-releases break parakeet-rs's Session::builder() call.
+# Pin the Rust ONNX Runtime binding expected by parakeet-rs. Its feature must
+# activate this pin: cargo install ignores Cargo.lock unless --locked is passed,
+# and newer ort pre-releases break parakeet-rs's Session::builder() call.
 # Keep defaults off: dynamic loading must not download/link another runtime.
 ort = { version = "=2.0.0-rc.12", optional = true, default-features = false, features = ["load-dynamic"] }
-ort-sys = { version = "=2.0.0-rc.12", optional = true, features = ["download-binaries", "disable-linking"] }
 serde = { version = "1.0.210", features = ["derive"] }
 serde_json = "1.0.115"
 toml = "0.9"
@@ -90,10 +85,7 @@ cudarc = { version = "0.19.9", optional = true, features = ["cuda-version-from-b
 notifica = "3.0.2"
 regex = "1.10"
 arboard = { version = "3.6", default-features = false }
-webrtc-vad = { version = "0.4", optional = true }
-# parakeet-rs (Nemotron streaming). Mutually exclusive in practice with the
-# `parakeet` (prkt) feature: do not enable both `parakeet` and `parakeet-rs`
-# together. Both activate eaRS's exact ort pin; parakeet-rs requires rc.12.
+# parakeet-rs (Nemotron streaming); its feature activates the exact ort pin.
 parakeet-rs = { package = "parakeet-rs", git = "https://github.com/altunenes/parakeet-rs.git", rev = "086e3bb734dd9a3f01e4e99ef6895da0db85b47a", optional = true, default-features = false }
 
 # transcribe.cpp GGUF streaming engine. Pinned to the 0.2.3 release (upgraded
@@ -138,9 +130,8 @@ hooks = []
 speaker-voqx = ["dep:voqx-recognition"]
 
 # Engines
-parakeet = ["dep:prkt", "dep:ort", "dep:ort-sys", "dep:webrtc-vad"]
 # parakeet-rs Nemotron streaming engine (ort 2.0.0-rc.12). Activate the exact
-# ort pin as well as parakeet-rs. Do NOT combine with `parakeet` (prkt).
+# ort pin as well as parakeet-rs.
 # Dynamic ORT avoids symbol collisions with eaRS's statically linked
 # SentencePiece protobuf-lite. The server locates ORT at runtime; override
 # discovery with ORT_DYLIB_PATH.
@@ -158,10 +149,6 @@ directml = []
 # Backwards-compat aliases
 cuda = ["nvidia"]
 metal = ["apple"]
-parakeet-cuda = ["parakeet", "nvidia"]
-parakeet-coreml = ["parakeet", "apple"]
-parakeet-directml = ["parakeet", "directml"]
-parakeet-rocm = ["parakeet", "amd"]
 
 [profile.release]
 debug = true

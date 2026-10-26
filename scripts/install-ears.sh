@@ -27,13 +27,13 @@ echo ""
 echo "Select additional speech recognition engine:"
 echo "(Kyutai moshi is always enabled)"
 echo "  1) none"
-echo "  2) whisper"
-echo "  3) parakeet"
+echo "  2) transcribe-cpp (GGUF)"
+echo "  3) parakeet-rs (Nemotron)"
 read -rp "Enter choice [1-3]: " engine_choice
 
 case "${engine_choice:-1}" in
-2) FEATURES+=("whisper") ;;
-3) FEATURES+=("parakeet") ;;
+2) FEATURES+=("transcribe-cpp") ;;
+3) FEATURES+=("parakeet-rs") ;;
 *) ;;
 esac
 

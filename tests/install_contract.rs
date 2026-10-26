@@ -4,7 +4,15 @@
 #[test]
 fn nemotron_activates_exact_dynamic_ort_pin() {
     let manifest: toml::Value = toml::from_str(include_str!("../Cargo.toml")).unwrap();
-    let engine = manifest["features"]["parakeet-rs"].as_array().unwrap();
+    let features = manifest["features"].as_table().unwrap();
+    assert!(!features.contains_key("parakeet"));
+    assert!(
+        !manifest["dependencies"]
+            .as_table()
+            .unwrap()
+            .contains_key("prkt")
+    );
+    let engine = features["parakeet-rs"].as_array().unwrap();
     assert!(engine.iter().any(|f| f.as_str() == Some("dep:ort")));
     let ort = &manifest["dependencies"]["ort"];
     assert_eq!(ort["version"].as_str(), Some("=2.0.0-rc.12"));

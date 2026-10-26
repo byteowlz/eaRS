@@ -31,7 +31,7 @@ function App() {
   const [finalTexts, setFinalTexts] = useState<string[]>([])
   const [wsPort, setWsPort] = useState('8765')
   const [connecting, setConnecting] = useState(false)
-  const [engine, setEngine] = useState<'kyutai' | 'parakeet'>('kyutai')
+  const [engine, setEngine] = useState<'kyutai' | 'parakeet-rs'>('kyutai')
   const wsRef = useRef<WebSocket | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
@@ -170,7 +170,7 @@ function App() {
           break
         case 'enginechanged':
           if (message.engine) {
-            setEngine(message.engine as 'kyutai' | 'parakeet')
+            setEngine(message.engine as 'kyutai' | 'parakeet-rs')
           }
           break
       }
@@ -192,7 +192,7 @@ function App() {
     }
   }
 
-  const handleEngineChange = (value: 'kyutai' | 'parakeet') => {
+  const handleEngineChange = (value: 'kyutai' | 'parakeet-rs') => {
     setEngine(value)
     sendCommand({ type: 'setengine', engine: value })
   }
@@ -254,12 +254,12 @@ function App() {
               />
               <select
                 value={engine}
-                onChange={(e) => handleEngineChange(e.target.value as 'kyutai' | 'parakeet')}
+                onChange={(e) => handleEngineChange(e.target.value as 'kyutai' | 'parakeet-rs')}
                 className="h-10 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={!isConnected}
               >
                 <option value="kyutai">Kyutai</option>
-                <option value="parakeet">Parakeet</option>
+                <option value="parakeet-rs">Nemotron</option>
               </select>
               {!isConnected ? (
                 <Button onClick={connect} disabled={connecting}>
