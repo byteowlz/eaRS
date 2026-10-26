@@ -821,4 +821,101 @@ mod tests {
         assert!(ms(STALL_RESET_STEPS) >= 18_000.0 && ms(STALL_RESET_STEPS) <= 22_000.0);
         assert!(STALL_RESET_STEPS > STALL_WARN_STEPS);
     }
+
+    /// Replays a long 24 kHz mono f32 recording through Kyutai frame by frame,
+    /// the way the server feeds a session, and writes every step's text token
+    /// plus emitted words to a TSV for stall analysis (trx-sm3r). Not a unit
+    /// test; needs the model and a recording:
+    ///
+    ///   EARS_STALL_PCM=audio.f32 EARS_STALL_BATCH=8 EARS_STALL_OUT=tokens.tsv \
+    ///   cargo test --release --features apple --lib kyutai_stall_probe -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn kyutai_stall_probe() {
+        use std::cell::RefCell;
+        use std::io::Write;
+
+        let pcm_path = std::env::var("EARS_STALL_PCM").expect("EARS_STALL_PCM");
+        let out_path = std::env::var("EARS_STALL_OUT").expect("EARS_STALL_OUT");
+        let batch: usize = std::env::var("EARS_STALL_BATCH")
+            .ok()
+            .and_then(|b| b.parse().ok())
+            .unwrap_or(8);
+        let bytes = std::fs::read(&pcm_path).unwrap();
+        let pcm: Vec<f32> = bytes
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect();
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let mut model = runtime
+            .block_on(crate::Model::load_from_hf_with_batch(
+                "kyutai/stt-1b-en_fr-candle",
+                false,
+                crate::TranscriptionOptions::default(),
+                None,
+                batch,
+            ))
+            .unwrap();
+        let dev = model.dev.clone();
+        let mut mask_vec = vec![false; batch];
+        mask_vec[0] = true;
+        let mask = StreamMask::new(mask_vec, &dev).unwrap();
+
+        let mut out = std::io::BufWriter::new(std::fs::File::create(&out_path).unwrap());
+        writeln!(out, "step\tsec\tinput_token\tpiece\tevent").unwrap();
+        let started = std::time::Instant::now();
+        for (step, frame) in pcm.chunks_exact(FRAME_SIZE).enumerate() {
+            let mut batch_pcm = vec![0.0f32; batch * FRAME_SIZE];
+            batch_pcm[..FRAME_SIZE].copy_from_slice(frame);
+            let tensor = Tensor::from_vec(batch_pcm, (batch, 1, FRAME_SIZE), &dev).unwrap();
+            let seen = RefCell::new(None);
+            let msgs = model
+                .state
+                .step_pcm(tensor, None, &mask, |items, _, _| {
+                    *seen.borrow_mut() = Some(items[0].text_token());
+                })
+                .unwrap();
+            let token = seen.into_inner();
+            let piece = token
+                .map(|t| model.decode_tokens(&[t]).unwrap_or_default())
+                .unwrap_or_default();
+            let mut events = Vec::new();
+            for msg in msgs {
+                match msg {
+                    moshi::asr::AsrMsg::Word {
+                        tokens,
+                        start_time,
+                        batch_idx: 0,
+                    } => {
+                        let word = model.decode_tokens(&tokens).unwrap_or_default();
+                        events.push(format!("WORD@{start_time:.2}:{word}"));
+                    }
+                    moshi::asr::AsrMsg::EndWord {
+                        stop_time,
+                        batch_idx: 0,
+                    } => {
+                        events.push(format!("END@{stop_time:.2}"));
+                    }
+                    _ => {}
+                }
+            }
+            writeln!(
+                out,
+                "{step}\t{:.2}\t{}\t{}\t{}",
+                step as f64 * FRAME_SIZE as f64 / 24_000.0,
+                token.map(|t| t.to_string()).unwrap_or_default(),
+                piece.replace('\t', " "),
+                events.join(" ")
+            )
+            .unwrap();
+            if step % 1500 == 0 {
+                eprintln!(
+                    "step {step} ({:.0}s audio) after {:.0}s",
+                    step as f64 * 0.08,
+                    started.elapsed().as_secs_f64()
+                );
+            }
+        }
+    }
 }
