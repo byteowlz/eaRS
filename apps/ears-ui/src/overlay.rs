@@ -452,6 +452,7 @@ impl Render for IslandView {
         let (
             phase,
             partial,
+            voice_mode,
             error_text,
             last_utterance,
             finalizing_elapsed,
@@ -462,6 +463,7 @@ impl Render for IslandView {
             (
                 m.phase(),
                 m.partial.clone(),
+                m.voice_mode.clone(),
                 m.error_text(),
                 m.last_utterance.clone().unwrap_or_default(),
                 m.finalizing_since.map(|t| t.elapsed()).unwrap_or_default(),
@@ -505,7 +507,7 @@ impl Render for IslandView {
             },
             Phase::Armed => Content {
                 phase,
-                text: "Listening".to_string(),
+                text: voice_mode.clone(),
                 dot: r.primary,
                 text_color: muted,
                 hint: true,

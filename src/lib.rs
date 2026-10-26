@@ -10,6 +10,7 @@ pub mod dictation;
 pub mod frontmost;
 pub mod profiles;
 pub mod replacement;
+pub mod speaker_gate;
 pub mod virtual_keyboard;
 pub use kaudio;
 pub mod server;

@@ -19,6 +19,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub dictation: DictationConfig,
     #[serde(default)]
+    pub voice_commands: VoiceCommandsConfig,
+    #[serde(default)]
     pub hotkeys: HotkeyConfig,
     #[serde(default)]
     pub subs: SubsConfig,
@@ -95,6 +97,30 @@ impl DictationServerConfig {
     /// Build the WebSocket URL for this server
     pub fn ws_url(&self) -> String {
         format!("ws://{}:{}", self.host, self.port)
+    }
+}
+
+/// Local, client-side routing; never sent to the STT server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoiceCommandsConfig {
+    #[serde(default)]
+    pub mode: crate::dictation::voice_commands::VoiceMode,
+    /// Optional registry override; default is $XDG_CONFIG_HOME/ears/commands.toml.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// Optional instruction suppression policy. Legacy WS audio binding is not
+    /// supported: enabled modes fail closed instead of typing/dispatching.
+    #[serde(default)]
+    pub speaker_policy: crate::speaker_gate::Policy,
+}
+
+impl Default for VoiceCommandsConfig {
+    fn default() -> Self {
+        Self {
+            mode: Default::default(),
+            path: None,
+            speaker_policy: Default::default(),
+        }
     }
 }
 
@@ -322,6 +348,7 @@ impl Default for AppConfig {
             transcribe_cpp: TranscribeCppConfig::default(),
             server: ServerConfig::default(),
             dictation: DictationConfig::default(),
+            voice_commands: VoiceCommandsConfig::default(),
             hotkeys: HotkeyConfig::default(),
             subs: SubsConfig::default(),
             replacement: ReplacementConfig::default(),
@@ -474,6 +501,38 @@ pub async fn ensure_ref_audio(config: &AppConfig) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn voice_mode_restarts_from_config() {
+        let config = AppConfig::default();
+        assert_eq!(
+            config.voice_commands.mode,
+            crate::dictation::voice_commands::VoiceMode::Dictation
+        );
+        let mut config = config;
+        config.voice_commands.mode = crate::dictation::voice_commands::VoiceMode::CommandOnly;
+        let saved = toml::to_string(&config).unwrap();
+        let restored: AppConfig = toml::from_str(&saved).unwrap();
+        assert_eq!(
+            restored.voice_commands.mode,
+            crate::dictation::voice_commands::VoiceMode::CommandOnly
+        );
+    }
+
+    #[test]
+    fn speaker_policy_is_opt_in_and_example_is_not_readiness() {
+        use crate::speaker_gate::{Mode, Policy};
+        assert_eq!(AppConfig::default().voice_commands.speaker_policy, Policy::default());
+        let legacy: VoiceCommandsConfig = toml::from_str("mode = 'dictation'").unwrap();
+        assert_eq!(legacy.speaker_policy.mode, Mode::Disabled);
+        let example: AppConfig = toml::from_str(include_str!("../examples/speaker-policy.toml")).unwrap();
+        assert_eq!(example.voice_commands.speaker_policy.mode, Mode::Allowlist);
+        assert_eq!(example.voice_commands.speaker_policy.allowed_voice_ids.len(), 2);
+        let saved = toml::to_string(&example).unwrap();
+        let restored: AppConfig = toml::from_str(&saved).unwrap();
+        assert_eq!(restored.voice_commands.speaker_policy, example.voice_commands.speaker_policy);
+        assert!(toml::from_str::<Policy>("mode = 'allowlist'\nready = true").is_err());
+    }
 
     #[test]
     fn parakeet_rs_config_defaults_to_auto_without_model() {

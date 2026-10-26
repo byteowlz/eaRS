@@ -1,0 +1,6 @@
+{"mode":"dictation","words":["hello","world"],"normalized":"hello world","expected":"streamed","label":"literal_dictation"}
+{"mode":"dictation","words":["eaRS","command-aware","mode"],"normalized":"eaRS command-aware mode","expected":"control","label":"registered_command_candidate"}
+{"mode":"command_aware","words":["open","notes"],"normalized":"open notes","expected":"literal_text","label":"registered_command_candidate"}
+{"mode":"command_aware","words":["open","note"],"normalized":"open note","expected":"typed","label":"uncertain"}
+{"mode":"command_only","words":["open","note"],"normalized":"open note","expected":"discarded","label":"uncertain"}
+{"mode":"command_only","words":["eaRS","dictation","mode"],"normalized":"eaRS dictation mode","expected":"control","label":"registered_command_candidate"}

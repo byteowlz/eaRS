@@ -21,6 +21,7 @@ use super::typing::LiveWordBuffer;
 use super::typing::ReplacementReloader;
 use super::typing::TranscriptRecorder;
 use super::vlog;
+use super::voice_commands::{Registry, Route, Router, VoiceMode};
 use super::write_pid_file;
 use crate::audio;
 use crate::config::AppConfig;
@@ -89,6 +90,10 @@ struct Engine {
     was_capturing: bool,
     /// Raw words of the current utterance, for the live partial line.
     utterance: Vec<String>,
+    router: Router,
+    registry: Registry,
+    /// Suppress an authoritative final repeated after a word/VAD boundary.
+    just_finished: bool,
     ping_sent: Arc<Mutex<Option<Instant>>>,
 }
 
@@ -149,7 +154,10 @@ pub(crate) async fn run(
     let hotkeys_enabled = options.hotkeys.unwrap_or(config.hotkeys.enable_internal);
     let escape_cancels = options
         .escape_cancels
-        .unwrap_or(config.hotkeys.escape_cancels);
+        .unwrap_or(config.hotkeys.escape_cancels)
+        || config.voice_commands.mode != VoiceMode::Dictation
+        || config.voice_commands.speaker_policy.mode != crate::speaker_gate::Mode::Disabled;
+    shared.set_escape_cancels(escape_cancels);
     if hotkeys_enabled {
         hotkeys::spawn_listener(config.hotkeys.clone(), escape_cancels, shared.clone());
     }
@@ -192,6 +200,16 @@ pub(crate) async fn run(
     );
 
     let mut engine = Engine {
+        router: Router::new(config.voice_commands.mode),
+        registry: Registry::new(
+            config
+                .voice_commands
+                .path
+                .as_ref()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(super::voice_commands::default_path),
+        ),
+        just_finished: false,
         replacement: ReplacementReloader::new(config.replacement.clone()),
         recorder: TranscriptRecorder::new(config.transcripts.clone()),
         buffer: LiveWordBuffer::new(Duration::from_millis(700)),
@@ -214,6 +232,14 @@ pub(crate) async fn run(
         commands,
     };
 
+    engine.shared.emit(DictationEvent::VoiceMode {
+        status: engine.router.status(),
+    });
+    if engine.speaker_gate_enabled() {
+        engine.shared.emit(DictationEvent::Error {
+            message: "speaker_gate: configured but unavailable (unsupported_audio_binding); no instruction dispatch".into(),
+        });
+    }
     let result = engine.main_loop(&url, audio_rx).await;
 
     let _ = engine.recorder.flush();
@@ -463,6 +489,11 @@ impl Engine {
             }
         };
 
+        // A connection loss is not an utterance boundary. Never classify a
+        // half-heard command or let it join the first words after reconnect.
+        self.router.discard_pending();
+        self.utterance.clear();
+        self.buffer.discard();
         let _ = writer_tx.send(WriterCommand::Stop);
         let _ = writer_handle.await;
         self.writer = None;
@@ -494,9 +525,25 @@ impl Engine {
             }
             DictationCommand::Cancel => {
                 self.buffer.discard();
+                self.router.cancel();
+                self.router.mode = VoiceMode::Dictation; // Escape is always a way out.
+                self.sync_escape_policy();
                 self.utterance.clear();
                 self.shared.emit(DictationEvent::Cancelled);
+                self.shared.emit(DictationEvent::VoiceMode {
+                    status: self.router.status(),
+                });
                 self.shared.set_capturing(false);
+            }
+            DictationCommand::SetVoiceMode(mode) => {
+                self.buffer.discard();
+                self.router.cancel();
+                self.router.mode = mode;
+                self.sync_escape_policy();
+                self.utterance.clear();
+                self.shared.emit(DictationEvent::VoiceMode {
+                    status: self.router.status(),
+                });
             }
             DictationCommand::SetInsertionMode(mode) => {
                 self.base_insertion_mode = mode;
@@ -534,12 +581,14 @@ impl Engine {
                 self.evaluate_profiles(true)?;
             }
             DictationCommand::SetEscapeCancels(on) => {
-                self.shared.set_escape_cancels(on);
+                self.shared
+                    .set_escape_cancels(on || self.router.mode != VoiceMode::Dictation || self.speaker_gate_enabled());
             }
             DictationCommand::SetHotkeyMode(mode) => {
                 self.shared.set_hotkey_mode(mode);
             }
             DictationCommand::Reload => {
+                self.registry.reload();
                 self.replacement.reload_if_changed();
                 if let Some(profiles) = self.profiles.as_mut() {
                     profiles.refresh();
@@ -555,14 +604,35 @@ impl Engine {
         Ok(Flow::Continue)
     }
 
+    fn sync_escape_policy(&self) {
+        let configured = self
+            .options
+            .escape_cancels
+            .unwrap_or(self.config.hotkeys.escape_cancels);
+        self.shared
+            .set_escape_cancels(configured || self.router.mode != VoiceMode::Dictation || self.speaker_gate_enabled());
+    }
+
     fn on_capture_edge(&mut self, capturing: bool) -> Result<()> {
         self.was_capturing = capturing;
         if capturing {
+            self.router.discard_pending();
             self.utterance.clear();
             self.inserter.begin_session()?;
             self.last_profile_eval = None;
             self.evaluate_profiles(true)?;
         } else {
+            // PTT release is not Speech(false): incomplete commands are
+            // discarded, but already-safe live dictionary words still flush.
+            if let Some(typed) = self.buffer.flush_all(
+                self.inserter.keyboard(),
+                &mut self.replacement,
+                &mut self.recorder,
+            )? {
+                self.shared.emit(DictationEvent::Typed { text: typed });
+            }
+            self.router.discard_pending();
+            self.utterance.clear();
             self.inserter.end_session(&self.shared);
         }
         Ok(())
@@ -662,62 +732,24 @@ impl Engine {
         match event_type {
             "word" if is_capturing => {
                 if let Some(word) = json.get("word").and_then(|v| v.as_str()) {
-                    if !word.is_empty() {
-                        self.buffer.push(word.to_string());
-                        self.utterance.push(word.to_string());
-                        self.emit_partial();
-                        if let Some(typed) = self.buffer.flush_ready(
-                            self.inserter.keyboard(),
-                            &mut self.replacement,
-                            &mut self.recorder,
-                        )? {
-                            self.shared.emit(DictationEvent::Typed { text: typed });
-                        }
-                    }
+                    self.on_word(word)?;
                 }
             }
             "speech" => {
                 let active = json.get("active").and_then(|v| v.as_bool()).unwrap_or(true);
                 self.shared.emit(DictationEvent::Speech { active });
-                if is_capturing && !active {
-                    // End of an utterance: no continuation can complete a
-                    // pending dictionary phrase, so type everything immediately
-                    // instead of waiting out the phrase-hold timer. This is
-                    // what keeps the last word of an utterance from lagging.
-                    if let Some(typed) = self.buffer.flush_all(
-                        self.inserter.keyboard(),
-                        &mut self.replacement,
-                        &mut self.recorder,
-                    )? {
-                        self.shared.emit(DictationEvent::Typed { text: typed });
-                    }
-                    self.finish_utterance();
+                if active {
+                    self.just_finished = false;
+                }
+                if is_capturing && !active && !self.utterance.is_empty() {
+                    self.complete_utterance()?;
+                    self.just_finished = true;
                     self.evaluate_profiles(true)?;
                 }
             }
-            "final" if is_capturing => {
+            "final" if is_capturing && !self.just_finished => {
                 if let Some(text) = json.get("text").and_then(|v| v.as_str()) {
-                    if !text.is_empty() {
-                        if let Some(typed) = self.buffer.flush_all(
-                            self.inserter.keyboard(),
-                            &mut self.replacement,
-                            &mut self.recorder,
-                        )? {
-                            self.shared.emit(DictationEvent::Typed { text: typed });
-                        }
-                        let replaced = self.replacement.replace(text);
-                        let formatted = self
-                            .buffer
-                            .type_formatted(self.inserter.keyboard(), &replaced)?;
-                        vlog!("[TYPING FINAL] {}", formatted);
-                        self.recorder.record("final", text, &formatted)?;
-                        self.shared.emit(DictationEvent::Typed {
-                            text: formatted.clone(),
-                        });
-                        self.utterance.clear();
-                        self.shared
-                            .emit(DictationEvent::Utterance { text: formatted });
-                    }
+                    self.on_final(text)?;
                 }
             }
             "error" => {
@@ -733,20 +765,149 @@ impl Engine {
         Ok(())
     }
 
+    fn on_word(&mut self, word: &str) -> Result<()> {
+        if word.is_empty() {
+            return Ok(());
+        }
+        self.just_finished = false;
+        if self.speaker_gate_enabled()
+            && (self.utterance.len() >= crate::speaker_gate::MAX_TEXT_BYTES
+                || self.utterance.iter().map(String::len).sum::<usize>() + self.utterance.len() + word.len()
+                    > crate::speaker_gate::MAX_TEXT_BYTES)
+        {
+            // No gated text ever reaches typing buffers, including oversized
+            // partials. The legacy protocol cannot bind this PCM to a final.
+            self.utterance.clear();
+            self.shared.emit(DictationEvent::Error {
+                message: "speaker_gate: payload_limit (no dispatch)".into(),
+            });
+            return Ok(());
+        }
+        self.utterance.push(word.to_owned());
+        // Preview is independent of OS keystrokes, including held prefixes.
+        self.emit_partial();
+        if self.speaker_gate_enabled() {
+            // Preview only. Never send an enabled-but-unavailable gate through
+            // the live dictation/router fallback, even in Dictation mode.
+            return Ok(());
+        }
+        if let Some(safe) = self.router.word(word) {
+            self.buffer.push(safe);
+            if let Some(typed) = self.buffer.flush_ready(
+                self.inserter.keyboard(),
+                &mut self.replacement,
+                &mut self.recorder,
+            )? {
+                self.shared.emit(DictationEvent::Typed { text: typed });
+            }
+        }
+        Ok(())
+    }
+
+    fn on_final(&mut self, text: &str) -> Result<()> {
+        if text.trim().is_empty() {
+            return Ok(());
+        }
+        // Some backends emit final-only text; final after Speech(false) is
+        // suppressed by just_finished. Never re-insert a streamed partial.
+        if self.utterance.is_empty() {
+            for word in text.split_whitespace() {
+                self.on_word(word)?;
+            }
+        }
+        self.complete_utterance()?;
+        self.just_finished = true;
+        Ok(())
+    }
+
     fn emit_partial(&mut self) {
         let raw = self.utterance.join(" ");
         let text = super::typing::normalize_punctuation_spacing(&self.replacement.replace(&raw));
         self.shared.emit(DictationEvent::Partial { text });
     }
 
-    fn finish_utterance(&mut self) {
+    fn speaker_gate_enabled(&self) -> bool {
+        self.config.voice_commands.speaker_policy.mode != crate::speaker_gate::Mode::Disabled
+    }
+
+    fn complete_utterance(&mut self) -> Result<()> {
         if self.utterance.is_empty() {
-            return;
+            return Ok(());
         }
+        if self.speaker_gate_enabled() {
+            // Legacy word/speech/final events contain no authoritative PCM span,
+            // utterance ID or revision. Arrival-time audio slicing is NOT evidence.
+            // Do not emit Utterance/PromptReady, record the private transcript, run
+            // controls, or type rejected instructions into an ungated target.
+            self.utterance.clear();
+            self.buffer.discard();
+            self.router.discard_pending();
+            self.shared.emit(DictationEvent::VoiceDecision {
+                raw: String::new(), normalized: String::new(),
+                outcome: "speaker_gate_unavailable_audio_binding".into(),
+            });
+            self.shared.emit(DictationEvent::Error {
+                message: "speaker_gate: unsupported_audio_binding (no dispatch)".into(),
+            });
+            return Ok(());
+        }
+        self.registry.reload_if_changed();
         let raw = self.utterance.join(" ");
         let text = super::typing::normalize_punctuation_spacing(&self.replacement.replace(&raw));
+        let route = self.router.finish(&text, &self.registry);
+        match &route {
+            Route::Type(text) | Route::Action(text) => {
+                // Live words are already in the buffer. Buffered utterances
+                // enter here only after the entire VAD-bounded phrase matches.
+                if let Some(typed) = self.buffer.flush_all(
+                    self.inserter.keyboard(),
+                    &mut self.replacement,
+                    &mut self.recorder,
+                )? {
+                    self.shared.emit(DictationEvent::Typed { text: typed });
+                }
+                let formatted = self.buffer.type_formatted(self.inserter.keyboard(), text)?;
+                self.shared.emit(DictationEvent::Typed { text: formatted });
+            }
+            Route::Discard => self.buffer.discard(),
+            Route::Streamed => {
+                if let Some(typed) = self.buffer.flush_all(
+                    self.inserter.keyboard(),
+                    &mut self.replacement,
+                    &mut self.recorder,
+                )? {
+                    self.shared.emit(DictationEvent::Typed { text: typed });
+                }
+            }
+            Route::Control(key) => {
+                self.sync_escape_policy();
+                self.buffer.discard();
+                self.shared.emit(DictationEvent::VoiceMode {
+                    status: self.router.status(),
+                });
+                if key == "ears cancel" {
+                    self.shared.emit(DictationEvent::Cancelled);
+                    self.shared.set_capturing(false);
+                }
+            }
+        }
+        let outcome = match route {
+            Route::Type(_) => "typed",
+            Route::Action(_) => "literal_text",
+            Route::Control(_) => "control",
+            Route::Discard => "discarded",
+            Route::Streamed => "streamed",
+        };
+        self.recorder
+            .record(&format!("voice_decision_{outcome}"), &raw, &text)?;
+        self.shared.emit(DictationEvent::VoiceDecision {
+            raw,
+            normalized: text.clone(),
+            outcome: outcome.into(),
+        });
         self.utterance.clear();
         self.shared.emit(DictationEvent::Utterance { text });
+        Ok(())
     }
 }
 
@@ -764,9 +925,166 @@ mod tests {
     use super::super::typing::tests::RecordingKeyboard;
     use super::super::typing::tests::silent_recorder;
     use super::super::typing::tests::test_reloader;
+    use super::*;
     use crate::virtual_keyboard::VirtualKeyboard;
     use std::sync::Arc;
     use std::time::Duration;
+
+    #[test]
+    fn message_path_previews_each_word_without_partial_execution() {
+        let dir = std::env::temp_dir().join(format!("ears-engine-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("commands.toml");
+        std::fs::write(
+            &path,
+            "[[command]]\nphrase='open notes'\nrisk='safe'\naction={type='literal_text',text='NOTES'}\n",
+        )
+        .unwrap();
+        let mut config = AppConfig::default();
+        config.voice_commands.mode = VoiceMode::CommandAware;
+        config.replacement.enabled = false;
+        config.transcripts.enabled = false;
+        let (events_tx, events_rx) = unbounded();
+        let (commands_tx, commands_rx) = unbounded();
+        let shared = Arc::new(Shared::new(&config, true, events_tx, commands_tx, true));
+        let recording = RecordingKeyboard::default();
+        let typed = recording.typed.clone();
+        let mut inserter = Inserter::new(InsertionMode::Clipboard).unwrap();
+        *inserter.keyboard() = Box::new(recording);
+        let mut engine = Engine {
+            replacement: ReplacementReloader::new(config.replacement.clone()),
+            recorder: TranscriptRecorder::new(config.transcripts.clone()),
+            buffer: LiveWordBuffer::new(Duration::from_millis(700)),
+            inserter,
+            profiles: None,
+            backend: BackendInfo::default(),
+            writer: None,
+            base_lang: None,
+            effective_lang: None,
+            base_insertion_mode: InsertionMode::Clipboard,
+            active_profile: None,
+            pinned_profile: None,
+            last_profile_eval: None,
+            was_capturing: true,
+            utterance: Vec::new(),
+            router: Router::new(VoiceMode::CommandAware),
+            registry: Registry::new(path),
+            just_finished: false,
+            ping_sent: Arc::new(Mutex::new(None)),
+            config,
+            options: DictationOptions::default(),
+            shared,
+            commands: commands_rx,
+        };
+        for (word, expected) in [("open", "open"), ("notes", "open notes")] {
+            engine
+                .handle_message(&serde_json::json!({"type":"word","word":word}))
+                .unwrap();
+            assert_eq!(&*typed.lock().unwrap(), "");
+            assert!(
+                events_rx
+                    .try_iter()
+                    .any(|e| matches!(e, DictationEvent::Partial { text } if text == expected))
+            );
+        }
+        engine
+            .handle_message(&serde_json::json!({"type":"speech","active":false}))
+            .unwrap();
+        assert_eq!(&*typed.lock().unwrap(), "NOTES ");
+        assert!(events_rx.try_iter().any(|e| matches!(e, DictationEvent::VoiceDecision { outcome, .. } if outcome == "literal_text")));
+        engine.router.mode = VoiceMode::Dictation;
+        engine
+            .handle_message(&serde_json::json!({"type":"word","word":"hello"}))
+            .unwrap();
+        assert_eq!(&*typed.lock().unwrap(), "NOTES hello ");
+        engine
+            .handle_message(&serde_json::json!({"type":"speech","active":false}))
+            .unwrap();
+        engine
+            .handle_message(&serde_json::json!({"type":"word","word":"eaRS"}))
+            .unwrap();
+        assert_eq!(&*typed.lock().unwrap(), "NOTES hello ");
+        engine
+            .handle_message(&serde_json::json!({"type":"word","word":"not"}))
+            .unwrap();
+        assert_eq!(&*typed.lock().unwrap(), "NOTES hello eaRS not ");
+        engine
+            .handle_message(&serde_json::json!({"type":"speech","active":false}))
+            .unwrap();
+        engine.router.mode = VoiceMode::CommandOnly;
+        for word in ["open", "note"] {
+            engine
+                .handle_message(&serde_json::json!({"type":"word","word":word}))
+                .unwrap();
+        }
+        assert_eq!(&*typed.lock().unwrap(), "NOTES hello eaRS not ");
+        engine
+            .handle_message(&serde_json::json!({"type":"speech","active":false}))
+            .unwrap();
+        assert_eq!(&*typed.lock().unwrap(), "NOTES hello eaRS not ");
+        for word in ["eaRS", "dictation", "mode"] {
+            engine
+                .handle_message(&serde_json::json!({"type":"word","word":word}))
+                .unwrap();
+        }
+        engine
+            .handle_message(&serde_json::json!({"type":"speech","active":false}))
+            .unwrap();
+        assert_eq!(engine.router.mode, VoiceMode::Dictation);
+        assert_eq!(&*typed.lock().unwrap(), "NOTES hello eaRS not ");
+        // A completed final after the VAD boundary must not repeat insertion.
+        engine
+            .handle_message(&serde_json::json!({"type":"final","text":"eaRS dictation mode"}))
+            .unwrap();
+        assert_eq!(&*typed.lock().unwrap(), "NOTES hello eaRS not ");
+        engine
+            .handle_command(DictationCommand::SetVoiceMode(VoiceMode::CommandOnly))
+            .unwrap();
+        assert!(engine.shared.escape_cancels());
+        engine
+            .handle_command(DictationCommand::SetEscapeCancels(false))
+            .unwrap();
+        assert!(engine.shared.escape_cancels());
+        engine.handle_command(DictationCommand::Cancel).unwrap();
+        assert_eq!(engine.router.mode, VoiceMode::Dictation);
+        assert!(!engine.shared.escape_cancels());
+
+        // Enabling a gate on the legacy WS adapter must never silently type,
+        // run a control, emit an eligible utterance or fall back after cancel.
+        for mode in [crate::speaker_gate::Mode::Allowlist, crate::speaker_gate::Mode::Annotate] {
+            engine.config.voice_commands.speaker_policy.mode = mode;
+            engine.shared.set_capturing(true);
+            engine.router.mode = VoiceMode::Dictation; // Explicitly exercise live fallback.
+            engine.handle_command(DictationCommand::SetEscapeCancels(false)).unwrap();
+            assert!(engine.shared.escape_cancels()); // Keyboard escape stays a way out.
+            let before = typed.lock().unwrap().clone();
+            let _ = events_rx.try_iter().collect::<Vec<_>>();
+            for word in ["eaRS", "command-only", "mode"] {
+                engine.handle_message(&serde_json::json!({"type":"word","word":word})).unwrap();
+            }
+            engine.handle_message(&serde_json::json!({"type":"speech","active":false})).unwrap();
+            engine.handle_message(&serde_json::json!({"type":"speech","active":false})).unwrap();
+            engine.handle_message(&serde_json::json!({"type":"final","text":"open notes"})).unwrap();
+            // Physical PTT release remains independent of voice evidence.
+            engine.handle_command(DictationCommand::SetCapturing(false)).unwrap();
+            engine.on_capture_edge(false).unwrap();
+            assert!(!engine.shared.is_capturing());
+            engine.shared.set_capturing(true);
+            engine.handle_command(DictationCommand::Cancel).unwrap();
+            assert!(!engine.shared.is_capturing());
+            assert!(engine.shared.escape_cancels());
+            engine.handle_message(&serde_json::json!({"type":"final","text":"late final"})).unwrap();
+            assert_eq!(engine.router.mode, VoiceMode::Dictation);
+            assert_eq!(*typed.lock().unwrap(), before);
+            let events: Vec<_> = events_rx.try_iter().collect();
+            assert!(events.iter().any(|event| matches!(event,
+                DictationEvent::VoiceDecision { raw, normalized, outcome }
+                if raw.is_empty() && normalized.is_empty() && outcome == "speaker_gate_unavailable_audio_binding")));
+            assert!(!events.iter().any(|event| matches!(event,
+                DictationEvent::Typed { .. } | DictationEvent::Utterance { .. } | DictationEvent::PromptReady { .. })));
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn speech_boundary_flushes_held_words() {

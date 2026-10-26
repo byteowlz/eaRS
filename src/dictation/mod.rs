@@ -15,6 +15,7 @@
 mod engine;
 pub mod hotkeys;
 pub mod typing;
+pub mod voice_commands;
 
 use crate::config::AppConfig;
 use crate::config::DictationNotificationConfig;
@@ -157,6 +158,14 @@ pub enum DictationEvent {
     /// Words recognised since the last utterance boundary, after dictionary
     /// replacement. This is the "live partial" line the overlay shows.
     Partial { text: String },
+    /// Client-side routing mode or temporary typing substate changed.
+    VoiceMode { status: String },
+    /// A complete utterance matched a configured action or reserved control.
+    VoiceDecision {
+        raw: String,
+        normalized: String,
+        outcome: String,
+    },
     /// Text that was actually inserted (or copied) just now.
     Typed { text: String },
     /// An utterance ended (VAD boundary or final transcript).
@@ -189,6 +198,8 @@ pub enum DictationCommand {
     Toggle,
     /// Discard pending words and pause.
     Cancel,
+    /// Hotkey/UI escape back to low-latency dictation.
+    SetVoiceMode(voice_commands::VoiceMode),
     SetInsertionMode(InsertionMode),
     /// Pin a profile by name (`None` returns to automatic matching).
     SetProfile(Option<String>),

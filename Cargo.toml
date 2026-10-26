@@ -36,6 +36,11 @@ path = "src/bin/ears-dictation.rs"
 
 [dependencies]
 aho-corasick = "1"
+sha2 = "0.10"
+# Shared canonical identity/evidence model, pinned to a pushed voqx commit so
+# CI and fresh clones build without a sibling checkout.
+voqx-core = { git = "https://github.com/byteowlz/voqx.git", rev = "36ca757a7f4f5f28bfc2b4ed97cfe63919e5082e" }
+voqx-recognition = { git = "https://github.com/byteowlz/voqx.git", rev = "36ca757a7f4f5f28bfc2b4ed97cfe63919e5082e", optional = true }
 anyhow = "1.0"
 atty = "0.2"
 candle = { version = "0.9", package = "candle-core" }
@@ -129,6 +134,8 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Wind
 default = []
 cudnn = ["candle/cudnn", "candle-nn/cudnn"]
 hooks = []
+# Opt-in evidence adapter only; never loads models/profiles automatically.
+speaker-voqx = ["dep:voqx-recognition"]
 
 # Engines
 parakeet = ["dep:prkt", "dep:ort", "dep:ort-sys", "dep:webrtc-vad"]

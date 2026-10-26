@@ -1,0 +1,15 @@
+# Deserialization example, NOT a ready live speaker filter.
+# On legacy WebSocket dictation this deliberately suppresses ALL instruction
+# dispatch/typing with unsupported_audio_binding. No model/registry is loaded.
+[storage]
+model_dir = "default"
+ref_audio = "default"
+
+[voice_commands]
+mode = "command_only"
+
+[voice_commands.speaker_policy]
+mode = "allowlist"
+allowed_voice_ids = ["vox-example-a", "vox-example-b"]
+revision = 1
+deadline_ms = 2000

@@ -64,6 +64,7 @@ pub struct AppModel {
     pub connection_message: Option<String>,
     pub backend: Option<BackendInfo>,
     pub partial: String,
+    pub voice_mode: String,
     pub last_utterance: Option<String>,
     pub last_prompt: Option<String>,
     pub speech_active: bool,
@@ -102,6 +103,7 @@ impl AppModel {
             connection_message: None,
             backend: None,
             partial: String::new(),
+            voice_mode: "Dictation".into(),
             last_utterance: None,
             last_prompt: None,
             speech_active: false,
@@ -215,6 +217,11 @@ impl AppModel {
                 self.finalizing_since = None;
                 self.touch();
             }
+            DictationEvent::VoiceMode { status } => {
+                self.voice_mode = status;
+                self.touch();
+            }
+            DictationEvent::VoiceDecision { .. } => {}
             DictationEvent::Typed { .. } => {
                 self.touch();
             }

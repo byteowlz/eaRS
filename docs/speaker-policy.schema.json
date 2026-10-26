@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "eaRS per-consumer speaker policy",
+  "description": "Policy object only, used at voice_commands.speaker_policy. Configuration does not establish provider readiness; legacy WebSocket gated dispatch is unsupported.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "mode": { "enum": ["disabled", "annotate", "allowlist"], "default": "disabled" },
+    "allowed_voice_ids": { "type": "array", "items": { "type": "string" }, "default": [] },
+    "revision": { "type": "integer", "minimum": 0, "default": 0 },
+    "deadline_ms": { "type": "integer", "minimum": 0, "default": 2000, "description": "Evidence deadline after first final; runtime caps at 30000ms. Zero immediately denies. Corrections cannot extend it." }
+  }
+}

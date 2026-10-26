@@ -6,6 +6,9 @@ All notable changes to eaRS are documented in this file.
 
 ### Features
 
+- **speaker gate**: add bounded completed-audio ASR/evidence joining and single-use, scoped instruction dispatch with synthetic regression proof. The optional prepared-voqx adapter is evidence-only; enabled legacy WebSocket consumers fail closed because exact audio/final binding is unsupported. Ordinary disabled dictation is unchanged. See `docs/speaker-gate.md`; no live-filter or robot-readiness claim.
+- **dictation**: add opt-in client-side deterministic command-aware and command-only modes with exact reserved `eaRS` controls, VAD-bounded literal-text commands, fail-closed TOML registry and word-by-word provisional island preview. Normal dictation remains streaming; no speculative keystroke retraction. See `docs/voice-commands.md` for current adapter limits.
+- **evaluation**: run pinned local Kev-0.5B offline against synthetic completed utterances with a reproducible shadow runner; results in `docs/kev-shadow.md`. Kev is not in the production command path.
 - **ui**: add `ears-ui` (apps/ears-ui), a GPUI companion UI: floating
   dictation island (non-activating, all-spaces panel with live partials,
   morph animation, island/notch mode, drag + click-through), tray/menu-bar

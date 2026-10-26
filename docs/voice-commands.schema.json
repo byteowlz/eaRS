@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://byteowlz.com/ears/voice-commands.schema.json",
+  "title": "eaRS deterministic voice command registry (TOML data model)",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "command": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["phrase", "risk", "action"],
+        "properties": {
+          "phrase": { "type": "string", "minLength": 1, "description": "Exact complete utterance after dictionary normalization; eaRS prefixes are reserved." },
+          "risk": { "enum": ["safe", "consequential", "destructive"], "description": "Only safe is currently permitted; all other tiers fail closed until confirmation is implemented." },
+          "action": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "text"],
+            "properties": {
+              "type": { "const": "literal_text" },
+              "text": { "type": "string", "minLength": 1, "description": "Configuration-authored literal only; no spoken captures or interpolation." }
+            }
+          }
+        }
+      }
+    }
+  }
+}

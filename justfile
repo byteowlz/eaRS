@@ -603,6 +603,15 @@ install-ears-parakeet:
     
     cargo install --path . --force --features parakeet-rs
 
+# Bounded speaker-gate software proof; no microphone/model inference.
+test-speaker-gate:
+    cargo nextest run --no-fail-fast -p eaRS --lib --no-default-features -E 'test(speaker_gate::) | test(dictation::) | test(config::)'
+
+# Compile the optional prepared-voqx adapter without running/loading a model.
+check-speaker-gate:
+    cargo check -p eaRS --no-default-features
+    cargo check -p eaRS --no-default-features --features speaker-voqx
+
 # === Maintenance ===
 
 # Clean build artifacts
