@@ -263,6 +263,9 @@ impl AppModel {
             DictationEvent::AudioHistory { active, .. } => {
                 self.audio_history = active;
             }
+            DictationEvent::Wake { .. } => {
+                self.touch();
+            }
             DictationEvent::PromptReady { text } => {
                 self.last_prompt = Some(text);
             }

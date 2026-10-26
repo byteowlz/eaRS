@@ -106,6 +106,19 @@ pause_on_secure_input = true
 # excluded_apps defaults to common password managers; setting it replaces the list.
 # excluded_apps = ["com.1password.1password", "com.bitwarden.desktop"]
 
+# Wake phrases: start dictation by voice instead of the hotkey. Off by default.
+# eaRS keeps the microphone and streams 16 kHz audio (only while dictation is paused)
+# to any detector process speaking wake-stream/1 (see the `wake` repository); the
+# model is whatever that command loads. A detection only does what the toggle hotkey
+# does: start capture. It never authenticates a speaker or runs an action itself.
+[dictation.wake]
+enabled = false
+command = ["wake", "listen", "--manifest", "/path/to/wake-models/<release>"]
+# min_score = 0.6           # optional floor on top of the detector's own threshold
+[dictation.wake.actions]
+hey_oqto = "start_dictation"
+# oqto = "ignore"           # recognised, deliberately unused
+
 # Dictation hooks require compiling with `--features hooks`
 [dictation.hooks]
 # Command executed when dictation resumes typing input (leave blank to disable)

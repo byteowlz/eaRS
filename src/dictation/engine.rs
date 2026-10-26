@@ -173,11 +173,19 @@ pub(crate) async fn run(
     });
 
     let (audio_tx, audio_rx) = unbounded();
+    // Single microphone owner: capture feeds the engine, and a wake tee when configured.
+    let capture_tx = if config.dictation.wake.active() {
+        let (capture_tx, capture_rx) = unbounded::<Vec<f32>>();
+        super::wake::spawn_tee(&config.dictation.wake, capture_rx, audio_tx, shared.clone())?;
+        capture_tx
+    } else {
+        audio_tx
+    };
     let audio_shared = shared.clone();
     thread::Builder::new()
         .name("ears-audio".to_string())
         .spawn(move || {
-            if let Err(e) = audio::start_audio_capture(audio_tx, None) {
+            if let Err(e) = audio::start_audio_capture(capture_tx, None) {
                 eprintln!("Audio capture error: {}", e);
                 audio_shared.emit(DictationEvent::Error {
                     message: format!("microphone unavailable: {e}"),

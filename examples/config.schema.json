@@ -263,6 +263,48 @@
             }
           },
           "additionalProperties": false
+        },
+        "wake": {
+          "type": "object",
+          "description": "Optional wake-phrase trigger. eaRS streams 16 kHz audio while dictation is paused to an external detector process (wake-stream/1) and maps reported phrases to actions. Evidence only: a detection can do what the toggle hotkey does, nothing more.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "Run the detector command"
+            },
+            "command": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": [],
+              "description": "Detector process and arguments, e.g. [\"wake\", \"listen\", \"--manifest\", \"/path/to/release\"]"
+            },
+            "actions": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string",
+                "enum": [
+                  "start_dictation",
+                  "ignore"
+                ]
+              },
+              "default": {},
+              "description": "Phrase reported by the detector -> action; unlisted phrases are ignored"
+            },
+            "min_score": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 1,
+              "default": null,
+              "description": "Optional extra score floor on top of the detector's threshold"
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

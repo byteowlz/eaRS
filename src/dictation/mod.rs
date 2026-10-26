@@ -17,6 +17,7 @@ mod engine;
 pub mod hotkeys;
 pub mod typing;
 pub mod voice_commands;
+pub mod wake;
 
 use crate::config::AppConfig;
 use crate::config::DictationNotificationConfig;
@@ -187,6 +188,9 @@ pub enum DictationEvent {
     /// Audio retention state: `active` while utterance audio is being kept.
     /// `note` explains a skipped utterance (excluded app, secure input).
     AudioHistory { active: bool, note: Option<String> },
+    /// A wake detector reported a mapped phrase and dictation was started.
+    /// Evidence only: the same effect as the toggle hotkey.
+    Wake { phrase: String, score: f32 },
     /// Non-fatal error worth showing to the user.
     Error { message: String },
     /// The engine loop exited.

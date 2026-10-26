@@ -144,6 +144,9 @@ pub struct DictationConfig {
     /// Opt-in local retention of dictation audio (off by default).
     #[serde(default)]
     pub audio_history: crate::dictation::audio_history::AudioHistoryConfig,
+    /// Optional wake-phrase trigger through an external detector (off by default).
+    #[serde(default)]
+    pub wake: crate::dictation::wake::WakeConfig,
     #[cfg(feature = "hooks")]
     #[serde(default)]
     pub hooks: DictationHooksConfig,
@@ -320,6 +323,7 @@ impl Default for DictationConfig {
             servers: default_servers(),
             notifications: DictationNotificationConfig::default(),
             audio_history: Default::default(),
+            wake: Default::default(),
             #[cfg(feature = "hooks")]
             hooks: DictationHooksConfig::default(),
         }
