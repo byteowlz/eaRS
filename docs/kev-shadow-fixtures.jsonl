@@ -1,0 +1,24 @@
+{"mode":"command_aware","normalized":"open notes","expected":"literal_text","label":"registered_command_candidate"}
+{"mode":"command_only","normalized":"OPEN NOTES.","expected":"literal_text","label":"registered_command_candidate"}
+{"mode":"command_aware","normalized":"eaRS dictation mode","expected":"control","label":"registered_command_candidate"}
+{"mode":"command_only","normalized":"eaRS start typing","expected":"control","label":"registered_command_candidate"}
+{"mode":"dictation","normalized":"eaRS command-aware mode","expected":"control","label":"registered_command_candidate"}
+{"mode":"command_only","normalized":"eaRS what mode","expected":"control","label":"registered_command_candidate"}
+{"mode":"command_aware","normalized":"eaRS cancel","expected":"control","label":"registered_command_candidate"}
+{"mode":"dictation","normalized":"open notes","expected":"streamed","label":"registered_command_candidate"}
+{"mode":"dictation","normalized":"Please write down a note about the meeting","expected":"streamed","label":"literal_dictation"}
+{"mode":"command_aware","normalized":"I will open notes after lunch","expected":"typed","label":"literal_dictation"}
+{"mode":"dictation","normalized":"The phrase open notes appears in the transcript","expected":"streamed","label":"literal_dictation"}
+{"mode":"command_aware","normalized":"She said open notes in the recording","expected":"typed","label":"literal_dictation"}
+{"mode":"command_aware","normalized":"Type the words open notes exactly","expected":"typed","label":"literal_dictation"}
+{"mode":"dictation","normalized":"My ears hurt when the music is loud","expected":"streamed","label":"literal_dictation"}
+{"mode":"command_aware","normalized":"Our new interface has a command only mode","expected":"typed","label":"literal_dictation"}
+{"mode":"command_only","normalized":"hello world","expected":"discarded","label":"literal_dictation"}
+{"mode":"command_aware","normalized":"open note","expected":"typed","label":"uncertain"}
+{"mode":"command_only","normalized":"open the notes","expected":"discarded","label":"uncertain"}
+{"mode":"command_aware","normalized":"ear command aware mode","expected":"typed","label":"uncertain"}
+{"mode":"command_only","normalized":"eaRS command aware mode","expected":"discarded","label":"uncertain"}
+{"mode":"command_aware","normalized":"open notes no wait cancel that","expected":"typed","label":"uncertain"}
+{"mode":"dictation","normalized":"maybe open notes","expected":"streamed","label":"uncertain"}
+{"mode":"command_only","normalized":"could you open notes please","expected":"discarded","label":"uncertain"}
+{"mode":"command_aware","normalized":"ee ars stop typing","expected":"typed","label":"uncertain"}
