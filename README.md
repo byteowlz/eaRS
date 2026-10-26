@@ -304,16 +304,17 @@ ears server start \
     [--parakeet-rs-lang auto|en|de|es|ja] \
     [--transcribe-cpp-model /path/to/model.gguf] \
     [--transcribe-cpp-lang auto|en|de|...] \
-    [--cpu] [--timestamps] [--vad]
+    [--with-kyutai] [--cpu] [--timestamps] [--vad]
 
 # Restart accepts the same arguments as start.
 ears server restart --engine parakeet-rs --parakeet-rs-lang de
 ```
 
 - `--bind`: Override the default bind address (`0.0.0.0:<port-from-config>`).
-- `--engine`: Choose the default engine (`kyutai` or `parakeet-rs` when compiled with that feature).
+- `--engine`: Choose the default engine (`kyutai` or `parakeet-rs` when compiled with that feature). The server refuses to start if the default engine cannot be loaded instead of silently serving another one.
+- `--with-kyutai`: Also load Kyutai when another engine is the default, so clients can switch to it with `setengine`. Without it a `parakeet-rs` server neither downloads nor loads Kyutai (about 2.6 GB RSS instead of ~5 GB).
 - `--hf-repo`: Choose a different Kyutai Speech repository.
-- `--parakeet-rs-model`: Override `[parakeet_rs].model_dir`.
+- `--parakeet-rs-model`: Override `[parakeet_rs].model_dir`. parakeet-rs loads ONNX Runtime >= 1.24 at runtime: set `ORT_DYLIB_PATH`, or the server looks next to the `ears` binary, its sibling `lib/`, `/opt/homebrew/lib`, `/usr/local/lib` and the usual Linux library directories (`brew install onnxruntime` / `pacman -S onnxruntime`).
 - `--parakeet-rs-lang`: Override `[parakeet_rs].language`; a dictation client `--lang` command overrides it per session.
 - `--transcribe-cpp-model`: Streaming-capable transcribe.cpp GGUF model (overrides `[transcribe_cpp].model_path`). Accepts either an existing `.gguf` path or a known model slug, which is auto-downloaded from the `handy-computer` Hugging Face org into the shared HF cache on first use. Append `@QUANT` (e.g. `nemotron-3.5-asr-streaming-0.6b@Q5_K_M`) to pick a non-default quant. One session at a time: the model's compute lease is held per active stream.
 

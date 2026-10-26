@@ -27,7 +27,6 @@ const DEBUG_LOG_INTERVAL: Duration = Duration::from_secs(1);
 #[derive(Debug, Clone)]
 pub(crate) struct ParallelEngine {
     command_tx: Sender<EngineCommand>,
-    capacity: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -459,7 +458,6 @@ pub(crate) fn spawn_parallel_engine(
     mut model: Model,
     prime_languages: Vec<String>,
 ) -> ParallelEngine {
-    let capacity = model.batch_size();
     let (command_tx, command_rx) = unbounded::<EngineCommand>();
     let engine_tx = command_tx.clone();
 
@@ -471,15 +469,10 @@ pub(crate) fn spawn_parallel_engine(
 
     ParallelEngine {
         command_tx: engine_tx,
-        capacity,
     }
 }
 
 impl ParallelEngine {
-    pub fn capacity(&self) -> usize {
-        self.capacity
-    }
-
     pub fn allocate_session(&self, sink: SessionSink) -> Result<Option<SessionHandle>> {
         let (response_tx, response_rx) = unbounded();
         self.command_tx

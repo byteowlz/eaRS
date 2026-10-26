@@ -95,6 +95,174 @@ fn ensure_model_files(model_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// ONNX Runtime minor version the pinned `ort` (2.0.0-rc.12 with parakeet-rs's
+/// `api-24`) requires; older runtimes are rejected.
+const ORT_MIN_MINOR: u32 = 24;
+
+#[cfg(target_os = "macos")]
+const ORT_LIB_NAMES: &[&str] = &["libonnxruntime.dylib", "libonnxruntime.1.dylib"];
+#[cfg(target_os = "windows")]
+const ORT_LIB_NAMES: &[&str] = &["onnxruntime.dll"];
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+const ORT_LIB_NAMES: &[&str] = &["libonnxruntime.so", "libonnxruntime.so.1"];
+
+/// Directories searched for ONNX Runtime when `ORT_DYLIB_PATH` is unset:
+/// next to the executable (where `just install-all` copies dylibs), its
+/// sibling `lib/`, then the usual package-manager prefixes.
+fn ort_search_dirs(exe_dir: Option<&Path>) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(dir) = exe_dir {
+        dirs.push(dir.to_path_buf());
+        dirs.push(dir.join("..").join("lib"));
+    }
+    for dir in [
+        "/opt/homebrew/lib",
+        "/usr/local/lib",
+        "/usr/lib",
+        "/usr/lib64",
+        "/usr/lib/x86_64-linux-gnu",
+        "/usr/lib/aarch64-linux-gnu",
+    ] {
+        dirs.push(PathBuf::from(dir));
+    }
+    dirs
+}
+
+/// First candidate library that exists and passes `probe`, or the reasons
+/// every existing candidate was rejected.
+fn find_onnx_runtime(
+    dirs: &[PathBuf],
+    probe: impl Fn(&Path) -> Result<String>,
+) -> std::result::Result<(PathBuf, String), Vec<String>> {
+    let mut rejected = Vec::new();
+    for path in dirs
+        .iter()
+        .flat_map(|dir| ORT_LIB_NAMES.iter().map(move |name| dir.join(name)))
+        .filter(|path| path.is_file())
+    {
+        match probe(&path) {
+            Ok(version) => return Ok((path, version)),
+            Err(err) => rejected.push(format!("{err:#}")),
+        }
+    }
+    Err(rejected)
+}
+
+/// Load `path` and check its ONNX Runtime version the way `ort` does, but
+/// without `ort`: given an unloadable or too-old library, `ort` 2.0.0-rc.12
+/// deadlocks in its own API initialisation instead of returning an error.
+#[cfg(unix)]
+fn probe_onnx_runtime(path: &Path) -> Result<String> {
+    use std::ffi::{CStr, CString, c_char, c_void};
+    use std::os::unix::ffi::OsStrExt;
+
+    #[repr(C)]
+    struct OrtApiBase {
+        _get_api: unsafe extern "C" fn(u32) -> *const c_void,
+        get_version_string: unsafe extern "C" fn() -> *const c_char,
+    }
+
+    let c_path = CString::new(path.as_os_str().as_bytes())?;
+    // SAFETY: plain dlopen/dlsym on a NUL-terminated path. The handle stays
+    // open on purpose: `ort` loads the same library right afterwards.
+    unsafe {
+        let handle = libc::dlopen(c_path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
+        if handle.is_null() {
+            let err = libc::dlerror();
+            let reason = if err.is_null() {
+                "unknown dlopen error".to_string()
+            } else {
+                CStr::from_ptr(err).to_string_lossy().into_owned()
+            };
+            anyhow::bail!("{} cannot be loaded: {reason}", path.display());
+        }
+        let symbol = libc::dlsym(handle, c"OrtGetApiBase".as_ptr());
+        if symbol.is_null() {
+            anyhow::bail!("{} is not ONNX Runtime (no OrtGetApiBase)", path.display());
+        }
+        let get_base: unsafe extern "C" fn() -> *const OrtApiBase = std::mem::transmute(symbol);
+        let base = get_base();
+        if base.is_null() {
+            anyhow::bail!("{} returned no ONNX Runtime API", path.display());
+        }
+        let version = CStr::from_ptr(((*base).get_version_string)())
+            .to_string_lossy()
+            .into_owned();
+        let minor = version
+            .split('.')
+            .nth(1)
+            .and_then(|m| m.parse::<u32>().ok())
+            .unwrap_or(0);
+        if minor < ORT_MIN_MINOR {
+            anyhow::bail!(
+                "{} is ONNX Runtime {version}, but >= 1.{ORT_MIN_MINOR} is required",
+                path.display()
+            );
+        }
+        Ok(version)
+    }
+}
+
+#[cfg(not(unix))]
+fn probe_onnx_runtime(_path: &Path) -> Result<String> {
+    Ok("unchecked".to_string())
+}
+
+fn ort_install_hint() -> String {
+    format!(
+        "parakeet-rs loads ONNX Runtime >= 1.{ORT_MIN_MINOR} at runtime. Install it \
+         (macOS: `brew install onnxruntime`; Arch: `pacman -S onnxruntime`) or set \
+         ORT_DYLIB_PATH to the library, e.g. ORT_DYLIB_PATH=/opt/homebrew/lib/libonnxruntime.dylib"
+    )
+}
+
+/// Make sure `ort`'s dynamic loader gets a usable ONNX Runtime before the
+/// model loads. Left alone, `ort` panics when the bare library name is not on
+/// the loader path, which killed the server (trx-zef0).
+fn ensure_onnx_runtime() -> Result<(PathBuf, String)> {
+    if let Some(path) = std::env::var_os("ORT_DYLIB_PATH").filter(|p| !p.is_empty()) {
+        let path = PathBuf::from(path);
+        if !path.is_file() {
+            anyhow::bail!(
+                "ORT_DYLIB_PATH points to {}, which does not exist. {}",
+                path.display(),
+                ort_install_hint()
+            );
+        }
+        let version = probe_onnx_runtime(&path)
+            .map_err(|err| anyhow::anyhow!("ORT_DYLIB_PATH: {err:#}. {}", ort_install_hint()))?;
+        return Ok((path, version));
+    }
+
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf));
+    let dirs = ort_search_dirs(exe_dir.as_deref());
+    let (path, version) = find_onnx_runtime(&dirs, probe_onnx_runtime).map_err(|rejected| {
+        let searched = dirs
+            .iter()
+            .map(|d| d.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        if rejected.is_empty() {
+            anyhow::anyhow!(
+                "ONNX Runtime not found (searched {searched}). {}",
+                ort_install_hint()
+            )
+        } else {
+            anyhow::anyhow!(
+                "no usable ONNX Runtime found ({}). {}",
+                rejected.join("; "),
+                ort_install_hint()
+            )
+        }
+    })?;
+    // SAFETY: called once during server startup before any session exists;
+    // nothing else reads or writes the environment concurrently here.
+    unsafe { std::env::set_var("ORT_DYLIB_PATH", &path) };
+    Ok((path, version))
+}
+
 #[derive(Debug, Clone)]
 pub struct ParakeetRsEngineConfig {
     pub model_dir: PathBuf,
@@ -117,10 +285,32 @@ impl ParakeetRsEngine {
         options: TranscriptionOptions,
         max_sessions: usize,
     ) -> Result<Self> {
+        let (ort_path, ort_version) = ensure_onnx_runtime()?;
+        eprintln!(
+            "[parakeet-rs] using ONNX Runtime {ort_version} from {}",
+            ort_path.display()
+        );
         if let Err(err) = ensure_model_files(&cfg.model_dir) {
             eprintln!("[parakeet-rs] auto-download failed: {err:#}");
         }
-        let handle = NemotronHandle::from_pretrained(&cfg.model_dir, None).map_err(|e| {
+        // Backstop: any remaining `ort` load panic becomes a startup error
+        // instead of a crashed server.
+        let loaded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            NemotronHandle::from_pretrained(&cfg.model_dir, None)
+        }))
+        .map_err(|panic| {
+            let reason = panic
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| panic.downcast_ref::<&str>().copied())
+                .unwrap_or("unknown panic");
+            anyhow::anyhow!(
+                "failed to load ONNX Runtime from {}: {reason}. {}",
+                ort_path.display(),
+                ort_install_hint()
+            )
+        })?;
+        let handle = loaded.map_err(|e| {
             anyhow::anyhow!(
                 "parakeet-rs model load failed for {}: {e}",
                 cfg.model_dir.display()
@@ -515,6 +705,52 @@ fn emit_delta(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn onnx_runtime_search_skips_rejected_candidates() {
+        let tmp = std::env::temp_dir().join(format!("ears-ort-probe-{}", std::process::id()));
+        let bad = tmp.join("bad");
+        let good = tmp.join("good");
+        std::fs::create_dir_all(&bad).unwrap();
+        std::fs::create_dir_all(&good).unwrap();
+        std::fs::write(bad.join(ORT_LIB_NAMES[0]), b"").unwrap();
+        std::fs::write(good.join(ORT_LIB_NAMES[0]), b"").unwrap();
+
+        let dirs = vec![tmp.join("missing"), bad.clone(), good.clone()];
+        let probe = |path: &Path| {
+            if path.starts_with(&bad) {
+                anyhow::bail!("{} is ONNX Runtime 1.17.0", path.display())
+            }
+            Ok("1.31.0".to_string())
+        };
+        let (path, version) = find_onnx_runtime(&dirs, probe).unwrap();
+        assert_eq!(path, good.join(ORT_LIB_NAMES[0]));
+        assert_eq!(version, "1.31.0");
+
+        let rejected = find_onnx_runtime(&dirs[..2], probe).unwrap_err();
+        assert_eq!(rejected.len(), 1);
+        assert!(rejected[0].contains("1.17.0"));
+        assert!(find_onnx_runtime(&dirs[..1], probe).unwrap_err().is_empty());
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn onnx_runtime_search_starts_next_to_executable() {
+        let exe_dir = PathBuf::from("/opt/ears/bin");
+        let dirs = ort_search_dirs(Some(&exe_dir));
+        assert_eq!(dirs[0], exe_dir);
+        assert_eq!(dirs[1], exe_dir.join("..").join("lib"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_rejects_a_file_that_is_not_onnx_runtime() {
+        let fake = std::env::temp_dir().join(format!("ears-fake-ort-{}.so", std::process::id()));
+        std::fs::write(&fake, b"not a library").unwrap();
+        let err = probe_onnx_runtime(&fake).unwrap_err();
+        assert!(format!("{err:#}").contains("cannot be loaded"), "{err:#}");
+        std::fs::remove_file(&fake).unwrap();
+    }
 
     #[test]
     fn chunk_size_is_560ms_at_16k() {

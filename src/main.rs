@@ -353,6 +353,11 @@ struct ServerStartArgs {
     #[arg(long, default_value_t = 8)]
     max_sessions: usize,
 
+    /// Also load the Kyutai model when another engine is the default, so
+    /// clients can switch to it. Kyutai is always loaded when it is the default.
+    #[arg(long, default_value_t = false)]
+    with_kyutai: bool,
+
     /// Parakeet Hugging Face repository (requires --features parakeet)
     #[cfg(feature = "parakeet")]
     #[arg(long, default_value = "istupakov/parakeet-tdt-0.6b-v3-onnx")]
@@ -416,6 +421,7 @@ impl Default for ServerStartArgs {
             vad: false,
             boundary_vad_hangover_ms: 300,
             max_sessions: 8,
+            with_kyutai: false,
             #[cfg(feature = "parakeet")]
             parakeet_repo: "istupakov/parakeet-tdt-0.6b-v3-onnx".to_string(),
             #[cfg(feature = "parakeet")]
@@ -996,6 +1002,9 @@ fn append_server_args(cmd: &mut ProcessCommand, args: &ServerStartArgs) {
     cmd.arg("--boundary-vad-hangover-ms")
         .arg(args.boundary_vad_hangover_ms.to_string());
     cmd.arg("--max-sessions").arg(args.max_sessions.to_string());
+    if args.with_kyutai {
+        cmd.arg("--with-kyutai");
+    }
     if args.hf_repo != "kyutai/stt-1b-en_fr-candle" {
         cmd.arg("--hf-repo").arg(&args.hf_repo);
     }
@@ -1060,6 +1069,7 @@ fn build_server_options(args: &ServerStartArgs) -> Result<server::ServerOptions>
         enable_listener_mode: config.server.enable_listener_mode,
         listener_tokens: config.server.listener_tokens.clone(),
         default_engine: args.engine.to_engine_kind(),
+        with_kyutai: args.with_kyutai,
         #[cfg(feature = "parakeet")]
         parakeet_repo: args.parakeet_repo.clone(),
         #[cfg(feature = "parakeet")]

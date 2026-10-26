@@ -110,6 +110,11 @@ struct Args {
     #[arg(long, default_value_t = 8)]
     max_sessions: usize,
 
+    /// Also load the Kyutai model when another engine is the default, so
+    /// clients can switch to it. Kyutai is always loaded when it is the default.
+    #[arg(long, default_value_t = false)]
+    with_kyutai: bool,
+
     /// Log transcriptions from language injection audio (for debugging)
     #[arg(long, default_value_t = false)]
     verbose_injection: bool,
@@ -196,6 +201,7 @@ fn build_server_options(args: &Args) -> Result<server::ServerOptions> {
         enable_listener_mode: config.server.enable_listener_mode,
         listener_tokens: config.server.listener_tokens.clone(),
         default_engine: args.engine.to_engine_kind(),
+        with_kyutai: args.with_kyutai,
         #[cfg(feature = "parakeet")]
         parakeet_repo: args.parakeet_repo.clone(),
         #[cfg(feature = "parakeet")]

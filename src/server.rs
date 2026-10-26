@@ -259,6 +259,8 @@ pub struct ServerOptions {
     pub enable_listener_mode: bool,
     pub listener_tokens: Vec<String>,
     pub default_engine: EngineKind,
+    /// Load Kyutai even when it is not the default engine.
+    pub with_kyutai: bool,
     #[cfg(feature = "parakeet")]
     pub parakeet_repo: String,
     #[cfg(feature = "parakeet")]
@@ -289,36 +291,27 @@ pub async fn run(options: ServerOptions) -> Result<()> {
     let batch_size = options.max_parallel_sessions.max(1);
     let mut engine_manager = EngineManager::new();
 
-    let model_dir = if config.storage.model_dir == "default" {
-        None
-    } else {
-        Some(config.model_dir_path())
-    };
-
-    let model = if let Some(dir) = model_dir.as_ref() {
-        Model::load_from_hf_with_batch(
+    // Kyutai is ~2 GB to download and several GB resident. Load it only when
+    // it is the default engine or explicitly requested, so a parakeet-rs-only
+    // deployment neither downloads nor holds it (trx-zef0).
+    if options.default_engine == EngineKind::Kyutai || options.with_kyutai {
+        let model_dir = if config.storage.model_dir == "default" {
+            None
+        } else {
+            Some(config.model_dir_path())
+        };
+        let model = Model::load_from_hf_with_batch(
             &options.hf_repo,
             options.cpu,
             options.transcription.clone(),
-            Some(dir),
+            model_dir.as_deref(),
             batch_size,
         )
-        .await?
-    } else {
-        Model::load_from_hf_with_batch(
-            &options.hf_repo,
-            options.cpu,
-            options.transcription.clone(),
-            None,
-            batch_size,
-        )
-        .await?
-    };
-
-    let prime_languages = config.model.prime_languages.clone();
-    let kyutai_engine = parallel::spawn_parallel_engine(model, prime_languages);
-    let kyutai_capacity = kyutai_engine.capacity();
-    engine_manager.register(Arc::new(kyutai_engine.clone()));
+        .await?;
+        let prime_languages = config.model.prime_languages.clone();
+        let kyutai_engine = parallel::spawn_parallel_engine(model, prime_languages);
+        engine_manager.register(Arc::new(kyutai_engine));
+    }
 
     #[cfg(feature = "parakeet")]
     {
@@ -362,6 +355,10 @@ pub async fn run(options: ServerOptions) -> Result<()> {
                     eprintln!("[ears-server] failed to initialize parakeet-rs engine: {err:#}");
                 }
             }
+        } else if options.default_engine == EngineKind::ParakeetRs {
+            eprintln!(
+                "[ears-server] parakeet-rs needs a model: pass --parakeet-rs-model <dir> or set [parakeet_rs].model_dir"
+            );
         }
     }
 
@@ -381,11 +378,16 @@ pub async fn run(options: ServerOptions) -> Result<()> {
         }
     }
 
-    let default_engine = if engine_manager.has(options.default_engine) {
-        options.default_engine
-    } else {
-        EngineKind::Kyutai
-    };
+    // Never fall back to another engine silently: a German deployment that
+    // quietly serves an English model is worse than a startup error.
+    if !engine_manager.has(options.default_engine) {
+        return Err(anyhow!(
+            "default engine {} is not available; see the error above, or pass its model \
+             (e.g. --parakeet-rs-model / [parakeet_rs].model_dir) or choose another --engine",
+            options.default_engine.as_str()
+        ));
+    }
+    let default_engine = options.default_engine;
 
     let listener = TcpListener::bind(&options.bind_addr).await?;
 
@@ -405,7 +407,7 @@ pub async fn run(options: ServerOptions) -> Result<()> {
 
     eprintln!(
         "Server listening on {} (max {} concurrent sessions)",
-        options.bind_addr, kyutai_capacity
+        options.bind_addr, batch_size
     );
     eprintln!(
         "[ears-server] engines available: {}",
