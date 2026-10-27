@@ -4,7 +4,11 @@
 //! immediately.
 
 use crate::app::AppModel;
+use crate::config::ContentMotion;
+use crate::config::IndicatorStyle;
 use crate::config::OverlayAnchor;
+use crate::config::OverlayConfig;
+use crate::config::ShapeMotion;
 use crate::runtime;
 use crate::theme::Theme;
 use crate::ui::ButtonKind;
@@ -30,6 +34,7 @@ use gpui::AnyElement;
 use gpui::App;
 use gpui::AppContext;
 use gpui::Context;
+use gpui::Div;
 use gpui::Entity;
 use gpui::FocusHandle;
 use gpui::Focusable;
@@ -49,6 +54,30 @@ use gpui::px;
 const INPUT_W: f32 = 300.0;
 const NUM_W: f32 = 110.0;
 const LANGUAGES: [&str; 6] = ["en", "de", "fr", "es", "it", "ja"];
+
+fn overlay_choice<T: Copy + PartialEq + 'static>(
+    id: &'static str,
+    label: &'static str,
+    hint: &'static str,
+    options: Vec<(T, SharedString)>,
+    selected: T,
+    entity: Entity<SettingsView>,
+    theme: &Theme,
+    set: fn(&mut OverlayConfig, T),
+) -> Div {
+    row(
+        label,
+        Some(hint.into()),
+        segmented(id, options, selected, theme, move |value: T, _, cx| {
+            entity.update(cx, |this, cx| {
+                this.model.update(cx, |m, cx| {
+                    m.update_ui(cx, |ui| set(&mut ui.overlay, value))
+                });
+            });
+        }),
+        theme,
+    )
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -776,6 +805,46 @@ impl SettingsView {
                         }
                     }),
                     theme,
+                ))
+                .child(overlay_choice(
+                    "indicator-style",
+                    "Indicator",
+                    "Choose the dot or animated ears mark.",
+                    vec![
+                        (IndicatorStyle::Dot, "Dot".into()),
+                        (IndicatorStyle::Ears, "Ears".into()),
+                    ],
+                    overlay.indicator,
+                    entity.clone(),
+                    theme,
+                    |overlay, value| overlay.indicator = value,
+                ))
+                .child(overlay_choice(
+                    "shape-motion",
+                    "Notch motion",
+                    "How the shape widens on a notched Mac.",
+                    vec![
+                        (ShapeMotion::Smooth, "Smooth".into()),
+                        (ShapeMotion::Spring, "Spring".into()),
+                    ],
+                    overlay.shape_motion,
+                    entity.clone(),
+                    theme,
+                    |overlay, value| overlay.shape_motion = value,
+                ))
+                .child(overlay_choice(
+                    "content-motion",
+                    "Notch content",
+                    "How content appears after the notch widens.",
+                    vec![
+                        (ContentMotion::Grow, "Grow".into()),
+                        (ContentMotion::Fade, "Fade".into()),
+                        (ContentMotion::GrowFade, "Both".into()),
+                    ],
+                    overlay.content_motion,
+                    entity.clone(),
+                    theme,
+                    |overlay, value| overlay.content_motion = value,
                 )),
         );
 

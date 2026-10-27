@@ -13,8 +13,12 @@
 use crate::app::AppModel;
 use crate::app::FINALIZE_MS;
 use crate::app::Phase;
+use crate::config::ContentMotion;
+use crate::config::IndicatorStyle;
 use crate::config::OverlayAnchor;
 use crate::config::OverlayConfig;
+use crate::config::ShapeMotion;
+use crate::ears_mark;
 use crate::platform;
 use crate::platform::Notch;
 use crate::runtime;
@@ -74,6 +78,7 @@ const FONT_SIZE: f32 = 13.0;
 /// Morph timings (spec: 150-250 ms).
 const MORPH_MS: u64 = 200;
 const ISLAND_MORPH_MS: u64 = 260;
+const CONTENT_MORPH_MS: u64 = 180;
 const DRAG_THRESHOLD: f32 = 4.0;
 
 pub struct OverlayManager {
@@ -319,7 +324,98 @@ fn open(cx: &mut App, overlay: &OverlayConfig, model: Entity<AppModel>) {
     }
 }
 
+/// Open a synthetic notched fixture without touching the dictation engine.
+pub fn open_preview(cx: &mut App, model: Entity<AppModel>) {
+    let display = cx
+        .primary_display()
+        .or_else(|| cx.displays().first().cloned());
+    let Some(display) = display else {
+        eprintln!("ears-ui: no display for synthetic preview");
+        return;
+    };
+    let display_id = u32::from(display.id());
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+            None,
+            size(px(WIN_W), px(WIN_H)),
+            cx,
+        ))),
+        titlebar: None,
+        focus: false,
+        show: true,
+        kind: WindowKind::PopUp,
+        is_movable: false,
+        is_resizable: false,
+        is_minimizable: false,
+        display_id: Some(display.id()),
+        window_background: WindowBackgroundAppearance::Transparent,
+        app_id: Some("dev.byteowlz.ears-ui.synthetic-preview".into()),
+        ..Default::default()
+    };
+    if let Err(error) = cx.open_window(options, |window, cx| {
+        platform::set_shadow(window, false);
+        platform::set_click_through(window, true);
+        cx.new(|cx| {
+            IslandView::new(
+                model,
+                display_id,
+                Some(Notch {
+                    width: 185.0,
+                    height: 32.0,
+                }),
+                cx,
+            )
+        })
+    }) {
+        eprintln!("ears-ui: cannot open synthetic preview: {error:#}");
+    }
+}
+
 // ---------------------------------------------------------------------------
+
+/// A compact island widens around the camera without changing its height.
+fn notch_target(
+    notch_width: f32,
+    notch_height: f32,
+    text_width: f32,
+    indicator_width: f32,
+    dormant: bool,
+) -> (f32, f32) {
+    if dormant {
+        return (notch_width, notch_height);
+    }
+    let wing_width = (text_width + 2.0 * PAD_X).max(indicator_width + 2.0 * PAD_X);
+    (
+        (notch_width + 2.0 * wing_width).min(PILL_MAX_W.max(notch_width)),
+        notch_height,
+    )
+}
+
+#[cfg(test)]
+mod notch_geometry_tests {
+    use super::*;
+
+    #[test]
+    fn compact_notch_widens_without_growing_downward() {
+        assert_eq!(notch_target(185.0, 32.0, 50.0, DOT_W, true), (185.0, 32.0));
+        let (width, height) = notch_target(185.0, 32.0, 50.0, DOT_W, false);
+        assert_eq!(height, 32.0);
+        assert!(width > 185.0);
+        assert!((width - 185.0) / 2.0 >= 50.0 + 2.0 * PAD_X);
+    }
+
+    #[test]
+    fn compact_notch_width_is_bounded_without_clipping_the_camera() {
+        assert_eq!(
+            notch_target(185.0, 32.0, 1000.0, DOT_W, false),
+            (PILL_MAX_W, 32.0)
+        );
+        assert_eq!(
+            notch_target(600.0, 32.0, 100.0, DOT_W, false),
+            (600.0, 32.0)
+        );
+    }
+}
 
 /// Width/height morph state.
 #[derive(Debug, Clone, Copy)]
@@ -357,19 +453,126 @@ impl Morph {
         )
     }
 
-    fn retarget(&mut self, to: (f32, f32), duration: Duration, easing: impl Fn(f32) -> f32) {
+    fn retarget(
+        &mut self,
+        to: (f32, f32),
+        duration: Duration,
+        delay: Duration,
+        easing: impl Fn(f32) -> f32,
+    ) {
         if (to.0 - self.to.0).abs() < 0.5 && (to.1 - self.to.1).abs() < 0.5 {
             return;
         }
         self.from = self.current(easing);
         self.to = to;
-        self.started = Instant::now();
+        self.started = Instant::now() + delay;
         self.duration = duration;
         self.generation += 1;
     }
 
     fn done(&self) -> bool {
         self.progress() >= 1.0
+    }
+}
+
+/// Content stays centered in a fixed wing while its scale and opacity change.
+fn content_style(style: ContentMotion, reveal: f32) -> (f32, f32) {
+    match style {
+        ContentMotion::Grow => (reveal.max(0.01), if reveal > 0.0 { 1.0 } else { 0.0 }),
+        ContentMotion::Fade => (1.0, reveal),
+        ContentMotion::GrowFade => (reveal.max(0.01), reveal),
+    }
+}
+
+/// A content transition can start after the shape has finished expanding.
+struct ContentReveal {
+    from: f32,
+    to: f32,
+    started: Instant,
+    duration: Duration,
+}
+
+impl ContentReveal {
+    fn new() -> Self {
+        Self {
+            from: 0.0,
+            to: 0.0,
+            started: Instant::now(),
+            duration: Duration::ZERO,
+        }
+    }
+    fn current(&self) -> f32 {
+        if self.duration.is_zero() {
+            return self.to;
+        }
+        let t =
+            (self.started.elapsed().as_secs_f32() / self.duration.as_secs_f32()).clamp(0.0, 1.0);
+        self.from + (self.to - self.from) * t
+    }
+    fn retarget(&mut self, visible: bool, duration: Duration, delay: Duration) {
+        let value = self.current();
+        self.from = value;
+        self.to = if visible { 1.0 } else { 0.0 };
+        self.started = Instant::now() + delay;
+        self.duration = duration;
+    }
+    fn done(&self) -> bool {
+        self.duration.is_zero() || Instant::now() >= self.started + self.duration
+    }
+}
+
+#[cfg(test)]
+mod transition_tests {
+    use super::*;
+
+    #[test]
+    fn content_waits_for_shape_and_reversal_preserves_position() {
+        let mut reveal = ContentReveal::new();
+        let duration = Duration::from_millis(180);
+        reveal.retarget(true, duration, Duration::from_millis(260));
+        assert_eq!(reveal.current(), 0.0);
+        assert!(!reveal.done());
+        reveal.started = Instant::now() - Duration::from_millis(90);
+        let before = reveal.current();
+        assert!((0.45..0.55).contains(&before));
+        reveal.retarget(false, duration, Duration::ZERO);
+        assert!((reveal.current() - before).abs() < 0.02);
+        reveal.started = Instant::now() - duration;
+        assert!(reveal.done());
+        assert_eq!(reveal.current(), 0.0);
+    }
+
+    #[test]
+    fn content_styles_remain_distinct_and_hidden_at_zero() {
+        assert_eq!(content_style(ContentMotion::Grow, 0.5), (0.5, 1.0));
+        assert_eq!(content_style(ContentMotion::Fade, 0.5), (1.0, 0.5));
+        assert_eq!(content_style(ContentMotion::GrowFade, 0.5), (0.5, 0.5));
+        for style in [
+            ContentMotion::Grow,
+            ContentMotion::Fade,
+            ContentMotion::GrowFade,
+        ] {
+            assert_eq!(content_style(style, 0.0).1, 0.0);
+            assert_eq!(content_style(style, 1.0), (1.0, 1.0));
+        }
+    }
+
+    #[test]
+    fn reduced_motion_snaps_and_delayed_shape_waits() {
+        let mut reveal = ContentReveal::new();
+        reveal.retarget(true, Duration::ZERO, Duration::ZERO);
+        assert_eq!(reveal.current(), 1.0);
+        reveal.retarget(false, Duration::ZERO, Duration::ZERO);
+        assert_eq!(reveal.current(), 0.0);
+        let mut shape = Morph::new((300.0, 32.0));
+        shape.retarget(
+            (185.0, 32.0),
+            Duration::from_millis(260),
+            Duration::from_millis(180),
+            |x| x,
+        );
+        assert_eq!(shape.current(|x| x), (300.0, 32.0));
+        assert!(!shape.done());
     }
 }
 
@@ -385,6 +588,9 @@ pub struct IslandView {
     display: u32,
     notch: Option<Notch>,
     morph: Morph,
+    reveal: ContentReveal,
+    notch_active: bool,
+    last_notch_content: Option<Content>,
     drag: Option<DragState>,
     hovered: bool,
     appeared: Instant,
@@ -401,6 +607,7 @@ fn ease_out_quint(t: f32) -> f32 {
     1.0 - (1.0 - t).powi(5)
 }
 
+#[derive(Clone)]
 struct Content {
     phase: Phase,
     text: String,
@@ -419,7 +626,7 @@ impl IslandView {
     ) -> Self {
         cx.observe(&model, |_, _, cx| cx.notify()).detach();
         let initial = match notch {
-            Some(n) => (n.width + 24.0, n.height),
+            Some(n) => (n.width, n.height),
             None => (PILL_MIN_W, PILL_H),
         };
         Self {
@@ -427,6 +634,9 @@ impl IslandView {
             display,
             notch,
             morph: Morph::new(initial),
+            reveal: ContentReveal::new(),
+            notch_active: false,
+            last_notch_content: None,
             drag: None,
             hovered: false,
             appeared: Instant::now(),
@@ -437,12 +647,64 @@ impl IslandView {
         self.notch.is_some()
     }
 
-    fn easing(&self) -> fn(f32) -> f32 {
-        if self.island() {
+    fn easing(&self, shape_motion: ShapeMotion) -> fn(f32) -> f32 {
+        if self.island() && shape_motion == ShapeMotion::Spring {
             ease_out_back
         } else {
             ease_out_quint
         }
+    }
+
+    fn update_motion(
+        &mut self,
+        target: (f32, f32),
+        content: &mut Content,
+        overlay: &OverlayConfig,
+        animate: bool,
+    ) -> ((f32, f32), f32) {
+        let island = self.island();
+        let dormant = content.phase == Phase::Dormant;
+        let duration = if animate {
+            Duration::from_millis(if island { ISLAND_MORPH_MS } else { MORPH_MS })
+        } else {
+            Duration::ZERO
+        };
+        let content_duration = if animate {
+            Duration::from_millis(CONTENT_MORPH_MS)
+        } else {
+            Duration::ZERO
+        };
+        let changed = island && self.notch_active == dormant;
+        if changed {
+            self.notch_active = !dormant;
+            self.reveal.retarget(
+                !dormant,
+                content_duration,
+                if dormant { Duration::ZERO } else { duration },
+            );
+        }
+        if island && !dormant {
+            self.last_notch_content = Some(content.clone());
+        }
+        let delay = if changed && dormant {
+            content_duration
+        } else {
+            Duration::ZERO
+        };
+        let easing = self.easing(overlay.shape_motion);
+        self.morph.retarget(target, duration, delay, easing);
+        if !animate {
+            self.morph.duration = Duration::ZERO;
+            self.reveal.duration = Duration::ZERO;
+        }
+        let size = self.morph.current(easing);
+        let reveal = if island { self.reveal.current() } else { 1.0 };
+        if island && dormant && reveal > 0.0 {
+            if let Some(last) = &self.last_notch_content {
+                *content = last.clone();
+            }
+        }
+        (size, reveal)
     }
 
     fn measure(&self, window: &Window, text: &str, color: Hsla) -> f32 {
@@ -547,7 +809,7 @@ impl Render for IslandView {
             )
         };
 
-        let content = match phase {
+        let mut content = match phase {
             Phase::Dormant => Content {
                 phase,
                 text: String::new(),
@@ -600,7 +862,15 @@ impl Render for IslandView {
 
         // Geometry ------------------------------------------------------------
         let dormant = matches!(content.phase, Phase::Dormant);
-        let max_text_w = PILL_MAX_W - 2.0 * PAD_X - DOT_W - GAP;
+        let indicator_width = if overlay.indicator == IndicatorStyle::Ears {
+            24.0
+        } else {
+            DOT_W
+        };
+        let max_text_w = match self.notch {
+            Some(n) => ((PILL_MAX_W - n.width) / 2.0 - 2.0 * PAD_X).max(0.0),
+            None => PILL_MAX_W - 2.0 * PAD_X - indicator_width - GAP,
+        };
         let text = if dormant {
             String::new()
         } else {
@@ -608,38 +878,34 @@ impl Render for IslandView {
         };
         let text_w = self.measure(window, &text, content.text_color);
         let target = match self.notch {
-            Some(n) => {
-                if dormant {
-                    (n.width + 24.0, n.height)
-                } else {
-                    let w = (n.width + 2.0 * PAD_X + DOT_W + GAP + text_w + 24.0)
-                        .clamp(n.width + 60.0, PILL_MAX_W.max(n.width + 60.0));
-                    (w, n.height + PILL_H)
-                }
-            }
+            Some(n) => notch_target(n.width, n.height, text_w, indicator_width, dormant),
             None => {
                 if dormant {
-                    (PILL_MIN_W, PILL_H)
+                    ((2.0 * PAD_X + indicator_width).max(PILL_MIN_W), PILL_H)
                 } else {
                     (
-                        (2.0 * PAD_X + DOT_W + GAP + text_w).clamp(PILL_MIN_W, PILL_MAX_W),
+                        (2.0 * PAD_X + indicator_width + GAP + text_w)
+                            .clamp(PILL_MIN_W, PILL_MAX_W),
                         PILL_H,
                     )
                 }
             }
         };
         let animate = overlay.animation && !reduce_motion;
-        let duration = if animate {
-            Duration::from_millis(if island { ISLAND_MORPH_MS } else { MORPH_MS })
+        let ((w, h), reveal) = self.update_motion(target, &mut content, &overlay, animate);
+        let display_text = if island && dormant && reveal > 0.0 {
+            self.tail(window, &content.text, max_text_w, content.text_color)
         } else {
-            Duration::ZERO
+            text
         };
-        let easing = self.easing();
-        self.morph.retarget(target, duration, easing);
-        let (w, h) = self.morph.current(easing);
-        if !self.morph.done() {
+        if !self.morph.done() || (island && !self.reveal.done()) {
             window.request_animation_frame();
         }
+        let (scale, content_opacity) = if island {
+            content_style(overlay.content_motion, reveal)
+        } else {
+            (1.0, 1.0)
+        };
 
         // Pill ------------------------------------------------------------------
         let interactive = !overlay.click_through;
@@ -667,13 +933,10 @@ impl Render for IslandView {
             .overflow_hidden();
 
         if island {
-            let radius = px(PILL_H * 0.6);
-            pill = pill
-                .rounded_bl(radius)
-                .rounded_br(radius)
-                .items_end()
-                .pb(px((PILL_H - 20.0) / 2.0))
-                .px(px(PAD_X + 6.0));
+            // AppKit supplies the notch's bounding rectangle, not its corner
+            // curve; the radius remains an approximation until measured.
+            let radius = px(self.notch.map_or(PILL_H, |n| n.height) * 0.35);
+            pill = pill.rounded_bl(radius).rounded_br(radius);
         } else {
             pill = pill
                 .rounded_full()
@@ -703,44 +966,93 @@ impl Render for IslandView {
         }
 
         // Dot / spinner / check ------------------------------------------------
-        let indicator: gpui::AnyElement = match content.phase {
-            Phase::Finalizing if !content.check => spinner(r.success, animate).into_any_element(),
-            Phase::Finalizing => div()
-                .w(px(DOT_W + 4.0))
-                .h(px(DOT_W + 4.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(13.0))
-                .text_color(r.success)
-                .child("✓")
-                .into_any_element(),
-            Phase::Armed if animate => dot(content.dot)
-                .with_animation(
-                    "armed-pulse",
-                    Animation::new(Duration::from_millis(1400))
-                        .repeat()
-                        .with_easing(gpui::bounce(gpui::ease_in_out)),
-                    |d, t| d.opacity(0.35 + 0.65 * t),
+        let wave_active = overlay.indicator == IndicatorStyle::Ears
+            && content.phase == Phase::Listening
+            && speech
+            && animate;
+        if wave_active {
+            window.request_animation_frame();
+        }
+        let indicator: gpui::AnyElement =
+            if overlay.indicator == IndicatorStyle::Ears && content.phase != Phase::Finalizing {
+                ears_mark::mark(
+                    content.dot,
+                    24.0 * scale,
+                    self.appeared.elapsed().as_secs_f32() / 0.095,
+                    wave_active,
                 )
-                .into_any_element(),
-            _ => dot(content.dot).into_any_element(),
-        };
+                .into_any_element()
+            } else {
+                match content.phase {
+                    Phase::Finalizing if !content.check => {
+                        spinner(r.success, animate, scale).into_any_element()
+                    }
+                    Phase::Finalizing => div()
+                        .w(px((DOT_W + 4.0) * scale))
+                        .h(px((DOT_W + 4.0) * scale))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(13.0 * scale))
+                        .text_color(r.success)
+                        .child("✓")
+                        .into_any_element(),
+                    Phase::Armed if animate => dot(content.dot, scale)
+                        .with_animation(
+                            "armed-pulse",
+                            Animation::new(Duration::from_millis(1400))
+                                .repeat()
+                                .with_easing(gpui::bounce(gpui::ease_in_out)),
+                            |d, t| d.opacity(0.35 + 0.65 * t),
+                        )
+                        .into_any_element(),
+                    _ => dot(content.dot, scale).into_any_element(),
+                }
+            };
 
-        let mut inner = div().flex().items_center().gap(px(GAP)).child(indicator);
-        if !dormant {
-            inner = inner.child(
-                div()
-                    .whitespace_nowrap()
-                    .overflow_hidden()
-                    .when(content.hint, |d| d.text_color(muted))
-                    .child(SharedString::from(text)),
-            );
+        let label = div()
+            .whitespace_nowrap()
+            .overflow_hidden()
+            .when(content.hint, |d| d.text_color(muted))
+            .text_size(px(FONT_SIZE * scale))
+            .child(SharedString::from(display_text));
+        if let Some(n) = self.notch {
+            // The physical camera covers the center. Keep each wing centered
+            // and reserve the full notch width instead of drawing beneath it.
+            let wing = ((w - n.width) / 2.0).max(0.0);
+            if !dormant || reveal > 0.0 {
+                pill = pill
+                    .child(
+                        div()
+                            .w(px(wing))
+                            .h_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .overflow_hidden()
+                            .opacity(content_opacity)
+                            .child(indicator),
+                    )
+                    .child(div().w(px(n.width)).flex_shrink_0())
+                    .child(
+                        div()
+                            .w(px(wing))
+                            .h_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .overflow_hidden()
+                            .opacity(content_opacity)
+                            .child(label),
+                    );
+            }
+        } else {
+            let mut inner = div().flex().items_center().gap(px(GAP)).child(indicator);
+            if !dormant {
+                inner = inner.child(label);
+            }
+            pill = pill.child(inner);
         }
-        if island && dormant {
-            inner = div();
-        }
-        pill = pill.child(inner);
 
         // Interaction ------------------------------------------------------------
         if interactive {
@@ -861,20 +1173,28 @@ impl Render for IslandView {
     }
 }
 
-fn dot(color: Hsla) -> Div {
+fn dot(color: Hsla, scale: f32) -> Div {
     div()
-        .w(px(DOT_W))
-        .h(px(DOT_W))
+        .w(px(DOT_W * scale))
+        .h(px(DOT_W * scale))
         .flex_shrink_0()
         .rounded_full()
         .bg(color)
 }
 
 /// Three dots pulsing in sequence.
-fn spinner(color: Hsla, animate: bool) -> Div {
-    let mut row = div().flex().items_center().gap(px(3.0)).flex_shrink_0();
+fn spinner(color: Hsla, animate: bool, scale: f32) -> Div {
+    let mut row = div()
+        .flex()
+        .items_center()
+        .gap(px(3.0 * scale))
+        .flex_shrink_0();
     for i in 0..3 {
-        let d = div().w(px(4.0)).h(px(4.0)).rounded_full().bg(color);
+        let d = div()
+            .w(px(4.0 * scale))
+            .h(px(4.0 * scale))
+            .rounded_full()
+            .bg(color);
         if animate {
             row = row.child(
                 d.with_animation(

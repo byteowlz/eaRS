@@ -5,6 +5,7 @@
 
 mod app;
 mod config;
+mod ears_mark;
 mod overlay;
 mod platform;
 mod runtime;
@@ -23,10 +24,35 @@ use runtime::Runtime;
 
 fn print_help() {
     println!(
-        "ears-ui {}\n\nUsage: ears-ui [--settings] [--no-overlay] [--help]\n\n  --settings     open the settings window at launch\n  --no-overlay   start with the floating island disabled\n  --version      print the version\n\nConfig: {}",
+        "ears-ui {}\n\nUsage: ears-ui [--settings] [--no-overlay] [--preview-synthetic] [--help]\n\n  --settings           open the settings window at launch\n  --no-overlay         start with the floating island disabled\n  --preview-synthetic  display a synthetic notch fixture without starting dictation\n  --version            print the version\n\nConfig: {}",
         env!("CARGO_PKG_VERSION"),
         UiConfig::path().display()
     );
+}
+
+/// Synthetic UI fixture: no engine, microphone, hotkeys, tray, or persisted settings.
+fn preview_synthetic() {
+    use config::IndicatorStyle;
+    use ears::dictation::{ConnectionState, DictationState};
+    let mut ui = UiConfig::default();
+    ui.overlay.indicator = IndicatorStyle::Ears;
+    ui.overlay.animation = false;
+    ui.overlay.click_through = true;
+    Application::new().run(move |cx| {
+        platform::set_accessory_policy();
+        let mut fixture = AppModel::new(AppConfig::default(), ui);
+        fixture.state = DictationState::Listening;
+        fixture.connection = ConnectionState::Connected;
+        fixture.speech_active = true;
+        fixture.partial = "Synthetic speech".into();
+        fixture.reduce_motion = true;
+        let model = cx.new(|_| fixture);
+        cx.set_global(AppHandle(model.clone()));
+        cx.set_global(Runtime::new(model.clone()));
+        runtime::apply_theme(cx, None);
+        cx.on_window_closed(|cx| cx.quit()).detach();
+        overlay::open_preview(cx, model);
+    });
 }
 
 fn main() {
@@ -37,6 +63,10 @@ fn main() {
     }
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!("ears-ui {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+    if args.iter().any(|a| a == "--preview-synthetic") {
+        preview_synthetic();
         return;
     }
     let open_settings_at_launch = args.iter().any(|a| a == "--settings");

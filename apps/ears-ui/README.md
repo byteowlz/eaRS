@@ -11,8 +11,12 @@ state and forwards commands.
   panel that appears on the active display while you dictate. It morphs
   between phases (dormant dot → listening with live partials → spinner →
   check), anchors top- or bottom-center, is draggable (offset persisted),
-  and can hug the camera notch in **island mode** (macOS). Click-through and
-  reduced-motion are supported. See `docs/DYNAMIC_ISLAND_SPIKE.md` for the
+  and can hug the camera notch in **island mode** (macOS). On a notched
+  display the compact shape widens around the camera without increasing its
+  height. The dot or ears indicator, smooth or spring shape motion, and
+  grow, fade or combined content motion are configurable in Overlay settings.
+  The ears mark animates as standing waves while speech is active. Click-through
+  and reduced-motion are supported. See `docs/DYNAMIC_ISLAND_SPIKE.md` for the
   window-feasibility findings.
 - **Tray / menu-bar presence** — state-coloured mic icon, menu with
   pause/resume, insertion mode, settings, launch-at-login and quit. Works
@@ -22,7 +26,8 @@ state and forwards commands.
     `ws://` URL — enables dictate-locally/transcribe-remotely setups),
     insertion mode, hotkey mode, escape-cancels, session language.
   - *Overlay*: enable, anchor, dormant dot, island mode, click-through,
-    animation, scheme, radius dial, opacity, margin, linger.
+    animation, indicator, shape/content motion, scheme, radius, opacity,
+    margin and linger.
   - *Dictionaries*: list/add/remove replacement entries with a **live test
     box**.
   - *Profiles*: editor for context profiles (bundle id / app name / window
@@ -40,6 +45,7 @@ cargo build -p ears-ui
 target/debug/ears-ui              # island + tray; dictation starts paused/unpaused per config
 target/debug/ears-ui --settings   # also open the settings window
 target/debug/ears-ui --no-overlay # tray only
+target/debug/ears-ui --preview-synthetic # synthetic notch, no dictation engine; Ctrl-C to exit
 ```
 
 Dictation control stays with the global hotkeys from `config.toml`
@@ -54,6 +60,27 @@ instance so text is never typed twice.
 | `~/.config/ears/config.toml` | engine (servers, hotkeys, dictionaries) |
 | `~/.config/ears/ui.toml`     | UI (overlay, theme, tray, per-UI dictation prefs) |
 | `~/.config/ears/profiles.toml` | context profiles (shared with the CLI) |
+
+The Overlay settings write the same `ui.toml` fields available to scripts:
+
+```toml
+[overlay]
+island_mode = true
+indicator = "ears"       # dot | ears
+shape_motion = "spring"  # smooth | spring
+content_motion = "grow_fade" # grow | fade | grow_fade
+```
+
+The existing dot remains the default. Island mode requires a detected macOS
+notch; without one the regular pill remains in use.
+
+## Current limits
+
+The Oqtopus vector indicator, expanded multi-row island content and native
+verification of motion are not yet implemented. LostIsland integration is separate and not connected; eaRS keeps
+its own pill. Notch corner radii are approximate because AppKit exposes the
+camera housing's bounding rectangle, not its physical curve. Native rendering on
+a physical notched Mac still needs verification.
 
 ## Permissions
 

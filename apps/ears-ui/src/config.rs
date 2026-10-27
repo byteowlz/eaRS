@@ -41,6 +41,31 @@ impl OverlayAnchor {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ShapeMotion {
+    Smooth,
+    #[default]
+    Spring,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentMotion {
+    Grow,
+    Fade,
+    #[default]
+    GrowFade,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum IndicatorStyle {
+    #[default]
+    Dot,
+    Ears,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OverlayConfig {
@@ -55,6 +80,11 @@ pub struct OverlayConfig {
     pub opacity: f32,
     /// Morph/appear animations. Ignored when the OS asks for reduced motion.
     pub animation: bool,
+    /// Notched-island shape and content transition styles.
+    pub shape_motion: ShapeMotion,
+    pub content_motion: ContentMotion,
+    /// Optional ears mark; the dot remains the backwards-compatible default.
+    pub indicator: IndicatorStyle,
     /// Let clicks pass through the island (disables drag + click-to-open).
     pub click_through: bool,
     /// Keep a tiny dot visible while dictation is paused.
@@ -75,6 +105,9 @@ impl Default for OverlayConfig {
             linger_ms: 900,
             opacity: 0.96,
             animation: true,
+            shape_motion: ShapeMotion::Spring,
+            content_motion: ContentMotion::GrowFade,
+            indicator: IndicatorStyle::Dot,
             click_through: false,
             dormant_dot: false,
             island_mode: false,
@@ -133,6 +166,31 @@ impl Default for ThemeConfig {
 #[serde(default)]
 pub struct TrayConfig {
     pub launch_at_login: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn older_overlay_configs_keep_compatible_indicator_defaults() {
+        let config: UiConfig = toml::from_str("[overlay]\nenabled = true\n").unwrap();
+        assert_eq!(config.overlay.indicator, IndicatorStyle::Dot);
+        assert_eq!(config.overlay.shape_motion, ShapeMotion::Spring);
+        assert_eq!(config.overlay.content_motion, ContentMotion::GrowFade);
+    }
+
+    #[test]
+    fn motion_and_indicator_choices_round_trip() {
+        let mut config = UiConfig::default();
+        config.overlay.indicator = IndicatorStyle::Ears;
+        config.overlay.shape_motion = ShapeMotion::Smooth;
+        config.overlay.content_motion = ContentMotion::Fade;
+        let decoded: UiConfig = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+        assert_eq!(decoded.overlay.indicator, IndicatorStyle::Ears);
+        assert_eq!(decoded.overlay.shape_motion, ShapeMotion::Smooth);
+        assert_eq!(decoded.overlay.content_motion, ContentMotion::Fade);
+    }
 }
 
 impl UiConfig {
