@@ -13,6 +13,7 @@ use objc2_app_kit::NSEvent;
 use objc2_app_kit::NSScreen;
 use objc2_app_kit::NSView;
 use objc2_app_kit::NSWindow;
+use objc2_app_kit::NSWindowStyleMask;
 use objc2_app_kit::NSWorkspace;
 use objc2_foundation::NSNumber;
 use objc2_foundation::NSPoint;
@@ -182,6 +183,22 @@ pub fn set_window_origin(window: &Window, x: f32, y: f32) {
 /// window itself. Returns false so callers fall back to manual dragging.
 pub fn start_native_drag(_window: &Window) -> bool {
     false
+}
+
+/// GPUI's titled popup is constrained below the menu bar on notched screens.
+/// Remove that chrome before positioning the attached island at the true edge.
+pub fn pin_to_screen_top(window: &Window, display: u32, offset: f32) {
+    if let (Some(screen), Some(ns)) = (screen_for(display), ns_window(window)) {
+        let mut mask = ns.styleMask();
+        mask.remove(NSWindowStyleMask::Titled | NSWindowStyleMask::FullSizeContentView);
+        ns.setStyleMask(mask);
+        let frame = screen.frame();
+        let current = ns.frame();
+        ns.setFrameOrigin(NSPoint::new(
+            current.origin.x,
+            frame.origin.y + frame.size.height - current.size.height - f64::from(offset),
+        ));
+    }
 }
 
 /// Disable the system shadow: the pill draws its own.

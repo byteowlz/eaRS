@@ -26,14 +26,14 @@ use runtime::Runtime;
 
 fn print_help() {
     println!(
-        "ears-ui {}\n\nUsage: ears-ui [--settings] [--no-overlay] [--preview-synthetic|--preview-synthetic-expanded|--preview-parametric|--preview-parametric-reduced] [--help]\n\n  --settings           open the settings window at launch\n  --no-overlay         start with the floating island disabled\n  --preview-synthetic  display a synthetic notch fixture without starting dictation\n  --preview-synthetic-expanded  show the expanded synthetic fixture\n  --preview-parametric  show animated parametric bars in a synthetic notch\n  --preview-parametric-reduced  show the same fixture with reduced motion\n  --version            print the version\n\nConfig: {}",
+        "ears-ui {}\n\nUsage: ears-ui [--settings] [--no-overlay] [--preview-synthetic|--preview-synthetic-expanded|--preview-placement|--preview-parametric|--preview-parametric-reduced] [--help]\n\n  --settings           open the settings window at launch\n  --no-overlay         start with the floating island disabled\n  --preview-synthetic  display a synthetic notch fixture without starting dictation\n  --preview-synthetic-expanded  show the expanded synthetic fixture\n  --preview-placement  show a synthetic fixture at the actual screen anchor\n  --preview-parametric  show animated parametric bars in a synthetic notch\n  --preview-parametric-reduced  show the same fixture with reduced motion\n  --version            print the version\n\nConfig: {}",
         env!("CARGO_PKG_VERSION"),
         UiConfig::path().display()
     );
 }
 
 /// Synthetic UI fixture: no engine, microphone, hotkeys, tray, or settings writes.
-fn preview_synthetic(expanded: bool, parametric: bool, reduced: bool) {
+fn preview_synthetic(expanded: bool, parametric: bool, reduced: bool, placement: bool) {
     use config::IndicatorStyle;
     use ears::dictation::{ConnectionState, DictationState};
     let mut ui = UiConfig::default();
@@ -45,6 +45,7 @@ fn preview_synthetic(expanded: bool, parametric: bool, reduced: bool) {
     ui.overlay.show_details = expanded;
     ui.overlay.animation = parametric;
     ui.overlay.click_through = true;
+    ui.overlay.island_mode = placement;
     Application::new().run(move |cx| {
         platform::set_accessory_policy();
         let mut fixture = AppModel::new(AppConfig::default(), ui);
@@ -58,7 +59,12 @@ fn preview_synthetic(expanded: bool, parametric: bool, reduced: bool) {
         cx.set_global(Runtime::new(model.clone()));
         runtime::apply_theme(cx, None);
         cx.on_window_closed(|cx| cx.quit()).detach();
-        overlay::open_preview(cx, model);
+        if placement {
+            let overlay_config = model.read(cx).ui.overlay.clone();
+            overlay::open(cx, &overlay_config, model);
+        } else {
+            overlay::open_preview(cx, model);
+        }
     });
 }
 
@@ -66,8 +72,14 @@ fn maybe_preview(args: &[String]) -> bool {
     let expanded = args.iter().any(|a| a == "--preview-synthetic-expanded");
     let animated = args.iter().any(|a| a == "--preview-parametric");
     let reduced = args.iter().any(|a| a == "--preview-parametric-reduced");
-    if expanded || animated || reduced || args.iter().any(|a| a == "--preview-synthetic") {
-        preview_synthetic(expanded, animated || reduced, !animated);
+    let placement = args.iter().any(|a| a == "--preview-placement");
+    if placement
+        || expanded
+        || animated
+        || reduced
+        || args.iter().any(|a| a == "--preview-synthetic")
+    {
+        preview_synthetic(expanded, animated || reduced, !animated, placement);
         return true;
     }
     false

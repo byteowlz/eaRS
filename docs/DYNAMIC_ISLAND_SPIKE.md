@@ -13,16 +13,18 @@ exactly the island's window contract. The two things GPUI does not expose
 (click-through toggle, arbitrary repositioning) are reachable through the
 `raw_window_handle` escape hatch in ~30 lines of objc2 code each.
 
-## macOS top-anchor placement: recheck required
+## macOS top-anchor placement: native recheck
 
-The eaRS overlay currently adds `WIN_H` to macOS top-anchored positions. That
-choice came from a temporary NSPanel probe, **not** the complete GPUI window
-lifecycle. Subsequent LostIsland GPUI 0.2.2 tests observed a later
-`setFrameTopLeftPoint` and WindowServer top coordinates matching the supplied
-local Y, which contradicts the earlier conclusion. The pure eaRS arithmetic
-unit test does not settle the discrepancy. Independently reproduce eaRS's
-actual window placement before changing the calculation; this is tracked as
-`trx-4kyy.7`. Physical-notch placement remains unverified.
+GPUI 0.2.2 repositions the initial AppKit rectangle with
+`setFrameTopLeftPoint`, so adding `WIN_H` to a top anchor moves the rendered
+window down. On a notched MacBook, removing that offset alone left the actual
+GPUI popup constrained below the 38-point safe area: WindowServer reported
+`Y=38` when the requested origin was `0`. Removing the popup's titled and
+full-size-content style bits and then explicitly positioning the panel put
+its WindowServer bounds at `Y=0`. `--preview-placement` exercises the real
+anchor with synthetic content and no dictation engine. These are window-frame
+measurements, not a visual acceptance of the physical camera fit, and do not
+establish measured Apple corner radii.
 
 LostIsland's current attached silhouette also has outward top throats and
 provisional superellipse-inspired lower corners. Its radii are not measured

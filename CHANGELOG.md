@@ -10,6 +10,7 @@ All notable changes to eaRS are documented in this file.
 
 ### Fixes
 
+- **ui**: attach the macOS notch panel to the screen edge and keep its active width stable as partial transcripts change. A synthetic `--preview-placement` fixture exercises the real screen anchor without starting dictation.
 - **dictation**: on macOS, listen to physical hotkey events without rdev's HIToolbox text translation, which can trap on the hotkey thread. Input Monitoring remains required.
 - **installation**: activate the exact ONNX Runtime Rust binding pin for `parakeet-rs` and use `--locked` in installers. Fresh `cargo install` no longer selects incompatible `ort` rc.15 (`Session::builder` E0061) on macOS or Linux.
 

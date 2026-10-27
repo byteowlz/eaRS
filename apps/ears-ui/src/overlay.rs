@@ -223,18 +223,12 @@ fn window_origin(
     (x.max(0.0), y.max(0.0))
 }
 
-/// GPUI 0.2.2's macOS backend interprets a supplied top coordinate as the
-/// AppKit content rectangle's bottom edge. Compensate only for top anchors;
-/// the existing bottom-anchor calculation must remain unchanged.
+/// GPUI's final popup frame uses a downward display-local top coordinate on
+/// macOS as well. Its initial AppKit content rect is repositioned afterwards.
 fn window_origin_y(height: f32, menu_height: f32, overlay: &OverlayConfig, island: bool) -> f32 {
-    let top_compensation = if cfg!(target_os = "macos") {
-        WIN_H
-    } else {
-        0.0
-    };
     let y = match overlay.anchor {
-        OverlayAnchor::Top if island => top_compensation,
-        OverlayAnchor::Top => top_compensation + menu_height + overlay.margin,
+        OverlayAnchor::Top if island => 0.0,
+        OverlayAnchor::Top => menu_height + overlay.margin,
         OverlayAnchor::Bottom => height - WIN_H - overlay.margin,
     } + overlay.offset_y;
     y.max(0.0)
@@ -247,16 +241,18 @@ mod placement_tests {
     #[test]
     fn top_anchors_account_for_platform_window_coordinates() {
         let overlay = OverlayConfig::default();
-        let expected_top = if cfg!(target_os = "macos") {
-            WIN_H
-        } else {
-            0.0
-        };
+        let expected_top = 0.0;
         assert_eq!(window_origin_y(1080.0, 0.0, &overlay, true), expected_top);
         assert_eq!(
             window_origin_y(1080.0, 24.0, &overlay, false),
             expected_top + 24.0 + overlay.margin
         );
+    }
+
+    #[test]
+    fn attached_top_is_screen_edge_not_window_height_below_it() {
+        let overlay = OverlayConfig::default();
+        assert_eq!(window_origin_y(1080.0, 0.0, &overlay, true), 0.0);
     }
 
     #[test]
@@ -273,7 +269,7 @@ mod placement_tests {
     }
 }
 
-fn open(cx: &mut App, overlay: &OverlayConfig, model: Entity<AppModel>) {
+pub(crate) fn open(cx: &mut App, overlay: &OverlayConfig, model: Entity<AppModel>) {
     let displays = cx.displays();
     let cursor = platform::cursor_display();
     let display = displays
@@ -312,6 +308,9 @@ fn open(cx: &mut App, overlay: &OverlayConfig, model: Entity<AppModel>) {
     let click_through = overlay.click_through;
     let result = cx.open_window(options, |window, cx| {
         platform::set_shadow(window, false);
+        if notch.is_some() {
+            platform::pin_to_screen_top(window, display_id, y);
+        }
         platform::set_click_through(window, click_through);
         let handle = window.window_handle();
         cx.new(|cx| IslandView::new(model, display_id, notch, handle, cx))
@@ -378,21 +377,14 @@ pub fn open_preview(cx: &mut App, model: Entity<AppModel>) {
 // ---------------------------------------------------------------------------
 
 /// A compact island widens around the camera without changing its height.
-fn notch_target(
-    notch_width: f32,
-    notch_height: f32,
-    text_width: f32,
-    indicator_width: f32,
-    dormant: bool,
-) -> (f32, f32) {
-    if dormant {
-        return (notch_width, notch_height);
-    }
-    let wing_width = (text_width + 2.0 * PAD_X).max(indicator_width + 2.0 * PAD_X);
-    (
-        (notch_width + 2.0 * wing_width).min(PILL_MAX_W.max(notch_width)),
-        notch_height,
-    )
+fn notch_target(notch_width: f32, notch_height: f32, dormant: bool) -> (f32, f32) {
+    // Keep the active wings stable while partial transcripts change or clear.
+    let width = if dormant {
+        notch_width
+    } else {
+        PILL_MAX_W.max(notch_width)
+    };
+    (width, notch_height)
 }
 
 fn detail_height(notch_height: f32, dormant: bool, show_details: bool) -> f32 {
@@ -410,11 +402,17 @@ mod notch_geometry_tests {
 
     #[test]
     fn compact_notch_widens_without_growing_downward() {
-        assert_eq!(notch_target(185.0, 32.0, 50.0, DOT_W, true), (185.0, 32.0));
-        let (width, height) = notch_target(185.0, 32.0, 50.0, DOT_W, false);
+        assert_eq!(notch_target(185.0, 32.0, true), (185.0, 32.0));
+        let (width, height) = notch_target(185.0, 32.0, false);
         assert_eq!(height, 32.0);
         assert!(width > 185.0);
         assert!((width - 185.0) / 2.0 >= 50.0 + 2.0 * PAD_X);
+    }
+
+    #[test]
+    fn active_notch_width_is_stable_as_partial_text_changes() {
+        // Text width is deliberately absent from the active geometry contract.
+        assert_eq!(notch_target(185.0, 32.0, false), (PILL_MAX_W, 32.0));
     }
 
     #[test]
@@ -426,14 +424,8 @@ mod notch_geometry_tests {
 
     #[test]
     fn compact_notch_width_is_bounded_without_clipping_the_camera() {
-        assert_eq!(
-            notch_target(185.0, 32.0, 1000.0, DOT_W, false),
-            (PILL_MAX_W, 32.0)
-        );
-        assert_eq!(
-            notch_target(600.0, 32.0, 100.0, DOT_W, false),
-            (600.0, 32.0)
-        );
+        assert_eq!(notch_target(185.0, 32.0, false), (PILL_MAX_W, 32.0));
+        assert_eq!(notch_target(600.0, 32.0, false), (600.0, 32.0));
     }
 }
 
@@ -1080,8 +1072,7 @@ impl Render for IslandView {
         let text_w = self.measure(window, &text, content.text_color);
         let target = match self.notch {
             Some(n) => {
-                let (width, height) =
-                    notch_target(n.width, n.height, text_w, indicator_width, dormant);
+                let (width, height) = notch_target(n.width, n.height, dormant);
                 (width, detail_height(height, dormant, overlay.show_details))
             }
             None => {
