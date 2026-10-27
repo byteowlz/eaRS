@@ -13,6 +13,21 @@ exactly the island's window contract. The two things GPUI does not expose
 (click-through toggle, arbitrary repositioning) are reachable through the
 `raw_window_handle` escape hatch in ~30 lines of objc2 code each.
 
+## macOS top-anchor coordinate correction
+
+GPUI 0.2.2's macOS backend maps the supplied display-local Y coordinate to
+an AppKit content rectangle's **bottom** edge. For a top-anchored 110-point
+overlay, `y = 0` therefore puts the frame's top one window height above the
+screen. The fallback overlay adds `WIN_H` to top-anchored positions on macOS:
+`WIN_H` for the notched island and `WIN_H + menu bar + margin` for the regular
+pill. The bottom-anchor calculation and non-macOS origins are unchanged.
+
+The coordinate relationship was checked with a temporary NSPanel probe; the
+pure placement tests cover the arithmetic and drag offset. This is not an
+end-to-end verification on a physical notched display. It is independent of
+the proposed optional LostIsland integration, which requires a real host
+transport and acknowledgement before eaRS can hand off its overlay.
+
 ## Per-capability results
 
 Format: works / works-with-hack / blocked.

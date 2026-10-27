@@ -207,12 +207,63 @@ fn window_origin(
     let width: f32 = display.size.width.into();
     let height: f32 = display.size.height.into();
     let x = (width - WIN_W) / 2.0 + overlay.offset_x;
+    let menu_height = if overlay.anchor == OverlayAnchor::Top && !island {
+        platform::menu_bar_height(display_id)
+    } else {
+        0.0
+    };
+    let y = window_origin_y(height, menu_height, overlay, island);
+    (x.max(0.0), y.max(0.0))
+}
+
+/// GPUI 0.2.2's macOS backend interprets a supplied top coordinate as the
+/// AppKit content rectangle's bottom edge. Compensate only for top anchors;
+/// the existing bottom-anchor calculation must remain unchanged.
+fn window_origin_y(height: f32, menu_height: f32, overlay: &OverlayConfig, island: bool) -> f32 {
+    let top_compensation = if cfg!(target_os = "macos") {
+        WIN_H
+    } else {
+        0.0
+    };
     let y = match overlay.anchor {
-        OverlayAnchor::Top if island => 0.0,
-        OverlayAnchor::Top => platform::menu_bar_height(display_id) + overlay.margin,
+        OverlayAnchor::Top if island => top_compensation,
+        OverlayAnchor::Top => top_compensation + menu_height + overlay.margin,
         OverlayAnchor::Bottom => height - WIN_H - overlay.margin,
     } + overlay.offset_y;
-    (x.max(0.0), y.max(0.0))
+    y.max(0.0)
+}
+
+#[cfg(test)]
+mod placement_tests {
+    use super::*;
+
+    #[test]
+    fn top_anchors_account_for_platform_window_coordinates() {
+        let overlay = OverlayConfig::default();
+        let expected_top = if cfg!(target_os = "macos") {
+            WIN_H
+        } else {
+            0.0
+        };
+        assert_eq!(window_origin_y(1080.0, 0.0, &overlay, true), expected_top);
+        assert_eq!(
+            window_origin_y(1080.0, 24.0, &overlay, false),
+            expected_top + 24.0 + overlay.margin
+        );
+    }
+
+    #[test]
+    fn bottom_anchor_and_drag_offset_are_unchanged() {
+        let overlay = OverlayConfig {
+            anchor: OverlayAnchor::Bottom,
+            offset_y: 7.0,
+            ..OverlayConfig::default()
+        };
+        assert_eq!(
+            window_origin_y(1080.0, 24.0, &overlay, false),
+            1080.0 - WIN_H - overlay.margin + 7.0
+        );
+    }
 }
 
 fn open(cx: &mut App, overlay: &OverlayConfig, model: Entity<AppModel>) {
