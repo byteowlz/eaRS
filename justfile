@@ -311,8 +311,23 @@ install-all:
         fi
     fi
     
-    # Build feature list with all engines and hooks
+    # Moonshine publishes native bundles for Apple Silicon and Linux x86_64/arm64.
+    # Avoid breaking existing install-all on unqualified targets (notably Intel Mac).
+    MOONSHINE_SUPPORTED=false
+    case "$OSTYPE:$(uname -m)" in
+        darwin*:arm64|linux-gnu*:x86_64|linux-gnu*:aarch64|linux-gnu*:arm64) MOONSHINE_SUPPORTED=true ;;
+        *) echo "ℹ Moonshine is unavailable for this install-all target; skipping it" ;;
+    esac
+
+    # cargo install otherwise builds in a temporary directory; retain the SDK
+    # where the Linux runtime helper can find it. Respect an explicit target dir.
+    if [[ "$MOONSHINE_SUPPORTED" == true ]]; then
+        export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$PWD/target}"
+    fi
+
+    # Build feature list with all supported engines and hooks
     FEATURES=("parakeet-rs" "transcribe-cpp" "hooks")
+    if [[ "$MOONSHINE_SUPPORTED" == true ]]; then FEATURES+=("moonshine"); fi
 
     if [[ -n "$ACCEL_FEATURE" ]]; then
         FEATURES=("$ACCEL_FEATURE" "${FEATURES[@]}")
@@ -350,6 +365,7 @@ install-all:
             esac
             
             FEATURES=("parakeet-rs" "transcribe-cpp" "hooks")
+            if [[ "$MOONSHINE_SUPPORTED" == true ]]; then FEATURES+=("moonshine"); fi
             if [[ -n "$ACCEL_FEATURE" ]]; then
                 FEATURES=("$ACCEL_FEATURE" "${FEATURES[@]}")
             fi
@@ -363,6 +379,12 @@ install-all:
             exit 0
             ;;
     esac
+
+    # On Linux the Moonshine SDK needs its shared libraries beside the binary;
+    # the helper is a no-op on macOS.
+    if [[ "$MOONSHINE_SUPPORTED" == true ]]; then
+        bash ./scripts/install-moonshine-runtime.sh
+    fi
 
     # Companion UI (skipped gracefully when only a headless build is possible)
     if command -v ears-ui >/dev/null 2>&1 || [[ "$OSTYPE" == "darwin"* ]] || [[ -n "${DISPLAY:-}" ]] || [[ -n "${WAYLAND_DISPLAY:-}" ]]; then

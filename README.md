@@ -341,7 +341,9 @@ The server writes a PID file to `$XDG_STATE_HOME/ears/server.pid` (or `~/.local/
 
 ## Native Moonshine (optional)
 
-Build explicitly with the `moonshine` feature; it is not yet part of `install-all`:
+`just install-all` includes Moonshine on Apple Silicon and Linux x86_64/arm64.
+Other targets skip it because native deployment is not yet qualified. You can
+also select the feature explicitly:
 
 ```bash
 just install-ears-features "apple,parakeet-rs,transcribe-cpp,hooks,moonshine" # Mac
@@ -366,7 +368,7 @@ The native model processes audio incrementally and emits revisable `Interim` pre
 
 The [offline prefix investigation](docs/moonshine-prefix-investigation.md) found that repeated partial agreement still permits later word revisions; it is not a safe commit signal.
 
-The pinned `moonshine-rs` wrapper downloads the official native SDK during compilation. Apple Silicon uses static libraries. On Linux, `just install-ears-features` copies the SDK shared libraries beside the installed binaries; a manual `cargo install` also needs `bash scripts/install-moonshine-runtime.sh` (optional arguments: binary directory, Cargo target directory). Windows and Intel Mac native deployment are not yet qualified.
+The pinned `moonshine-rs` wrapper downloads the official native SDK during compilation. Apple Silicon uses static libraries. On Linux, `just install-all` and `just install-ears-features` copy the SDK shared libraries beside the installed binaries; a manual `cargo install` also needs `bash scripts/install-moonshine-runtime.sh` (optional arguments: binary directory, Cargo target directory). Windows and Intel Mac native deployment are not yet qualified.
 
 ## Client options
 
