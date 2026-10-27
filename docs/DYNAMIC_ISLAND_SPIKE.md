@@ -13,20 +13,22 @@ exactly the island's window contract. The two things GPUI does not expose
 (click-through toggle, arbitrary repositioning) are reachable through the
 `raw_window_handle` escape hatch in ~30 lines of objc2 code each.
 
-## macOS top-anchor coordinate correction
+## macOS top-anchor placement: recheck required
 
-GPUI 0.2.2's macOS backend maps the supplied display-local Y coordinate to
-an AppKit content rectangle's **bottom** edge. For a top-anchored 110-point
-overlay, `y = 0` therefore puts the frame's top one window height above the
-screen. The fallback overlay adds `WIN_H` to top-anchored positions on macOS:
-`WIN_H` for the notched island and `WIN_H + menu bar + margin` for the regular
-pill. The bottom-anchor calculation and non-macOS origins are unchanged.
+The eaRS overlay currently adds `WIN_H` to macOS top-anchored positions. That
+choice came from a temporary NSPanel probe, **not** the complete GPUI window
+lifecycle. Subsequent LostIsland GPUI 0.2.2 tests observed a later
+`setFrameTopLeftPoint` and WindowServer top coordinates matching the supplied
+local Y, which contradicts the earlier conclusion. The pure eaRS arithmetic
+unit test does not settle the discrepancy. Independently reproduce eaRS's
+actual window placement before changing the calculation; this is tracked as
+`trx-4kyy.7`. Physical-notch placement remains unverified.
 
-The coordinate relationship was checked with a temporary NSPanel probe; the
-pure placement tests cover the arithmetic and drag offset. This is not an
-end-to-end verification on a physical notched display. It is independent of
-the proposed optional LostIsland integration, which requires a real host
-transport and acknowledgement before eaRS can hand off its overlay.
+LostIsland's current attached silhouette also has outward top throats and
+provisional superellipse-inspired lower corners. Its radii are not measured
+Apple geometry. Do not treat those provisional values as a physical-notch
+contract; follow the ongoing LostIsland research and visual decisions. The
+optional host integration still requires a real transport and acknowledgement.
 
 ## Per-capability results
 
