@@ -66,8 +66,10 @@ and model downloads. The runtime modules are served intact, not rebundled.
 
 Pinned streaming Tiny model directories: English `quantized_26_08_21`, German
 `quantized_26_08_24`. The eight files total approximately 45 MB English / 32 MB
-German, plus approximately 13 MB runtime WASM. German Small is deliberately not
-the default. Models download via GET from `download.moonshine.ai`, with upstream
+German, plus approximately 13 MB runtime WASM. To explicitly try Small, pass
+`modelSize: "small"` to `prepare`; Tiny remains the default. The official German
+Small bundle is approximately 122 MB and is experimental. When using a custom
+`modelBaseUrl`, select the architecture matching that bundle. Models download via GET from `download.moonshine.ai`, with upstream
 Cache API caching (`moonshine-models-v1`). Microphone audio stays in a local
 worker. Use `modelBaseUrl` for an equivalent self-hosted model directory (absolute
 URL, trailing slash). Runtime caching uses normal HTTP caching; model downloads
@@ -103,8 +105,9 @@ do not log credential-bearing URLs.
 
 Use Bun: `bun install`, then `just check`, `just test`, `just build`.
 For real CPU/WASM streaming proof, install `agent-browser` and run
-`just browser-smoke /path/to/english.wav /path/to/german.wav`. The harness
-paces public/consented fixtures, checks non-empty exactly-once completions,
+`just browser-smoke /path/to/english.wav /path/to/german.wav`. For the
+experimental German Small option, use `just browser-smoke-small` with the same
+arguments (only the German fixture is run). The harness paces public/consented fixtures, checks non-empty exactly-once completions,
 and forbids WebSockets/non-GET fetches in the page and STT worker. Audio
 fixtures, browser state and runtime binaries stay outside git.
 The package exports TypeScript source for Bun/Vite consumers; `dist/index.js` is

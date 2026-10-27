@@ -14,7 +14,24 @@ export type {
 	RecognitionProvider,
 	RecognitionState,
 } from "./types";
-export { MOONSHINE_MODEL_BASES } from "./moonshine";
+export { MOONSHINE_MODEL_BASES, MOONSHINE_SMALL_MODEL_BASES } from "./moonshine";
+
+function validateOptions(options: RecognitionOptions) {
+	if (
+		!["moonshine", "ears"].includes(options.provider) ||
+		!["en", "de"].includes(options.language)
+	) throw new Error("Unsupported recognition provider or language");
+	if (
+		options.provider === "moonshine" &&
+		options.modelSize !== undefined &&
+		!["tiny", "small"].includes(options.modelSize)
+	) throw new Error("Unsupported Moonshine model size");
+	if (
+		!Number.isFinite(options.sampleRate) ||
+		options.sampleRate < 8000 ||
+		options.sampleRate > 96000
+	) throw new Error("PCM sample rate must be between 8000 and 96000 Hz");
+}
 
 /** No microphone, UI, command execution, gateway or implicit provider fallback. */
 export class Recognizer {
@@ -76,19 +93,7 @@ export class Recognizer {
 	}
 	async prepare(options: RecognitionOptions) {
 		this.cancel();
-		if (
-			!["moonshine", "ears"].includes(options.provider) ||
-			!["en", "de"].includes(options.language)
-		) {
-			throw new Error("Unsupported recognition provider or language");
-		}
-		if (
-			!Number.isFinite(options.sampleRate) ||
-			options.sampleRate < 8000 ||
-			options.sampleRate > 96000
-		) {
-			throw new Error("PCM sample rate must be between 8000 and 96000 Hz");
-		}
+		validateOptions(options);
 		const generation = this.generation;
 		this.completed.clear();
 		this.finishPromise = undefined;

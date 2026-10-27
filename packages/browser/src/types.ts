@@ -19,7 +19,13 @@ export type RecognitionOptions = {
 	/** Format of every feed() call: mono normalized Float32 PCM. */
 	sampleRate: number;
 } & (
-	| { provider: "moonshine"; runtimeBaseUrl: string; modelBaseUrl?: string }
+	| {
+			provider: "moonshine";
+			runtimeBaseUrl: string;
+			modelBaseUrl?: string;
+			/** Select the matching native streaming architecture. Defaults to tiny. */
+			modelSize?: "tiny" | "small";
+		}
 	| {
 			provider: "ears";
 			url: string;

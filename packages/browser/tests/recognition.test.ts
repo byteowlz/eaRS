@@ -148,6 +148,27 @@ describe("local recognition lifecycle", () => {
 		expect(completed(events)[0]?.id).toEndWith(":9007199254740993123");
 		expect(host.closed).toBe(true);
 	});
+	test("explicit Small uses the matching architecture and model bundle", async () => {
+		const { host, recognizer } = fakeLocal();
+		await recognizer.prepare({ ...local, modelSize: "small" });
+		expect(host.loaded?.modelArch).toBe(4);
+		expect(host.loaded?.source.files["encoder.ort"]).toContain(
+			"small-streaming-de/quantized_26_08_24/",
+		);
+		recognizer.cancel();
+	});
+	test("explicit local Small override keeps the Small architecture", async () => {
+		const { host, recognizer } = fakeLocal();
+		await recognizer.prepare({ ...local, modelSize: "small", modelBaseUrl: "https://example.test/models/" });
+		expect(host.loaded?.modelArch).toBe(4);
+		expect(host.loaded?.source.files["encoder.ort"]).toBe("https://example.test/models/encoder.ort");
+		recognizer.cancel();
+	});
+	test("rejects unsupported size without starting a worker", async () => {
+		const { host, recognizer } = fakeLocal();
+		await expect(recognizer.prepare({ ...local, modelSize: "medium" } as never)).rejects.toThrow("Unsupported Moonshine model size");
+		expect(host.loaded).toBeUndefined();
+	});
 	test("cancel drops provisional and late results; never uploads or commits a preview", async () => {
 		const { host, recognizer, events } = fakeLocal();
 		await recognizer.prepare(local);

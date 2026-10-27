@@ -51,6 +51,11 @@ export const MOONSHINE_MODEL_BASES = {
 	de: "https://download.moonshine.ai/model/tiny-streaming-de/quantized_26_08_24/",
 } as const;
 
+export const MOONSHINE_SMALL_MODEL_BASES = {
+	en: "https://download.moonshine.ai/model/small-streaming-en/quantized_26_08_21/",
+	de: "https://download.moonshine.ai/model/small-streaming-de/quantized_26_08_24/",
+} as const;
+
 export async function loadMoonshineHost(
 	runtimeBaseUrl: string,
 ): Promise<MoonshineHost> {
@@ -97,14 +102,15 @@ export class MoonshineAdapter implements RecognitionAdapter {
 		this.host = host;
 		host.onProgress = (_id, loaded, total, file) =>
 			this.emit({ type: "progress", loaded, total, file });
-		const base =
-			this.options.modelBaseUrl ?? MOONSHINE_MODEL_BASES[this.options.language];
+		const small = this.options.modelSize === "small";
+		const base = this.options.modelBaseUrl ??
+			(small ? MOONSHINE_SMALL_MODEL_BASES : MOONSHINE_MODEL_BASES)[this.options.language];
 		const files = Object.fromEntries(
 			MODEL_FILES.map((file) => [file, new URL(file, base).href]),
 		);
 		await host.loadTranscriber({
 			transcriberId: "ears",
-			modelArch: 2,
+			modelArch: small ? 4 : 2,
 			source: { kind: "urls", files },
 		});
 		this.assertOpen();

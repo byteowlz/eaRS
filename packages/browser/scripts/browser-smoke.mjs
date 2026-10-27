@@ -5,10 +5,12 @@ import { fileURLToPath } from "node:url";
 import { stageMoonshineRuntime } from "./stage-runtime.mjs";
 
 // Public/consented fixtures stay outside git. No microphone or speech service.
-const [english, german] = process.argv.slice(2);
+const [english, german, modelSize = "tiny"] = process.argv.slice(2);
+if (!["tiny", "small"].includes(modelSize))
+	throw new Error("modelSize must be tiny or small");
 if (!english || !german)
 	throw new Error(
-		"Usage: bun scripts/browser-smoke.mjs <english.wav> <german.wav>",
+		"Usage: bun scripts/browser-smoke.mjs <english.wav> <german.wav> [tiny|small]",
 	);
 const fixtures = { en: path.resolve(english), de: path.resolve(german) };
 const directory = mkdtempSync(path.join(os.tmpdir(), "ears-browser-smoke-"));
@@ -37,7 +39,7 @@ window.runProbe = async (language) => {
   });
   let context;
   try {
-    await recognizer.prepare({ provider: 'moonshine', language, sampleRate: 16000, runtimeBaseUrl: '/runtime/' });
+    await recognizer.prepare({ provider: 'moonshine', language, sampleRate: 16000, runtimeBaseUrl: '/runtime/', modelSize: ${JSON.stringify(modelSize)} });
     result.prepareMs = performance.now() - start;
     context = new AudioContext({ sampleRate: 16000 });
     const buffer = await context.decodeAudioData(await (await fetch('/' + language + '.wav')).arrayBuffer());
@@ -111,7 +113,7 @@ try {
 	// Page request capture complements hard egress guards in both page and STT worker.
 	await browser("network", "route", "**/*");
 	const results = [];
-	for (const language of ["en", "de"]) {
+	for (const language of modelSize === "small" ? ["de"] : ["en", "de"]) {
 		await browser(
 			"eval",
 			`void window.runProbe(${JSON.stringify(language)}); true`,

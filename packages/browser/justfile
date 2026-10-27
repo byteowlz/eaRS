@@ -10,3 +10,7 @@ build:
 # Requires agent-browser and externally stored public/consented WAV fixtures.
 browser-smoke english german: build
     bun scripts/browser-smoke.mjs "{{english}}" "{{german}}"
+
+# German Small only; uses the same fixture arguments as the Tiny smoke.
+browser-smoke-small english german: build
+    bun scripts/browser-smoke.mjs "{{english}}" "{{german}}" small
