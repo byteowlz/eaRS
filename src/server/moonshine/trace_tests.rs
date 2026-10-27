@@ -42,6 +42,20 @@ fn hash(path: &Path) -> String {
     format!("{:x}", Sha256::digest(std::fs::read(path).unwrap()))
 }
 
+fn model_hashes(dir: &Path) -> serde_json::Map<String, serde_json::Value> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_file())
+        .map(|path| {
+            (
+                path.file_name().unwrap().to_string_lossy().into_owned(),
+                json!(hash(&path)),
+            )
+        })
+        .collect()
+}
+
 /// Actual native polling, plus the same ingress boundary detector and forced
 /// flush used by the production adapter. Audio-time replay, not live wall time.
 #[test]
@@ -55,6 +69,13 @@ fn moonshine_revision_trace() {
         .parse()
         .unwrap();
     assert!((10..=500).contains(&packet_ms));
+    let tail_ms: usize = std::env::var("EARS_MOONSHINE_TRACE_TAIL_MS")
+        .unwrap_or_else(|_| "1000".into())
+        .parse()
+        .unwrap();
+    assert!(tail_ms <= 5000);
+    let boundary_vad =
+        std::env::var("EARS_MOONSHINE_TRACE_BOUNDARY_VAD").map_or(true, |value| value != "0");
     let mut output = File::options();
     output.create_new(true).write(true);
     #[cfg(unix)]
@@ -65,26 +86,23 @@ fn moonshine_revision_trace() {
     let mut out = output
         .open(std::env::var("EARS_MOONSHINE_TRACE_OUT").unwrap())
         .unwrap();
-    let files: serde_json::Map<String, serde_json::Value> = std::fs::read_dir(&dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| path.is_file())
-        .map(|path| {
-            (
-                path.file_name().unwrap().to_string_lossy().into_owned(),
-                json!(hash(&path)),
-            )
-        })
-        .collect();
+    let files = model_hashes(&dir);
     writeln!(
         out,
         "{}",
         json!({"kind":"model", "runtime":moonshine_rs::get_version(),
-        "packet_ms":packet_ms, "model_files":files, "ingress_hangover_ms":300})
+        "packet_ms":packet_ms, "model_files":files, "ingress_hangover_ms":300, "boundary_vad":boundary_vad, "tail_ms":tail_ms})
     )
     .unwrap();
     let options = TranscriberOptions::new().with_ort_providers("cpu");
+    let load_started = Instant::now();
     let model = Transcriber::from_files(&dir, ModelArch::TinyStreaming, Some(&options)).unwrap();
+    writeln!(
+        out,
+        "{}",
+        json!({"kind":"model_ready", "load_s":load_started.elapsed().as_secs_f64()})
+    )
+    .unwrap();
     for input in inputs {
         let started = Instant::now();
         let (mut pcm, rate) = kaudio::pcm_decode(&input.path).unwrap();
@@ -92,8 +110,8 @@ fn moonshine_revision_trace() {
             pcm = kaudio::resample(&pcm, rate as usize, 24_000).unwrap();
         }
         let duration = pcm.len() as f64 / 24_000.0;
-        pcm.resize(pcm.len() + 24_000, 0.0); // ensure an end boundary
-        let mut vad = BoundaryVad::new(true, 24_000, 300);
+        pcm.resize(pcm.len() + tail_ms * 24, 0.0);
+        let mut vad = BoundaryVad::new(boundary_vad, 24_000, 300);
         let mut stream = model.create_stream().unwrap();
         let mut elapsed = 0.0;
         let mut received = false;
@@ -139,6 +157,13 @@ fn moonshine_revision_trace() {
             )
             .unwrap();
         }
+        writeln!(
+            out,
+            "{}",
+            json!({"kind":"clip_result", "clip":input.id,
+            "wall_s":started.elapsed().as_secs_f64()})
+        )
+        .unwrap();
         eprintln!(
             "traced {} ({:.1}s audio) in {:.2}s",
             input.id,

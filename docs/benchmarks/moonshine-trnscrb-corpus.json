@@ -1,0 +1,221 @@
+{
+  "dataset": "google/fleurs",
+  "revision": "d7c758a6dceecd54a98cac43404d3d576e721f07",
+  "split": "de_de/test",
+  "tsv_sha256": "82fab72c58a347345675c238f2492bb997105a4ab45d69e2a2b34ed29082fa97",
+  "selection_seed": 20261027,
+  "selection": "unique normalized reference; seeded shuffle; finite mono16k; source duration3..30s; first24",
+  "pcm": "PCM16,16kHz,mono; append1secondzeros to eachclip; bulk concatenates padded clips; no gain normalization",
+  "cases": [
+    {
+      "id": "clip-000",
+      "kind": "clip",
+      "source_file": "12813139454955337799.wav",
+      "source_sha256": "0e643c40598a51cd9acd0e22ec21f46970924a877ba5fcd11bfe9870ab2403a5",
+      "sha256": "0989d6a71160acfd1fe33f8467b19ed8c7d9bb06d2cf5e630a746306137c1c97",
+      "seconds": 11.92
+    },
+    {
+      "id": "clip-001",
+      "kind": "clip",
+      "source_file": "11842575003338313546.wav",
+      "source_sha256": "fff455fe321e404ec9aa7a58472861b86379028685889d300b4e75297a9c58ee",
+      "sha256": "223615e9e74b25591a1d7950ab9d49dcb3d04768cdc79babbf9e5ba2117d1654",
+      "seconds": 12.88
+    },
+    {
+      "id": "clip-002",
+      "kind": "clip",
+      "source_file": "722187693903532269.wav",
+      "source_sha256": "99eb037011a6d2cbcb27c3d76447753d9a347463616faa1be3e95aae6e219891",
+      "sha256": "10ac71afae90639cd778da21481a881ee93e3e8a2486fb144e65db846db40e9c",
+      "seconds": 13.6
+    },
+    {
+      "id": "clip-003",
+      "kind": "clip",
+      "source_file": "13556643934894880169.wav",
+      "source_sha256": "ddd6fe4a96fed4ebef80f851ee6c5ff4dabfb8368205fb4957429d1faa0200ad",
+      "sha256": "c618802e6d3bba4a91eaf5449d8bba942e662caf55aca63c112bb906a182652a",
+      "seconds": 9.16
+    },
+    {
+      "id": "clip-004",
+      "kind": "clip",
+      "source_file": "10166547362714956625.wav",
+      "source_sha256": "adf91db1187ebac0228f3cabe0be4f18c47c34702a8027793462e5f8485be7dc",
+      "sha256": "f70a8d3d35c6684814a08db23af228f16a2ec2750415f3b01a65a15ea1d4394e",
+      "seconds": 12.04
+    },
+    {
+      "id": "clip-005",
+      "kind": "clip",
+      "source_file": "8122720768687306797.wav",
+      "source_sha256": "a883b22014e00e2f4e42eb29393492db960395f2b773014947e065958b57de5b",
+      "sha256": "94b1ac6259c105845ef3c2f6e438ac57cc98a18f544213a1edb0b0824bd6b620",
+      "seconds": 10.84
+    },
+    {
+      "id": "clip-006",
+      "kind": "clip",
+      "source_file": "3045631440446403419.wav",
+      "source_sha256": "d2fcc27063dd3e509f7343133df25cb9f689294734b54e988d0addd98a1d996b",
+      "sha256": "c97c15e4d5c888481959ac8ddd93771f00250825ff1d81b7c24516cf62b4283d",
+      "seconds": 13.78
+    },
+    {
+      "id": "clip-007",
+      "kind": "clip",
+      "source_file": "11370832823724343594.wav",
+      "source_sha256": "5d45720419fe3e0523974016402be727b95ede3dc92175430c0d60e8e0d8d5fe",
+      "sha256": "72e08e80598131ee94e78453e8fbc3684ee680a059d90d3bd28a27bb0d6fa55c",
+      "seconds": 19.54
+    },
+    {
+      "id": "clip-008",
+      "kind": "clip",
+      "source_file": "12533790649172855935.wav",
+      "source_sha256": "2c313ff84277f3fe43b34c92cb1dbbf80a37f50e71d851d267afbc8cd58d7901",
+      "sha256": "050943ae89d53fb552fbe314e9590175569b4b9434c2ce53ad4a67a56f0db622",
+      "seconds": 10.9
+    },
+    {
+      "id": "clip-009",
+      "kind": "clip",
+      "source_file": "14508397840972616920.wav",
+      "source_sha256": "97aa80315355d3bda3182f997adac9aa0c3b64a00543295e78a5e68336fad9b6",
+      "sha256": "e44206246013ca220c483dd9f47939b87644bc92add511dab106934e62fd8cbf",
+      "seconds": 9.04
+    },
+    {
+      "id": "clip-010",
+      "kind": "clip",
+      "source_file": "1652624495909200867.wav",
+      "source_sha256": "43b1e62d6cb6ce100ae007a03429753a813f242af4859b6f13bad87c459441a2",
+      "sha256": "1d4f6ee0084607abd5e41b5bbd57ca4436e584a1ca2cf03659b7f7285307120e",
+      "seconds": 10.66
+    },
+    {
+      "id": "clip-011",
+      "kind": "clip",
+      "source_file": "10523281885564082084.wav",
+      "source_sha256": "5ee9defe6e3d6b1b29571fc5ae3b6d736f688b97c6c2700d65376d700b29d35c",
+      "sha256": "5889578f96ee00cdf6ffa7610099ceeca97a8d49a85088861b68128fb3a4accb",
+      "seconds": 16.84
+    },
+    {
+      "id": "clip-012",
+      "kind": "clip",
+      "source_file": "3115504758549491810.wav",
+      "source_sha256": "f38ec03a7c7c1e7a408292e317c6fd086cb368226604cf7c5077bf7dd83eaf13",
+      "sha256": "a0b2255ec0294ec2058f0dc68460178a17a56689167fe882bc2aecd624bf20d1",
+      "seconds": 7.12
+    },
+    {
+      "id": "clip-013",
+      "kind": "clip",
+      "source_file": "406406391719507617.wav",
+      "source_sha256": "1e154581fd3f1652f6ff5d532ea0ae14bba355edaae3533e5cc191be3f77d164",
+      "sha256": "0c1d16312e8d2aebd047923c683f0911437a897dcdd0500f24df00bc9ed35a32",
+      "seconds": 13.06
+    },
+    {
+      "id": "clip-014",
+      "kind": "clip",
+      "source_file": "12345915225289351467.wav",
+      "source_sha256": "812b6f4a8a5aa203f3fce28f3243bc0ae04bfecd846796f1f93e93d545d83ed0",
+      "sha256": "f018ec74d0a75608c99357076e36318275388945d0cc7ff48328a88a1d206880",
+      "seconds": 10.66
+    },
+    {
+      "id": "clip-015",
+      "kind": "clip",
+      "source_file": "1808370668876964323.wav",
+      "source_sha256": "fa697f791f92e974418e4044edaede34da94818797cf68d30817fa397efec59a",
+      "sha256": "1f19c3740d5b76f1b1cccb66eb031e8ef02bc47b2b9411130fd27711e3bb8421",
+      "seconds": 21.76
+    },
+    {
+      "id": "clip-016",
+      "kind": "clip",
+      "source_file": "15985252600261868058.wav",
+      "source_sha256": "4a90f3bbae9645081e530269e16a18e265942f021bb60bd45293ad722b046b04",
+      "sha256": "e6f4cfa9c80b83331432163243f3621fc12133d6ec87fc7094ded370b7dee912",
+      "seconds": 12.04
+    },
+    {
+      "id": "clip-017",
+      "kind": "clip",
+      "source_file": "10438132720416552229.wav",
+      "source_sha256": "9cf70a3ef231f81de158a367fbf03ea090b0d2db508134eb71c36c8db718e45c",
+      "sha256": "58aa9b5bb9559d1d6761ee4924cec1e18b4c07ab7200859c08cb3df9ee8f8ae3",
+      "seconds": 11.8
+    },
+    {
+      "id": "clip-018",
+      "kind": "clip",
+      "source_file": "17427917530747381591.wav",
+      "source_sha256": "e0f344449a9c25c1da1ffa9534ea1fb17d33791811a470db583b0cc7427dfbd0",
+      "sha256": "03dfaf7e17efe9e9fa44df3c4aa5a325b5573d42904d27dc9c571998e6714b77",
+      "seconds": 8.5
+    },
+    {
+      "id": "clip-019",
+      "kind": "clip",
+      "source_file": "5797610349660293486.wav",
+      "source_sha256": "53a1b313c06d5696e58e4e094c7516c4881583007bc609711d8a9a9146b3f5b0",
+      "sha256": "d91c017fee6e134c5f1e538733a0ebb54dc1189e1e1becf8750208ec66a1d421",
+      "seconds": 9.52
+    },
+    {
+      "id": "clip-020",
+      "kind": "clip",
+      "source_file": "3707110331135393447.wav",
+      "source_sha256": "2e382cabd1577eacde97f45d168e1ca43cd8704925ec88512d2bfb494312b352",
+      "sha256": "fbde12cbacc0e944fd7b9d3781320de404643b968056482c6e58451ffe8156ee",
+      "seconds": 17.44
+    },
+    {
+      "id": "clip-021",
+      "kind": "clip",
+      "source_file": "12233087638570381988.wav",
+      "source_sha256": "04ca74444e3beddce611ce75fc451e5771df2bb1d620a5adc4fc06f73b0e30e4",
+      "sha256": "9dd9a4310605efca3a96be9e5e68c541dbe1180d085c36f9d27331f50018064b",
+      "seconds": 17.56
+    },
+    {
+      "id": "clip-022",
+      "kind": "clip",
+      "source_file": "6426875064818704687.wav",
+      "source_sha256": "ab8ac39a390c0e68bd57e92514f6dc3162c830573529e925a6329aab60a663b4",
+      "sha256": "d41635ee7b69a6eedec0e41ad3557330c8bde04af42889182156e2b93e86194b",
+      "seconds": 20.38
+    },
+    {
+      "id": "clip-023",
+      "kind": "clip",
+      "source_file": "9221360912861828412.wav",
+      "source_sha256": "b770919b106360c87c26d7687b78fc47952bf79d8047096045ce9daa88e5c978",
+      "sha256": "0c86040a3f77218a3caec94be70fabc2b8fca7dc470c9417892f7bf015602224",
+      "seconds": 20.26
+    },
+    {
+      "id": "bulk",
+      "kind": "bulk",
+      "sha256": "da20aefc2653941d6061e954e8ecbe8ad0687c01af1a6ab88b85311d3f4f602e",
+      "seconds": 321.3
+    },
+    {
+      "id": "silence",
+      "kind": "negative",
+      "sha256": "d303811b8c84619667cd0501342f84ec6cbe69f7aa3856dcf52fabda374c92b8",
+      "seconds": 3.0
+    },
+    {
+      "id": "noise",
+      "kind": "negative",
+      "sha256": "a06509dc6af1018c381fd215b1b751752868231708ee865ab0ce14786beda2c9",
+      "seconds": 3.0
+    }
+  ]
+}
