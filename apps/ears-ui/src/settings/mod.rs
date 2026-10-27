@@ -827,7 +827,11 @@ impl SettingsView {
                     "Choose the dot or animated ears mark.",
                     vec![
                         (IndicatorStyle::Dot, "Dot".into()),
-                        (IndicatorStyle::Ears, "Ears".into()),
+                        (IndicatorStyle::Ears, "Ears · standing wave".into()),
+                        (
+                            IndicatorStyle::ParametricEars,
+                            "Ears · animated bars".into(),
+                        ),
                     ],
                     overlay.indicator,
                     entity.clone(),

@@ -3,6 +3,7 @@
 
 use crate::app::AppHandle;
 use crate::app::AppModel;
+use crate::indicator_theme::IndicatorPalette;
 use crate::overlay;
 use crate::platform;
 use crate::settings::SettingsView;
@@ -29,6 +30,7 @@ use gpui::px;
 use gpui::size;
 use std::thread::JoinHandle;
 use std::time::Duration;
+use std::time::Instant;
 
 pub const SETTINGS_SIZE: (f32, f32) = (780.0, 560.0);
 
@@ -43,6 +45,9 @@ pub struct Runtime {
 }
 
 impl Global for Runtime {}
+
+struct PaletteClock(Instant);
+impl Global for PaletteClock {}
 
 impl Runtime {
     pub fn new(model: Entity<AppModel>) -> Self {
@@ -215,7 +220,10 @@ pub fn apply_theme(cx: &mut App, appearance: Option<WindowAppearance>) {
     let (scheme, radius) =
         model(cx).read_with(cx, |m, _| (m.ui.theme.scheme.clone(), m.ui.theme.radius));
     let theme = Theme::resolve(&scheme, radius, appearance);
+    let palette = IndicatorPalette::resolve(&theme, &scheme);
     cx.set_global(theme);
+    cx.set_global(palette);
+    cx.set_global(PaletteClock(Instant::now()));
     cx.refresh_windows();
 }
 
@@ -305,6 +313,29 @@ pub fn quit(cx: &mut App) {
 /// One UI tick: pump engine events, expire timers, sync the overlay and
 /// tray, process tray clicks.
 pub fn tick(cx: &mut App) {
+    let refresh = cx.update_global::<PaletteClock, _>(|clock, _| {
+        if clock.0.elapsed() < Duration::from_secs(1) {
+            false
+        } else {
+            clock.0 = Instant::now();
+            true
+        }
+    });
+    if refresh {
+        let reduce_motion = platform::reduce_motion();
+        model(cx).update(cx, |m, cx| {
+            if m.reduce_motion != reduce_motion {
+                m.reduce_motion = reduce_motion;
+                cx.notify();
+            }
+        });
+        let scheme = model(cx).read_with(cx, |m, _| m.ui.theme.scheme.clone());
+        let palette = IndicatorPalette::resolve(cx.global::<Theme>(), &scheme);
+        if cx.global::<IndicatorPalette>() != &palette {
+            cx.set_global(palette);
+            cx.refresh_windows();
+        }
+    }
     pump_events(cx);
     let model = model(cx);
     model.update(cx, |m, cx| {

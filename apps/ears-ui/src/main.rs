@@ -6,7 +6,9 @@
 mod app;
 mod config;
 mod ears_mark;
+mod indicator_theme;
 mod overlay;
+mod parametric_mark;
 mod platform;
 mod runtime;
 mod settings;
@@ -24,20 +26,24 @@ use runtime::Runtime;
 
 fn print_help() {
     println!(
-        "ears-ui {}\n\nUsage: ears-ui [--settings] [--no-overlay] [--preview-synthetic|--preview-synthetic-expanded] [--help]\n\n  --settings           open the settings window at launch\n  --no-overlay         start with the floating island disabled\n  --preview-synthetic  display a synthetic notch fixture without starting dictation\n  --preview-synthetic-expanded  show the expanded synthetic fixture\n  --version            print the version\n\nConfig: {}",
+        "ears-ui {}\n\nUsage: ears-ui [--settings] [--no-overlay] [--preview-synthetic|--preview-synthetic-expanded|--preview-parametric|--preview-parametric-reduced] [--help]\n\n  --settings           open the settings window at launch\n  --no-overlay         start with the floating island disabled\n  --preview-synthetic  display a synthetic notch fixture without starting dictation\n  --preview-synthetic-expanded  show the expanded synthetic fixture\n  --preview-parametric  show animated parametric bars in a synthetic notch\n  --preview-parametric-reduced  show the same fixture with reduced motion\n  --version            print the version\n\nConfig: {}",
         env!("CARGO_PKG_VERSION"),
         UiConfig::path().display()
     );
 }
 
 /// Synthetic UI fixture: no engine, microphone, hotkeys, tray, or settings writes.
-fn preview_synthetic(expanded: bool) {
+fn preview_synthetic(expanded: bool, parametric: bool, reduced: bool) {
     use config::IndicatorStyle;
     use ears::dictation::{ConnectionState, DictationState};
     let mut ui = UiConfig::default();
-    ui.overlay.indicator = IndicatorStyle::Ears;
+    ui.overlay.indicator = if parametric {
+        IndicatorStyle::ParametricEars
+    } else {
+        IndicatorStyle::Ears
+    };
     ui.overlay.show_details = expanded;
-    ui.overlay.animation = false;
+    ui.overlay.animation = parametric;
     ui.overlay.click_through = true;
     Application::new().run(move |cx| {
         platform::set_accessory_policy();
@@ -46,7 +52,7 @@ fn preview_synthetic(expanded: bool) {
         fixture.connection = ConnectionState::Connected;
         fixture.speech_active = true;
         fixture.partial = "Synthetic speech".into();
-        fixture.reduce_motion = true;
+        fixture.reduce_motion = reduced;
         let model = cx.new(|_| fixture);
         cx.set_global(AppHandle(model.clone()));
         cx.set_global(Runtime::new(model.clone()));
@@ -54,6 +60,17 @@ fn preview_synthetic(expanded: bool) {
         cx.on_window_closed(|cx| cx.quit()).detach();
         overlay::open_preview(cx, model);
     });
+}
+
+fn maybe_preview(args: &[String]) -> bool {
+    let expanded = args.iter().any(|a| a == "--preview-synthetic-expanded");
+    let animated = args.iter().any(|a| a == "--preview-parametric");
+    let reduced = args.iter().any(|a| a == "--preview-parametric-reduced");
+    if expanded || animated || reduced || args.iter().any(|a| a == "--preview-synthetic") {
+        preview_synthetic(expanded, animated || reduced, !animated);
+        return true;
+    }
+    false
 }
 
 fn main() {
@@ -66,9 +83,7 @@ fn main() {
         println!("ears-ui {}", env!("CARGO_PKG_VERSION"));
         return;
     }
-    let preview_expanded = args.iter().any(|a| a == "--preview-synthetic-expanded");
-    if preview_expanded || args.iter().any(|a| a == "--preview-synthetic") {
-        preview_synthetic(preview_expanded);
+    if maybe_preview(&args) {
         return;
     }
     let open_settings_at_launch = args.iter().any(|a| a == "--settings");

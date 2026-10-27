@@ -64,6 +64,7 @@ pub enum IndicatorStyle {
     #[default]
     Dot,
     Ears,
+    ParametricEars,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,7 +86,7 @@ pub struct OverlayConfig {
     pub content_motion: ContentMotion,
     /// Show a second row of details when the notched island is active.
     pub show_details: bool,
-    /// Optional ears mark; the dot remains the backwards-compatible default.
+    /// Optional standing-wave or parametric ears mark; dot remains the default.
     pub indicator: IndicatorStyle,
     /// Let clicks pass through the island (disables drag + click-to-open).
     pub click_through: bool,
@@ -193,6 +194,9 @@ mod tests {
         config.overlay.content_motion = ContentMotion::Fade;
         let decoded: UiConfig = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
         assert_eq!(decoded.overlay.indicator, IndicatorStyle::Ears);
+        config.overlay.indicator = IndicatorStyle::ParametricEars;
+        let parametric: UiConfig = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+        assert_eq!(parametric.overlay.indicator, IndicatorStyle::ParametricEars);
         assert!(decoded.overlay.show_details);
         assert_eq!(decoded.overlay.shape_motion, ShapeMotion::Smooth);
         assert_eq!(decoded.overlay.content_motion, ContentMotion::Fade);

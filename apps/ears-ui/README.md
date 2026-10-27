@@ -15,8 +15,9 @@ state and forwards commands.
   display the compact shape widens around the camera without increasing its
   height. The dot or ears indicator, smooth or spring shape motion, and
   grow, fade or combined content motion are configurable in Overlay settings.
-  The ears mark animates as standing waves while speech is active. Click-through
-  and reduced-motion are supported. See `docs/DYNAMIC_ISLAND_SPIKE.md` for the
+  The ears mark can use the original speech-active standing wave or the
+  parametric, state-dependent sliding bars. Click-through and macOS reduced-motion
+  are supported. See `docs/DYNAMIC_ISLAND_SPIKE.md` for the
   window-feasibility findings.
 - **Tray / menu-bar presence** — state-coloured mic icon, menu with
   pause/resume, insertion mode, settings, launch-at-login and quit. Works
@@ -47,6 +48,8 @@ target/debug/ears-ui --settings   # also open the settings window
 target/debug/ears-ui --no-overlay # tray only
 target/debug/ears-ui --preview-synthetic # synthetic notch, no dictation engine; Ctrl-C to exit
 target/debug/ears-ui --preview-synthetic-expanded # synthetic expanded details
+target/debug/ears-ui --preview-parametric # animated, synthetic; no dictation engine
+target/debug/ears-ui --preview-parametric-reduced # static reduced-motion fixture
 ```
 
 Dictation control stays with the global hotkeys from `config.toml`
@@ -67,14 +70,20 @@ The Overlay settings write the same `ui.toml` fields available to scripts:
 ```toml
 [overlay]
 island_mode = true
-indicator = "ears"       # dot | ears
+indicator = "parametric_ears" # dot | ears (standing wave) | parametric_ears
 shape_motion = "spring"  # smooth | spring
 content_motion = "grow_fade" # grow | fade | grow_fade
 show_details = false     # optional second row on a detected notch
 ```
 
 The existing dot remains the default. Island mode requires a detected macOS
-notch; without one the regular pill remains in use.
+notch; without one the regular pill remains in use. For the parametric indicator,
+`theme.scheme = "auto"` follows macOS system colours or the active Omarchy
+`colors.toml`: `$OMARCHY_THEME_FILE`, then `$XDG_STATE_HOME/omarchy/current/theme/colors.toml`,
+then the legacy `$XDG_CONFIG_HOME/omarchy/current/theme/colors.toml` (with standard
+XDG defaults). An explicit eaRS scheme takes precedence. Missing or invalid
+colours fall back to the active eaRS theme, and low-contrast colours are replaced
+with readable black or white. Changes are checked once per second.
 
 ## Current limits
 
@@ -82,7 +91,9 @@ The Oqtopus vector indicator is not yet implemented, and motion has not yet
 been verified on a physical notched display. LostIsland integration is separate and not connected; eaRS keeps
 its own pill. Notch corner radii are approximate because AppKit exposes the
 camera housing's bounding rectangle, not its physical curve. Native rendering on
-a physical notched Mac still needs verification.
+a physical notched Mac still needs verification. On Linux the existing platform
+shim does not yet detect the OS reduced-motion setting; turn Overlay animation
+off to disable motion.
 
 ## Permissions
 

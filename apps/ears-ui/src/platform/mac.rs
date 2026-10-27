@@ -7,6 +7,8 @@ use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2_app_kit::NSApplication;
 use objc2_app_kit::NSApplicationActivationPolicy;
+use objc2_app_kit::NSColor;
+use objc2_app_kit::NSColorSpace;
 use objc2_app_kit::NSEvent;
 use objc2_app_kit::NSScreen;
 use objc2_app_kit::NSView;
@@ -37,6 +39,28 @@ pub fn activate_app() {
 
 pub fn reduce_motion() -> bool {
     NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion()
+}
+
+/// Dynamic AppKit colours resolved in sRGB; no fixed mockup palette.
+pub fn system_indicator_colors() -> Option<[crate::theme::Color; 6]> {
+    let space = NSColorSpace::sRGBColorSpace();
+    let convert = |color: Retained<NSColor>| {
+        let color = color.colorUsingColorSpace(&space)?;
+        Some(crate::theme::Color {
+            r: color.redComponent() as f32,
+            g: color.greenComponent() as f32,
+            b: color.blueComponent() as f32,
+            a: 1.0,
+        })
+    };
+    Some([
+        convert(NSColor::labelColor())?,
+        convert(NSColor::controlAccentColor())?,
+        convert(NSColor::systemBlueColor())?,
+        convert(NSColor::systemPurpleColor())?,
+        convert(NSColor::systemGreenColor())?,
+        convert(NSColor::systemRedColor())?,
+    ])
 }
 
 fn screen_number(screen: &NSScreen) -> Option<u32> {
@@ -110,6 +134,15 @@ pub fn ns_window(window: &Window) -> Option<Retained<NSWindow>> {
             view.window()
         }
         _ => None,
+    }
+}
+
+pub fn request_redraw(window: &Window) {
+    if let Ok(handle) = HasWindowHandle::window_handle(window) {
+        if let RawWindowHandle::AppKit(handle) = handle.as_raw() {
+            // SAFETY: GPUI owns this live NSView for the duration of the callback.
+            unsafe { &*(handle.ns_view.as_ptr() as *mut NSView) }.setNeedsDisplay(true);
+        }
     }
 }
 

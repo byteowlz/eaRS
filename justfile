@@ -18,6 +18,14 @@ build-release:
 check:
     cargo check --all-features
 
+# eaRS companion UI unit tests
+ui-test:
+    cargo test -p ears-ui --locked
+
+# macOS synthetic native animation and reduced-motion regression
+ui-preview-test:
+    apps/ears-ui/scripts/check-parametric-preview.sh
+
 # === Code Quality ===
 
 # Format code

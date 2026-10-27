@@ -19,6 +19,8 @@ use crate::config::OverlayAnchor;
 use crate::config::OverlayConfig;
 use crate::config::ShapeMotion;
 use crate::ears_mark;
+use crate::indicator_theme::IndicatorPalette;
+use crate::parametric_mark::{self, State as MarkState};
 use crate::platform;
 use crate::platform::Notch;
 use crate::runtime;
@@ -311,7 +313,8 @@ fn open(cx: &mut App, overlay: &OverlayConfig, model: Entity<AppModel>) {
     let result = cx.open_window(options, |window, cx| {
         platform::set_shadow(window, false);
         platform::set_click_through(window, click_through);
-        cx.new(|cx| IslandView::new(model, display_id, notch, cx))
+        let handle = window.window_handle();
+        cx.new(|cx| IslandView::new(model, display_id, notch, handle, cx))
     });
     match result {
         Ok(handle) => {
@@ -363,6 +366,7 @@ pub fn open_preview(cx: &mut App, model: Entity<AppModel>) {
                     width: 185.0,
                     height: 32.0,
                 }),
+                window.window_handle(),
                 cx,
             )
         })
@@ -684,6 +688,8 @@ pub struct IslandView {
     drag: Option<DragState>,
     hovered: bool,
     appeared: Instant,
+    parametric_state: Option<MarkState>,
+    parametric_started: Instant,
 }
 
 /// Small easing with overshoot for the island's springy feel.
@@ -697,6 +703,54 @@ fn ease_out_quint(t: f32) -> f32 {
     1.0 - (1.0 - t).powi(5)
 }
 
+fn parametric_state(phase: Phase, speech: bool, check: bool) -> MarkState {
+    match phase {
+        Phase::Dormant => MarkState::Ready,
+        Phase::Armed => MarkState::Listening,
+        Phase::Listening if speech => MarkState::Speech,
+        Phase::Listening => MarkState::Listening,
+        Phase::Finalizing if check => MarkState::Done,
+        Phase::Finalizing => MarkState::Processing,
+        Phase::Error => MarkState::Attention,
+    }
+}
+
+#[cfg(test)]
+mod parametric_state_tests {
+    use super::*;
+    #[test]
+    fn maps_only_real_engine_phases() {
+        assert_eq!(
+            parametric_state(Phase::Dormant, false, false),
+            MarkState::Ready
+        );
+        assert_eq!(
+            parametric_state(Phase::Armed, false, false),
+            MarkState::Listening
+        );
+        assert_eq!(
+            parametric_state(Phase::Listening, true, false),
+            MarkState::Speech
+        );
+        assert_eq!(
+            parametric_state(Phase::Listening, false, false),
+            MarkState::Listening
+        );
+        assert_eq!(
+            parametric_state(Phase::Finalizing, false, false),
+            MarkState::Processing
+        );
+        assert_eq!(
+            parametric_state(Phase::Finalizing, false, true),
+            MarkState::Done
+        );
+        assert_eq!(
+            parametric_state(Phase::Error, false, false),
+            MarkState::Attention
+        );
+    }
+}
+
 #[derive(Clone)]
 struct Content {
     phase: Phase,
@@ -707,14 +761,60 @@ struct Content {
     check: bool,
 }
 
+// GPUI's request_animation_frame can stall for a non-activating popup. Drive
+// its transitions while the view exists, without retaining a closed window.
+fn spawn_animation_driver(window: gpui::AnyWindowHandle, cx: &Context<IslandView>) {
+    cx.spawn(async move |view, cx| {
+        loop {
+            let active = view.update(cx, |this, cx| {
+                let model = this.model.read(cx);
+                let animate = model.ui.overlay.animation && !model.reduce_motion;
+                let visible = !this.island()
+                    || model.phase() != Phase::Dormant
+                    || this.reveal.current() > 0.0;
+                let needs_frame = animate
+                    && (!this.morph.done()
+                        || !this.reveal.done()
+                        || !this.details.reveal.done()
+                        || (visible
+                            && model.ui.overlay.indicator == IndicatorStyle::ParametricEars)
+                        || (visible
+                            && model.ui.overlay.indicator == IndicatorStyle::Ears
+                            && model.speech_active));
+                if needs_frame {
+                    cx.notify();
+                }
+                needs_frame
+            });
+            let Ok(active) = active else { break };
+            if active
+                && window
+                    .update(cx, |_, window, _| {
+                        window.refresh();
+                        platform::request_redraw(window);
+                    })
+                    .is_err()
+            {
+                break;
+            }
+            cx.background_executor()
+                .timer(Duration::from_millis(if active { 33 } else { 250 }))
+                .await;
+        }
+    })
+    .detach();
+}
+
 impl IslandView {
     fn new(
         model: Entity<AppModel>,
         display: u32,
         notch: Option<Notch>,
+        window: gpui::AnyWindowHandle,
         cx: &mut Context<Self>,
     ) -> Self {
         cx.observe(&model, |_, _, cx| cx.notify()).detach();
+        spawn_animation_driver(window, cx);
         let initial = match notch {
             Some(n) => (n.width, n.height),
             None => (PILL_MIN_W, PILL_H),
@@ -731,6 +831,8 @@ impl IslandView {
             drag: None,
             hovered: false,
             appeared: Instant::now(),
+            parametric_state: None,
+            parametric_started: Instant::now(),
         }
     }
 
@@ -958,7 +1060,10 @@ impl Render for IslandView {
 
         // Geometry ------------------------------------------------------------
         let dormant = matches!(content.phase, Phase::Dormant);
-        let indicator_width = if overlay.indicator == IndicatorStyle::Ears {
+        let indicator_width = if matches!(
+            overlay.indicator,
+            IndicatorStyle::Ears | IndicatorStyle::ParametricEars
+        ) {
             24.0
         } else {
             DOT_W
@@ -1078,42 +1183,68 @@ impl Render for IslandView {
         if wave_active {
             window.request_animation_frame();
         }
-        let indicator: gpui::AnyElement =
-            if overlay.indicator == IndicatorStyle::Ears && content.phase != Phase::Finalizing {
-                ears_mark::mark(
-                    content.dot,
-                    24.0 * scale,
-                    self.appeared.elapsed().as_secs_f32() / 0.095,
-                    wave_active,
-                )
-                .into_any_element()
+        let mark_state = parametric_state(content.phase, speech, content.check);
+        if self.parametric_state != Some(mark_state) {
+            self.parametric_state = Some(mark_state);
+            self.parametric_started = Instant::now();
+        }
+        let indicator: gpui::AnyElement = if overlay.indicator == IndicatorStyle::ParametricEars {
+            if animate && (!island || !dormant || reveal > 0.0) {
+                window.request_animation_frame();
+            }
+            let background = if island {
+                crate::theme::Color::BLACK
+            } else if theme.is_dark() {
+                theme.slots[0x01]
             } else {
-                match content.phase {
-                    Phase::Finalizing if !content.check => {
-                        spinner(r.success, animate, scale).into_any_element()
-                    }
-                    Phase::Finalizing => div()
-                        .w(px((DOT_W + 4.0) * scale))
-                        .h(px((DOT_W + 4.0) * scale))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_size(px(13.0 * scale))
-                        .text_color(r.success)
-                        .child("✓")
-                        .into_any_element(),
-                    Phase::Armed if animate => dot(content.dot, scale)
-                        .with_animation(
-                            "armed-pulse",
-                            Animation::new(Duration::from_millis(1400))
-                                .repeat()
-                                .with_easing(gpui::bounce(gpui::ease_in_out)),
-                            |d, t| d.opacity(0.35 + 0.65 * t),
-                        )
-                        .into_any_element(),
-                    _ => dot(content.dot, scale).into_any_element(),
-                }
+                theme.slots[0x00]
             };
+            let color = cx
+                .global::<IndicatorPalette>()
+                .color(mark_state, background);
+            parametric_mark::mark(
+                color,
+                24.0 * scale,
+                mark_state,
+                self.parametric_started.elapsed().as_secs_f32(),
+                animate,
+            )
+            .into_any_element()
+        } else if overlay.indicator == IndicatorStyle::Ears && content.phase != Phase::Finalizing {
+            ears_mark::mark(
+                content.dot,
+                24.0 * scale,
+                self.appeared.elapsed().as_secs_f32() / 0.095,
+                wave_active,
+            )
+            .into_any_element()
+        } else {
+            match content.phase {
+                Phase::Finalizing if !content.check => {
+                    spinner(r.success, animate, scale).into_any_element()
+                }
+                Phase::Finalizing => div()
+                    .w(px((DOT_W + 4.0) * scale))
+                    .h(px((DOT_W + 4.0) * scale))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(13.0 * scale))
+                    .text_color(r.success)
+                    .child("✓")
+                    .into_any_element(),
+                Phase::Armed if animate => dot(content.dot, scale)
+                    .with_animation(
+                        "armed-pulse",
+                        Animation::new(Duration::from_millis(1400))
+                            .repeat()
+                            .with_easing(gpui::bounce(gpui::ease_in_out)),
+                        |d, t| d.opacity(0.35 + 0.65 * t),
+                    )
+                    .into_any_element(),
+                _ => dot(content.dot, scale).into_any_element(),
+            }
+        };
 
         let detail_text = format!("{} · {}", voice_mode, content.text);
         let label = div()

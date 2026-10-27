@@ -9,6 +9,10 @@ pub fn set_accessory_policy() {}
 
 pub fn activate_app() {}
 
+pub fn system_indicator_colors() -> Option<[crate::theme::Color; 6]> {
+    None
+}
+
 pub fn reduce_motion() -> bool {
     // GTK: gtk-enable-animations; Windows: SPI_GETCLIENTAREAANIMATION.
     // Neither is worth a dependency yet; the ui.toml switch covers it.
@@ -26,6 +30,8 @@ pub fn menu_bar_height(_display: u32) -> f32 {
 pub fn notch(_display: u32) -> Option<Notch> {
     None
 }
+
+pub fn request_redraw(_window: &Window) {}
 
 pub fn set_click_through(_window: &Window, _on: bool) {}
 
