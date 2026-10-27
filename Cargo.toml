@@ -116,6 +116,9 @@ openssl = { version = "0.10", features = ["vendored"] }
 sentencepiece = { version = "0.12", features = ["static"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# Listen for physical hotkey events without rdev's HIToolbox text translation.
+core-foundation = "0.10"
+core-graphics = "0.25"
 # Frontmost-app detection for context profiles (NSWorkspace + AX window title).
 objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSRunningApplication"] }
 objc2-foundation = { version = "0.3", features = ["NSString", "NSURL"] }

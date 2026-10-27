@@ -2426,6 +2426,8 @@ dependencies = [
  "candle-nn",
  "clap",
  "colored",
+ "core-foundation 0.10.0",
+ "core-graphics 0.25.0",
  "cpal",
  "crossbeam-channel",
  "ctrlc",

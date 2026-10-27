@@ -15,6 +15,8 @@
 pub mod audio_history;
 mod engine;
 pub mod hotkeys;
+#[cfg(target_os = "macos")]
+mod mac_hotkeys;
 pub mod typing;
 pub mod voice_commands;
 pub mod wake;

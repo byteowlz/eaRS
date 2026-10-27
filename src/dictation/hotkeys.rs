@@ -1,7 +1,7 @@
-//! Global hotkey listener (rdev).
+//! Global hotkey listener.
 //!
-//! Runs on its own thread for the lifetime of the process (`rdev::listen`
-//! cannot be stopped). State changes are applied synchronously through
+//! Runs on its own thread for the lifetime of the process (the native event
+//! loop cannot currently be stopped). State changes are applied synchronously through
 //! [`Shared`]; loop-affecting actions (cancel, profile cycling) are queued as
 //! [`DictationCommand`]s.
 
@@ -11,7 +11,6 @@ use super::vlog;
 use crate::config::DictationHotkeyMode;
 use crate::config::HotkeyConfig;
 use rdev::EventType;
-use rdev::listen;
 use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
@@ -112,6 +111,16 @@ pub fn mode_description(mode: DictationHotkeyMode) -> &'static str {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn listen_events(callback: impl FnMut(EventType) + 'static) -> Result<(), String> {
+    super::mac_hotkeys::listen(callback)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn listen_events(mut callback: impl FnMut(EventType) + 'static) -> Result<(), String> {
+    rdev::listen(move |event| callback(event.event_type)).map_err(|e| format!("{e:?}"))
+}
+
 /// Start the listener thread.
 pub(crate) fn spawn_listener(config: HotkeyConfig, escape_cancels: bool, shared: Arc<Shared>) {
     let _ = escape_cancels; // kept for signature stability; flag lives on Shared
@@ -140,7 +149,7 @@ pub(crate) fn spawn_listener(config: HotkeyConfig, escape_cancels: bool, shared:
             let mut held_from_paused = false;
             let mut down_at: Option<Instant> = None;
 
-            let result = listen(move |event| match event.event_type {
+            let result = listen_events(move |event| match event {
                 EventType::KeyPress(rdev::Key::ControlLeft)
                 | EventType::KeyPress(rdev::Key::ControlRight) => ctrl = true,
                 EventType::KeyRelease(rdev::Key::ControlLeft)
