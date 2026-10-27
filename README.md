@@ -72,6 +72,7 @@ The `just install-ears` command will:
 | `amd`      | ROCm acceleration for AMD GPUs                         |
 | `directml` | DirectML acceleration for Windows                      |
 | `parakeet-rs` | Enable Nemotron cache-aware streaming through parakeet-rs |
+| `moonshine` | Optional native CPU Moonshine Tiny Streaming, including local fine-tuned ORT exports |
 | `transcribe-cpp` | Enable ggml GGUF streaming models via transcribe.cpp (built from source, needs cmake; `apple`/`nvidia` add Metal/CUDA compute) |
 | `hooks`       | Enable shell command hooks for dictation state changes    |
 
@@ -337,6 +338,33 @@ The catalog is data, not code: `src/server/catalog.json` is baked into the binar
 - `--vad`: Enable Kyutai voice-activity detection.
 
 The server writes a PID file to `$XDG_STATE_HOME/ears/server.pid` (or `~/.local/state/ears/server.pid`). `ears server stop` stops the local server and associated local dictation. `ears server restart` keeps dictation alive so it reconnects to the new server automatically.
+
+## Native Moonshine (optional)
+
+Build explicitly with the `moonshine` feature; it is not yet part of `install-all`:
+
+```bash
+just install-ears-features "apple,parakeet-rs,transcribe-cpp,hooks,moonshine" # Mac
+# CPU-only trial: just install-ears-features "moonshine"
+
+# Public German Tiny base: downloads once, then reuses the HF cache root.
+ears server run --engine moonshine
+
+# Your private fine-tune: no download, upload or silent base-model fallback.
+ears server run --engine moonshine --moonshine-model /path/to/native-export
+
+# In another terminal (file transcription or ordinary microphone dictation):
+ears --server ws://127.0.0.1:8765 -f sample.wav
+ears dictation start --server ws://127.0.0.1:8765 --engine moonshine
+```
+
+`--moonshine-model` overrides `[moonshine].model_dir` in `config.toml`. With neither set, the official German Tiny `quantized_26_08_24` runtime assets download from `download.moonshine.ai` into `$HF_HOME/moonshine/` (default `~/.cache/huggingface/moonshine/`), with pinned SHA-256 checks. These are **native ORT assets**, not the PyTorch checkpoint on HF; they are not presented as an HF Hub snapshot. `HF_HUB_OFFLINE=1` requires a complete verified cache.
+
+A local fine-tune must be a **Tiny Streaming native export bundle** containing `adapter.ort`, `cross_kv.ort`, `decoder_kv.ort`, `encoder.ort`, `frontend.model.ort`, `frontend.weights.ort`, `streaming_config.json`, and `tokenizer.bin`. A Transformers checkpoint or LoRA adapter directory cannot be loaded directly: export/merge it first. Existing private ORT bundles are supported without copying them into the public cache. Keep private weights outside git; all model-file symlink targets must be available on the machine running the server.
+
+The native model processes audio incrementally and emits revisable `Interim` previews. For safe keyboard insertion, only finalized lines become `Word` events: **expect phrase-level insertion, not Nemotron-style word-by-word typing**. One client session at a time; CPU execution; language is fixed by the model, not a session `--lang` prompt. This export has line-level timing, not exact per-word alignment. This is an opt-in trial, not a claim that fine-tune quality or no-speech regressions are resolved.
+
+The pinned `moonshine-rs` wrapper downloads the official native SDK during compilation. Apple Silicon uses static libraries. On Linux, `just install-ears-features` copies the SDK shared libraries beside the installed binaries; a manual `cargo install` also needs `bash scripts/install-moonshine-runtime.sh` (optional arguments: binary directory, Cargo target directory). Windows and Intel Mac native deployment are not yet qualified.
 
 ## Client options
 

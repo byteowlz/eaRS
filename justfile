@@ -429,7 +429,7 @@ install-ears:
     ./scripts/install-ears.sh
 
 # Install ears with specific features (e.g., just install-ears-features "nvidia,parakeet-rs")
-# Available features: nvidia, apple, amd, directml, parakeet-rs, transcribe-cpp, hooks
+# Available features: nvidia, apple, amd, directml, parakeet-rs, transcribe-cpp, moonshine, hooks
 # Combine multiple features with commas: "nvidia,parakeet-rs" or "apple,parakeet-rs,transcribe-cpp,hooks"
 install-ears-features features:
     #!/usr/bin/env bash
@@ -467,6 +467,9 @@ install-ears-features features:
     fi
     
     cargo install --locked --path . --force --features {{features}}
+    case ",{{features}}," in
+        *,moonshine,*) bash ./scripts/install-moonshine-runtime.sh ;;
+    esac
 
 # Install ears with default features (CPU only)
 install-ears-default:

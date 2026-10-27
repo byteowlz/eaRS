@@ -13,6 +13,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub parakeet_rs: ParakeetRsConfig,
     #[serde(default)]
+    pub moonshine: MoonshineConfig,
+    #[serde(default)]
     pub transcribe_cpp: TranscribeCppConfig,
     #[serde(default)]
     pub server: ServerConfig,
@@ -55,6 +57,14 @@ pub struct ParakeetRsConfig {
 
 fn default_parakeet_rs_language() -> String {
     "auto".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MoonshineConfig {
+    /// Local native Tiny Streaming ORT bundle. None uses the public German
+    /// base, downloaded into HF_HOME/moonshine. Never upload local fine-tunes.
+    #[serde(default)]
+    pub model_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -353,6 +363,7 @@ impl Default for AppConfig {
             },
             model: ModelConfig::default(),
             parakeet_rs: ParakeetRsConfig::default(),
+            moonshine: MoonshineConfig::default(),
             transcribe_cpp: TranscribeCppConfig::default(),
             server: ServerConfig::default(),
             dictation: DictationConfig::default(),
@@ -382,6 +393,9 @@ impl AppConfig {
             // Expand tilde paths
             config.storage.model_dir = expand_tilde(&config.storage.model_dir)?;
             config.storage.ref_audio = expand_tilde(&config.storage.ref_audio)?;
+            if let Some(model_dir) = config.moonshine.model_dir.as_mut() {
+                *model_dir = expand_tilde(model_dir)?;
+            }
             if let Some(model_dir) = config.parakeet_rs.model_dir.as_mut() {
                 *model_dir = expand_tilde(model_dir)?;
             }
@@ -579,6 +593,14 @@ ref_audio = "~/.local/share/ears/ref_audio"
         .expect("examples/config.toml must stay in sync with AppConfig");
         assert_eq!(config.parakeet_rs.language, "auto");
         assert!(!config.dictation.audio_history.enabled);
+    }
+
+    #[test]
+    fn moonshine_defaults_to_public_base_and_accepts_local_export() {
+        assert!(AppConfig::default().moonshine.model_dir.is_none());
+        let config: MoonshineConfig = toml::from_str("model_dir = \"/private/local-export\"").unwrap();
+        assert_eq!(config.model_dir.as_deref(), Some("/private/local-export"));
+        assert!(toml::from_str::<MoonshineConfig>("").unwrap().model_dir.is_none());
     }
 
     #[test]

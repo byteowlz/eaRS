@@ -45,6 +45,17 @@
       },
       "additionalProperties": false
     },
+    "moonshine": {
+      "type": "object",
+      "description": "Native Moonshine Tiny Streaming engine (optional moonshine build feature)",
+      "properties": {
+        "model_dir": {
+          "type": "string",
+          "description": "Local native ORT export bundle, including a private fine-tune. CLI --moonshine-model takes precedence. If omitted, the public German Tiny runtime assets are downloaded from the official Moonshine CDN into HF_HOME/moonshine (SHA-256 verified). Explicit paths never download or fall back."
+        }
+      },
+      "additionalProperties": false
+    },
     "parakeet_rs": {
       "type": "object",
       "description": "parakeet-rs Nemotron streaming engine defaults",

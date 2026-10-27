@@ -59,6 +59,12 @@ struct Args {
     #[arg(long, default_value_t = false)]
     verbose_injection: bool,
 
+    /// Local Moonshine Tiny Streaming ORT bundle, including a fine-tuned
+    /// decoder export. Unset downloads the public German base into HF_HOME/moonshine.
+    #[cfg(feature = "moonshine")]
+    #[arg(long)]
+    moonshine_model: Option<String>,
+
     /// parakeet-rs (Nemotron) model directory. Enables `--engine parakeet-rs`.
     #[cfg(feature = "parakeet-rs")]
     #[arg(long)]
@@ -112,6 +118,10 @@ fn build_server_options(args: &Args) -> Result<server::ServerOptions> {
         listener_tokens: config.server.listener_tokens.clone(),
         default_engine: args.engine,
         with_kyutai: args.with_kyutai,
+        #[cfg(feature = "moonshine")]
+        moonshine_model_dir: args.moonshine_model.clone()
+            .or_else(|| config.moonshine.model_dir.clone())
+            .map(|path| ears::replacement::expand_tilde(&path)),
         #[cfg(feature = "parakeet-rs")]
         parakeet_rs_model_dir: args
             .parakeet_rs_model

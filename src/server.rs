@@ -26,6 +26,8 @@ use transcribe_cpp::TranscribeCppEngine;
 pub mod catalog;
 mod engine;
 pub mod listener;
+#[cfg(feature = "moonshine")]
+mod moonshine;
 #[cfg(feature = "parakeet-rs")]
 mod parakeet_rs;
 mod parallel;
@@ -33,6 +35,8 @@ mod parallel;
 pub mod transcribe_cpp;
 mod vad;
 pub use engine::EngineKind;
+#[cfg(feature = "moonshine")]
+pub use moonshine::MoonshineEngineConfig;
 #[cfg(feature = "parakeet-rs")]
 pub use parakeet_rs::ParakeetRsEngineConfig;
 #[cfg(feature = "transcribe-cpp")]
@@ -255,6 +259,8 @@ pub struct ServerOptions {
     pub default_engine: EngineKind,
     /// Load Kyutai even when it is not the default engine.
     pub with_kyutai: bool,
+    #[cfg(feature = "moonshine")]
+    pub moonshine_model_dir: Option<PathBuf>,
     #[cfg(feature = "parakeet-rs")]
     pub parakeet_rs_model_dir: Option<PathBuf>,
     #[cfg(feature = "parakeet-rs")]
@@ -293,6 +299,14 @@ pub async fn run(options: ServerOptions) -> Result<()> {
         let prime_languages = config.model.prime_languages.clone();
         let kyutai_engine = parallel::spawn_parallel_engine(model, prime_languages);
         engine_manager.register(Arc::new(kyutai_engine));
+    }
+
+    #[cfg(feature = "moonshine")]
+    if options.default_engine == EngineKind::Moonshine || options.moonshine_model_dir.is_some() {
+        let engine = moonshine::MoonshineEngine::load(MoonshineEngineConfig {
+            model_dir: options.moonshine_model_dir.clone(),
+        })?;
+        engine_manager.register(Arc::new(engine));
     }
 
     #[cfg(feature = "parakeet-rs")]

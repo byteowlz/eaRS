@@ -10,6 +10,8 @@ use super::SessionSink;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, clap::ValueEnum)]
 pub enum EngineKind {
     Kyutai,
+    #[cfg(feature = "moonshine")]
+    Moonshine,
     #[cfg(feature = "parakeet-rs")]
     ParakeetRs,
     #[cfg(feature = "transcribe-cpp")]
@@ -20,6 +22,8 @@ impl EngineKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             EngineKind::Kyutai => "kyutai",
+            #[cfg(feature = "moonshine")]
+            EngineKind::Moonshine => "moonshine",
             #[cfg(feature = "parakeet-rs")]
             EngineKind::ParakeetRs => "parakeet-rs",
             #[cfg(feature = "transcribe-cpp")]
@@ -30,6 +34,8 @@ impl EngineKind {
     pub fn from_str(value: &str) -> Option<Self> {
         match value.to_lowercase().as_str() {
             "kyutai" | "moshi" => Some(EngineKind::Kyutai),
+            #[cfg(feature = "moonshine")]
+            "moonshine" => Some(EngineKind::Moonshine),
             #[cfg(feature = "parakeet-rs")]
             "parakeet-rs" | "parakeet_rs" | "nemotron" => Some(EngineKind::ParakeetRs),
             #[cfg(feature = "transcribe-cpp")]

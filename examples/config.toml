@@ -12,6 +12,13 @@ ref_audio = "~/.local/share/ears/ref_audio"
 # This improves transcription accuracy for these languages from the first words
 prime_languages = []
 
+[moonshine]
+# Requires the optional moonshine build feature. Unset uses public German Tiny
+# runtime assets from the official CDN, cached in $HF_HOME/moonshine (the HF
+# training checkpoint has a different format). Explicit local paths never
+# download or fall back; use a native Tiny Streaming ORT export bundle.
+# model_dir = "~/Models/my-moonshine-export"
+
 [parakeet_rs]
 # Default Nemotron streaming model used when --parakeet-rs-model is omitted.
 # Required files: encoder.onnx, encoder.onnx.data, decoder_joint.onnx, tokenizer.model.

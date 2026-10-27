@@ -258,7 +258,7 @@ struct DictationStartArgs {
     #[arg(long)]
     lang: Option<String>,
 
-    /// Select transcription engine (kyutai, parakeet-rs, transcribe-cpp)
+    /// Select a transcription engine available on the server
     #[arg(long)]
     engine: Option<String>,
 }
@@ -345,6 +345,12 @@ struct ServerStartArgs {
     #[arg(long, default_value_t = false)]
     with_kyutai: bool,
 
+    /// Local Moonshine Tiny Streaming ORT bundle, including a fine-tuned
+    /// decoder export. Unset downloads the public German base into HF_HOME/moonshine.
+    #[cfg(feature = "moonshine")]
+    #[arg(long)]
+    moonshine_model: Option<String>,
+
     /// parakeet-rs (Nemotron) model directory containing encoder.onnx,
     /// decoder_joint.onnx, tokenizer.model. Enables `--engine parakeet-rs`.
     #[cfg(feature = "parakeet-rs")]
@@ -379,6 +385,8 @@ impl Default for ServerStartArgs {
             boundary_vad_hangover_ms: 300,
             max_sessions: 8,
             with_kyutai: false,
+            #[cfg(feature = "moonshine")]
+            moonshine_model: None,
             #[cfg(feature = "parakeet-rs")]
             parakeet_rs_model: None,
             #[cfg(feature = "parakeet-rs")]
@@ -1024,6 +1032,10 @@ fn append_server_args(cmd: &mut ProcessCommand, args: &ServerStartArgs) {
     if args.hf_repo != "kyutai/stt-1b-en_fr-candle" {
         cmd.arg("--hf-repo").arg(&args.hf_repo);
     }
+    #[cfg(feature = "moonshine")]
+    if let Some(model) = &args.moonshine_model {
+        cmd.arg("--moonshine-model").arg(model);
+    }
     #[cfg(feature = "parakeet-rs")]
     {
         if let Some(model) = &args.parakeet_rs_model {
@@ -1067,6 +1079,10 @@ fn build_server_options(args: &ServerStartArgs) -> Result<server::ServerOptions>
         listener_tokens: config.server.listener_tokens.clone(),
         default_engine: args.engine,
         with_kyutai: args.with_kyutai,
+        #[cfg(feature = "moonshine")]
+        moonshine_model_dir: args.moonshine_model.clone()
+            .or_else(|| config.moonshine.model_dir.clone())
+            .map(|path| ears::replacement::expand_tilde(&path)),
         #[cfg(feature = "parakeet-rs")]
         parakeet_rs_model_dir: args
             .parakeet_rs_model
@@ -1777,6 +1793,8 @@ mod tests {
         let args = ServerStartArgs::default();
         match args.engine {
             EngineArg::Kyutai => {}
+            #[cfg(feature = "moonshine")]
+            EngineArg::Moonshine => panic!("unexpected default engine"),
             #[cfg(feature = "parakeet-rs")]
             EngineArg::ParakeetRs => panic!("unexpected default engine"),
             #[cfg(feature = "transcribe-cpp")]
