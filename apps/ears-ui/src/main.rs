@@ -24,18 +24,19 @@ use runtime::Runtime;
 
 fn print_help() {
     println!(
-        "ears-ui {}\n\nUsage: ears-ui [--settings] [--no-overlay] [--preview-synthetic] [--help]\n\n  --settings           open the settings window at launch\n  --no-overlay         start with the floating island disabled\n  --preview-synthetic  display a synthetic notch fixture without starting dictation\n  --version            print the version\n\nConfig: {}",
+        "ears-ui {}\n\nUsage: ears-ui [--settings] [--no-overlay] [--preview-synthetic|--preview-synthetic-expanded] [--help]\n\n  --settings           open the settings window at launch\n  --no-overlay         start with the floating island disabled\n  --preview-synthetic  display a synthetic notch fixture without starting dictation\n  --preview-synthetic-expanded  show the expanded synthetic fixture\n  --version            print the version\n\nConfig: {}",
         env!("CARGO_PKG_VERSION"),
         UiConfig::path().display()
     );
 }
 
-/// Synthetic UI fixture: no engine, microphone, hotkeys, tray, or persisted settings.
-fn preview_synthetic() {
+/// Synthetic UI fixture: no engine, microphone, hotkeys, tray, or settings writes.
+fn preview_synthetic(expanded: bool) {
     use config::IndicatorStyle;
     use ears::dictation::{ConnectionState, DictationState};
     let mut ui = UiConfig::default();
     ui.overlay.indicator = IndicatorStyle::Ears;
+    ui.overlay.show_details = expanded;
     ui.overlay.animation = false;
     ui.overlay.click_through = true;
     Application::new().run(move |cx| {
@@ -65,8 +66,9 @@ fn main() {
         println!("ears-ui {}", env!("CARGO_PKG_VERSION"));
         return;
     }
-    if args.iter().any(|a| a == "--preview-synthetic") {
-        preview_synthetic();
+    let preview_expanded = args.iter().any(|a| a == "--preview-synthetic-expanded");
+    if preview_expanded || args.iter().any(|a| a == "--preview-synthetic") {
+        preview_synthetic(preview_expanded);
         return;
     }
     let open_settings_at_launch = args.iter().any(|a| a == "--settings");

@@ -83,6 +83,8 @@ pub struct OverlayConfig {
     /// Notched-island shape and content transition styles.
     pub shape_motion: ShapeMotion,
     pub content_motion: ContentMotion,
+    /// Show a second row of details when the notched island is active.
+    pub show_details: bool,
     /// Optional ears mark; the dot remains the backwards-compatible default.
     pub indicator: IndicatorStyle,
     /// Let clicks pass through the island (disables drag + click-to-open).
@@ -107,6 +109,7 @@ impl Default for OverlayConfig {
             animation: true,
             shape_motion: ShapeMotion::Spring,
             content_motion: ContentMotion::GrowFade,
+            show_details: false,
             indicator: IndicatorStyle::Dot,
             click_through: false,
             dormant_dot: false,
@@ -176,6 +179,7 @@ mod tests {
     fn older_overlay_configs_keep_compatible_indicator_defaults() {
         let config: UiConfig = toml::from_str("[overlay]\nenabled = true\n").unwrap();
         assert_eq!(config.overlay.indicator, IndicatorStyle::Dot);
+        assert!(!config.overlay.show_details);
         assert_eq!(config.overlay.shape_motion, ShapeMotion::Spring);
         assert_eq!(config.overlay.content_motion, ContentMotion::GrowFade);
     }
@@ -184,10 +188,12 @@ mod tests {
     fn motion_and_indicator_choices_round_trip() {
         let mut config = UiConfig::default();
         config.overlay.indicator = IndicatorStyle::Ears;
+        config.overlay.show_details = true;
         config.overlay.shape_motion = ShapeMotion::Smooth;
         config.overlay.content_motion = ContentMotion::Fade;
         let decoded: UiConfig = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
         assert_eq!(decoded.overlay.indicator, IndicatorStyle::Ears);
+        assert!(decoded.overlay.show_details);
         assert_eq!(decoded.overlay.shape_motion, ShapeMotion::Smooth);
         assert_eq!(decoded.overlay.content_motion, ContentMotion::Fade);
     }

@@ -26,8 +26,8 @@ state and forwards commands.
     `ws://` URL — enables dictate-locally/transcribe-remotely setups),
     insertion mode, hotkey mode, escape-cancels, session language.
   - *Overlay*: enable, anchor, dormant dot, island mode, click-through,
-    animation, indicator, shape/content motion, scheme, radius, opacity,
-    margin and linger.
+    animation, indicator, shape/content motion, expanded details, scheme,
+    radius, opacity, margin and linger.
   - *Dictionaries*: list/add/remove replacement entries with a **live test
     box**.
   - *Profiles*: editor for context profiles (bundle id / app name / window
@@ -46,6 +46,7 @@ target/debug/ears-ui              # island + tray; dictation starts paused/unpau
 target/debug/ears-ui --settings   # also open the settings window
 target/debug/ears-ui --no-overlay # tray only
 target/debug/ears-ui --preview-synthetic # synthetic notch, no dictation engine; Ctrl-C to exit
+target/debug/ears-ui --preview-synthetic-expanded # synthetic expanded details
 ```
 
 Dictation control stays with the global hotkeys from `config.toml`
@@ -69,6 +70,7 @@ island_mode = true
 indicator = "ears"       # dot | ears
 shape_motion = "spring"  # smooth | spring
 content_motion = "grow_fade" # grow | fade | grow_fade
+show_details = false     # optional second row on a detected notch
 ```
 
 The existing dot remains the default. Island mode requires a detected macOS
@@ -76,8 +78,8 @@ notch; without one the regular pill remains in use.
 
 ## Current limits
 
-The Oqtopus vector indicator, expanded multi-row island content and native
-verification of motion are not yet implemented. LostIsland integration is separate and not connected; eaRS keeps
+The Oqtopus vector indicator is not yet implemented, and motion has not yet
+been verified on a physical notched display. LostIsland integration is separate and not connected; eaRS keeps
 its own pill. Notch corner radii are approximate because AppKit exposes the
 camera housing's bounding rectangle, not its physical curve. Native rendering on
 a physical notched Mac still needs verification.

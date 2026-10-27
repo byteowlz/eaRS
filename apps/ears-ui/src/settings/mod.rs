@@ -806,6 +806,21 @@ impl SettingsView {
                     }),
                     theme,
                 ))
+                .child(row(
+                    "Expanded details",
+                    Some("Show a second row when the notched island is active.".into()),
+                    toggle("notch-details", overlay.show_details, theme, {
+                        let entity = entity.clone();
+                        move |on: bool, _, cx| {
+                            entity.update(cx, |this, cx| {
+                                this.model.update(cx, |m, cx| {
+                                    m.update_ui(cx, |ui| ui.overlay.show_details = on)
+                                });
+                            });
+                        }
+                    }),
+                    theme,
+                ))
                 .child(overlay_choice(
                     "indicator-style",
                     "Indicator",

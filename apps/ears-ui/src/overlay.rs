@@ -391,6 +391,15 @@ fn notch_target(
     )
 }
 
+fn detail_height(notch_height: f32, dormant: bool, show_details: bool) -> f32 {
+    notch_height
+        + if !dormant && show_details {
+            PILL_H
+        } else {
+            0.0
+        }
+}
+
 #[cfg(test)]
 mod notch_geometry_tests {
     use super::*;
@@ -402,6 +411,13 @@ mod notch_geometry_tests {
         assert_eq!(height, 32.0);
         assert!(width > 185.0);
         assert!((width - 185.0) / 2.0 >= 50.0 + 2.0 * PAD_X);
+    }
+
+    #[test]
+    fn details_expand_only_when_active_and_enabled() {
+        assert_eq!(detail_height(32.0, false, true), 32.0 + PILL_H);
+        assert_eq!(detail_height(32.0, false, false), 32.0);
+        assert_eq!(detail_height(32.0, true, true), 32.0);
     }
 
     #[test]
@@ -521,6 +537,43 @@ impl ContentReveal {
     }
 }
 
+struct DetailsTransition {
+    reveal: ContentReveal,
+    active: bool,
+}
+
+impl DetailsTransition {
+    fn new() -> Self {
+        Self {
+            reveal: ContentReveal::new(),
+            active: false,
+        }
+    }
+
+    /// Returns whether visibility changed, so callers can defer shape collapse.
+    fn update(
+        &mut self,
+        visible: bool,
+        content_duration: Duration,
+        shape_duration: Duration,
+    ) -> bool {
+        if self.active == visible {
+            return false;
+        }
+        self.active = visible;
+        self.reveal.retarget(
+            visible,
+            content_duration,
+            if visible {
+                shape_duration
+            } else {
+                Duration::ZERO
+            },
+        );
+        true
+    }
+}
+
 #[cfg(test)]
 mod transition_tests {
     use super::*;
@@ -558,6 +611,42 @@ mod transition_tests {
     }
 
     #[test]
+    fn details_wait_for_expansion_and_reverse_without_jumping() {
+        let mut details = DetailsTransition::new();
+        let content = Duration::from_millis(180);
+        let shape = Duration::from_millis(260);
+        assert!(details.update(true, content, shape));
+        assert_eq!(details.reveal.current(), 0.0);
+        assert!(!details.update(true, content, shape));
+        details.reveal.started = Instant::now() - content;
+        assert_eq!(details.reveal.current(), 1.0);
+        assert!(details.update(false, content, shape));
+        details.reveal.started = Instant::now() - Duration::from_millis(90);
+        let before = details.reveal.current();
+        assert!(details.update(true, content, shape));
+        assert!((details.reveal.current() - before).abs() < 0.02);
+    }
+
+    #[test]
+    fn details_and_shape_stage_in_both_directions() {
+        let content_duration = Duration::from_millis(CONTENT_MORPH_MS);
+        let shape_duration = Duration::from_millis(ISLAND_MORPH_MS);
+        let mut details = DetailsTransition::new();
+        let mut shape = Morph::new((300.0, 32.0));
+        assert!(details.update(true, content_duration, shape_duration));
+        shape.retarget((300.0, 68.0), shape_duration, Duration::ZERO, |x| x);
+        assert_eq!(details.reveal.current(), 0.0);
+        details.reveal.started = Instant::now() - content_duration;
+        shape.started = Instant::now() - shape_duration;
+        assert_eq!(details.reveal.current(), 1.0);
+        assert_eq!(shape.current(|x| x).1, 68.0);
+        assert!(details.update(false, content_duration, shape_duration));
+        shape.retarget((300.0, 32.0), shape_duration, content_duration, |x| x);
+        assert_eq!(shape.current(|x| x).1, 68.0);
+        assert!(details.reveal.current() > 0.99);
+    }
+
+    #[test]
     fn reduced_motion_snaps_and_delayed_shape_waits() {
         let mut reveal = ContentReveal::new();
         reveal.retarget(true, Duration::ZERO, Duration::ZERO);
@@ -589,6 +678,7 @@ pub struct IslandView {
     notch: Option<Notch>,
     morph: Morph,
     reveal: ContentReveal,
+    details: DetailsTransition,
     notch_active: bool,
     last_notch_content: Option<Content>,
     drag: Option<DragState>,
@@ -635,6 +725,7 @@ impl IslandView {
             notch,
             morph: Morph::new(initial),
             reveal: ContentReveal::new(),
+            details: DetailsTransition::new(),
             notch_active: false,
             last_notch_content: None,
             drag: None,
@@ -661,7 +752,7 @@ impl IslandView {
         content: &mut Content,
         overlay: &OverlayConfig,
         animate: bool,
-    ) -> ((f32, f32), f32) {
+    ) -> ((f32, f32), f32, f32) {
         let island = self.island();
         let dormant = content.phase == Phase::Dormant;
         let duration = if animate {
@@ -683,10 +774,14 @@ impl IslandView {
                 if dormant { Duration::ZERO } else { duration },
             );
         }
+        let show_details = island && !dormant && overlay.show_details;
+        let details_changed = self
+            .details
+            .update(show_details, content_duration, duration);
         if island && !dormant {
             self.last_notch_content = Some(content.clone());
         }
-        let delay = if changed && dormant {
+        let delay = if (changed && dormant) || (details_changed && !show_details) {
             content_duration
         } else {
             Duration::ZERO
@@ -696,6 +791,7 @@ impl IslandView {
         if !animate {
             self.morph.duration = Duration::ZERO;
             self.reveal.duration = Duration::ZERO;
+            self.details.reveal.duration = Duration::ZERO;
         }
         let size = self.morph.current(easing);
         let reveal = if island { self.reveal.current() } else { 1.0 };
@@ -704,7 +800,7 @@ impl IslandView {
                 *content = last.clone();
             }
         }
-        (size, reveal)
+        (size, reveal, self.details.reveal.current())
     }
 
     fn measure(&self, window: &Window, text: &str, color: Hsla) -> f32 {
@@ -878,7 +974,11 @@ impl Render for IslandView {
         };
         let text_w = self.measure(window, &text, content.text_color);
         let target = match self.notch {
-            Some(n) => notch_target(n.width, n.height, text_w, indicator_width, dormant),
+            Some(n) => {
+                let (width, height) =
+                    notch_target(n.width, n.height, text_w, indicator_width, dormant);
+                (width, detail_height(height, dormant, overlay.show_details))
+            }
             None => {
                 if dormant {
                     ((2.0 * PAD_X + indicator_width).max(PILL_MIN_W), PILL_H)
@@ -892,13 +992,14 @@ impl Render for IslandView {
             }
         };
         let animate = overlay.animation && !reduce_motion;
-        let ((w, h), reveal) = self.update_motion(target, &mut content, &overlay, animate);
+        let ((w, h), reveal, detail_reveal) =
+            self.update_motion(target, &mut content, &overlay, animate);
         let display_text = if island && dormant && reveal > 0.0 {
             self.tail(window, &content.text, max_text_w, content.text_color)
         } else {
             text
         };
-        if !self.morph.done() || (island && !self.reveal.done()) {
+        if !self.morph.done() || (island && (!self.reveal.done() || !self.details.reveal.done())) {
             window.request_animation_frame();
         }
         let (scale, content_opacity) = if island {
@@ -936,7 +1037,11 @@ impl Render for IslandView {
             // AppKit supplies the notch's bounding rectangle, not its corner
             // curve; the radius remains an approximation until measured.
             let radius = px(self.notch.map_or(PILL_H, |n| n.height) * 0.35);
-            pill = pill.rounded_bl(radius).rounded_br(radius);
+            pill = pill
+                .rounded_bl(radius)
+                .rounded_br(radius)
+                .items_start()
+                .relative();
         } else {
             pill = pill
                 .rounded_full()
@@ -1010,6 +1115,7 @@ impl Render for IslandView {
                 }
             };
 
+        let detail_text = format!("{} · {}", voice_mode, content.text);
         let label = div()
             .whitespace_nowrap()
             .overflow_hidden()
@@ -1025,7 +1131,7 @@ impl Render for IslandView {
                     .child(
                         div()
                             .w(px(wing))
-                            .h_full()
+                            .h(px(n.height))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -1037,7 +1143,7 @@ impl Render for IslandView {
                     .child(
                         div()
                             .w(px(wing))
-                            .h_full()
+                            .h(px(n.height))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -1045,6 +1151,31 @@ impl Render for IslandView {
                             .opacity(content_opacity)
                             .child(label),
                     );
+            }
+            if self.details.active || detail_reveal > 0.0 {
+                let (detail_scale, detail_opacity) =
+                    content_style(overlay.content_motion, detail_reveal);
+                let detail_text = self.tail(
+                    window,
+                    &detail_text,
+                    (w - 2.0 * PAD_X).max(0.0),
+                    content.text_color,
+                );
+                pill = pill.child(
+                    div()
+                        .absolute()
+                        .top(px(n.height))
+                        .left_0()
+                        .w(px(w))
+                        .h(px(PILL_H))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .overflow_hidden()
+                        .opacity(detail_opacity)
+                        .text_size(px(FONT_SIZE * detail_scale))
+                        .child(SharedString::from(detail_text)),
+                );
             }
         } else {
             let mut inner = div().flex().items_center().gap(px(GAP)).child(indicator);
