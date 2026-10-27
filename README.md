@@ -364,6 +364,8 @@ A local fine-tune must be a **Tiny Streaming native export bundle** containing `
 
 The native model processes audio incrementally and emits revisable `Interim` previews. For safe keyboard insertion, only finalized lines become `Word` events: **expect phrase-level insertion, not Nemotron-style word-by-word typing**. One client session at a time; CPU execution; language is fixed by the model, not a session `--lang` prompt. This export has line-level timing, not exact per-word alignment. This is an opt-in trial, not a claim that fine-tune quality or no-speech regressions are resolved.
 
+The [offline prefix investigation](docs/moonshine-prefix-investigation.md) found that repeated partial agreement still permits later word revisions; it is not a safe commit signal.
+
 The pinned `moonshine-rs` wrapper downloads the official native SDK during compilation. Apple Silicon uses static libraries. On Linux, `just install-ears-features` copies the SDK shared libraries beside the installed binaries; a manual `cargo install` also needs `bash scripts/install-moonshine-runtime.sh` (optional arguments: binary directory, Cargo target directory). Windows and Intel Mac native deployment are not yet qualified.
 
 ## Client options

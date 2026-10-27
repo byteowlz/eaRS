@@ -4,6 +4,8 @@
 //! lines become append-only `Word` events, so dictation never types revisions.
 
 mod model;
+#[cfg(test)]
+mod trace_tests;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
