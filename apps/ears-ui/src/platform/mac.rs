@@ -185,13 +185,9 @@ pub fn start_native_drag(_window: &Window) -> bool {
     false
 }
 
-/// GPUI's titled popup is constrained below the menu bar on notched screens.
-/// Remove that chrome before positioning the attached island at the true edge.
+/// Position an already borderless attached island at the true screen edge.
 pub fn pin_to_screen_top(window: &Window, display: u32, offset: f32) {
     if let (Some(screen), Some(ns)) = (screen_for(display), ns_window(window)) {
-        let mut mask = ns.styleMask();
-        mask.remove(NSWindowStyleMask::Titled | NSWindowStyleMask::FullSizeContentView);
-        ns.setStyleMask(mask);
         let frame = screen.frame();
         let current = ns.frame();
         ns.setFrameOrigin(NSPoint::new(
@@ -201,9 +197,13 @@ pub fn pin_to_screen_top(window: &Window, display: u32, offset: f32) {
     }
 }
 
-/// Disable the system shadow: the pill draws its own.
-pub fn set_shadow(window: &Window, on: bool) {
+/// GPUI's transparent popup retains titled chrome; it must not outline the
+/// entire large window. The floating pill supplies its own local shadow.
+pub fn prepare_overlay_panel(window: &Window) {
     if let Some(ns) = ns_window(window) {
-        ns.setHasShadow(on);
+        let mut mask = ns.styleMask();
+        mask.remove(NSWindowStyleMask::Titled | NSWindowStyleMask::FullSizeContentView);
+        ns.setStyleMask(mask);
+        ns.setHasShadow(false);
     }
 }

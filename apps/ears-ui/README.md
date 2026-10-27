@@ -17,7 +17,8 @@ state and forwards commands.
   grow, fade or combined content motion are configurable in Overlay settings.
   The ears mark can use the original speech-active standing wave or the
   parametric, state-dependent sliding bars. Click-through and macOS reduced-motion
-  are supported. See `docs/DYNAMIC_ISLAND_SPIKE.md` for the
+  are supported; an explicit Overlay option can animate despite system Reduce Motion.
+  See `docs/DYNAMIC_ISLAND_SPIKE.md` for the
   window-feasibility findings.
 - **Tray / menu-bar presence** — state-coloured mic icon, menu with
   pause/resume, insertion mode, settings, launch-at-login and quit. Works
@@ -50,6 +51,10 @@ target/debug/ears-ui --preview-synthetic # synthetic notch, no dictation engine;
 target/debug/ears-ui --preview-synthetic-expanded # synthetic expanded details
 target/debug/ears-ui --preview-parametric # animated, synthetic; no dictation engine
 target/debug/ears-ui --preview-parametric-reduced # static reduced-motion fixture
+target/debug/ears-ui --preview-parametric-override # explicit reduced-motion override
+target/debug/ears-ui --preview-placement # real top anchor, synthetic content
+target/debug/ears-ui --preview-floating  # bottom floating fixture
+target/debug/ears-ui --preview-settings  # synthetic settings fixture
 ```
 
 Dictation control stays with the global hotkeys from `config.toml`
@@ -71,6 +76,7 @@ The Overlay settings write the same `ui.toml` fields available to scripts:
 [overlay]
 island_mode = true
 indicator = "parametric_ears" # dot | ears (standing wave) | parametric_ears
+animate_with_reduced_motion = false # opt in to motion despite the system setting
 shape_motion = "spring"  # smooth | spring
 content_motion = "grow_fade" # grow | fade | grow_fade
 show_details = false     # optional second row on a detected notch

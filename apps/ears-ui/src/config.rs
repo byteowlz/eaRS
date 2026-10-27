@@ -79,8 +79,10 @@ pub struct OverlayConfig {
     pub linger_ms: u64,
     /// Pill background opacity (0.2 - 1.0).
     pub opacity: f32,
-    /// Morph/appear animations. Ignored when the OS asks for reduced motion.
+    /// Morph/appear animations. The OS reduced-motion preference wins by default.
     pub animation: bool,
+    /// Explicit opt-in to animation while the operating system requests reduced motion.
+    pub animate_with_reduced_motion: bool,
     /// Notched-island shape and content transition styles.
     pub shape_motion: ShapeMotion,
     pub content_motion: ContentMotion,
@@ -99,6 +101,12 @@ pub struct OverlayConfig {
     pub offset_y: f32,
 }
 
+impl OverlayConfig {
+    pub fn motion_enabled(&self, reduce_motion: bool) -> bool {
+        self.animation && (!reduce_motion || self.animate_with_reduced_motion)
+    }
+}
+
 impl Default for OverlayConfig {
     fn default() -> Self {
         Self {
@@ -108,6 +116,7 @@ impl Default for OverlayConfig {
             linger_ms: 900,
             opacity: 0.96,
             animation: true,
+            animate_with_reduced_motion: false,
             shape_motion: ShapeMotion::Spring,
             content_motion: ContentMotion::GrowFade,
             show_details: false,
@@ -177,8 +186,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reduced_motion_override_is_explicit_and_respects_animation_off() {
+        let mut overlay = OverlayConfig::default();
+        assert!(!overlay.motion_enabled(true));
+        overlay.animate_with_reduced_motion = true;
+        assert!(overlay.motion_enabled(true));
+        overlay.animation = false;
+        assert!(!overlay.motion_enabled(false));
+        assert!(!overlay.motion_enabled(true));
+    }
+
+    #[test]
     fn older_overlay_configs_keep_compatible_indicator_defaults() {
         let config: UiConfig = toml::from_str("[overlay]\nenabled = true\n").unwrap();
+        assert!(!config.overlay.animate_with_reduced_motion);
         assert_eq!(config.overlay.indicator, IndicatorStyle::Dot);
         assert!(!config.overlay.show_details);
         assert_eq!(config.overlay.shape_motion, ShapeMotion::Spring);

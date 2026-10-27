@@ -54,4 +54,4 @@ pub fn start_native_drag(window: &Window) -> bool {
 
 pub fn pin_to_screen_top(_window: &Window, _display: u32, _offset: f32) {}
 
-pub fn set_shadow(_window: &Window, _on: bool) {}
+pub fn prepare_overlay_panel(_window: &Window) {}

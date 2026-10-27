@@ -793,13 +793,28 @@ impl SettingsView {
                 ))
                 .child(row(
                     "Animation",
-                    Some("Morph between states. Off when the OS asks for reduced motion.".into()),
+                    Some("Animate the island and indicator. Respects system Reduce Motion by default.".into()),
                     toggle("animation", overlay.animation, theme, {
                         let entity = entity.clone();
                         move |on: bool, _, cx| {
                             entity.update(cx, |this, cx| {
                                 this.model.update(cx, |m, cx| {
                                     m.update_ui(cx, |ui| ui.overlay.animation = on);
+                                });
+                            });
+                        }
+                    }),
+                    theme,
+                ))
+                .child(row(
+                    "Animate with Reduce Motion",
+                    Some("Explicitly allow eaRS animation when the system requests reduced motion.".into()),
+                    toggle("motion-override", overlay.animate_with_reduced_motion, theme, {
+                        let entity = entity.clone();
+                        move |on: bool, _, cx| {
+                            entity.update(cx, |this, cx| {
+                                this.model.update(cx, |m, cx| {
+                                    m.update_ui(cx, |ui| ui.overlay.animate_with_reduced_motion = on);
                                 });
                             });
                         }

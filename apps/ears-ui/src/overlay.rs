@@ -45,6 +45,7 @@ use gpui::MouseDownEvent;
 use gpui::MouseMoveEvent;
 use gpui::MouseUpEvent;
 use gpui::ParentElement;
+use gpui::PathBuilder;
 use gpui::Pixels;
 use gpui::Render;
 use gpui::SharedString;
@@ -57,6 +58,7 @@ use gpui::WindowBounds;
 use gpui::WindowHandle;
 use gpui::WindowKind;
 use gpui::WindowOptions;
+use gpui::canvas;
 use gpui::div;
 use gpui::point;
 use gpui::prelude::FluentBuilder;
@@ -82,6 +84,8 @@ const MORPH_MS: u64 = 200;
 const ISLAND_MORPH_MS: u64 = 260;
 const CONTENT_MORPH_MS: u64 = 180;
 const DRAG_THRESHOLD: f32 = 4.0;
+/// Provisional outward throat, shared in shape with LostIsland's host.
+const THROAT: f32 = 12.0;
 
 pub struct OverlayManager {
     window: Option<(WindowHandle<IslandView>, u32)>,
@@ -307,7 +311,7 @@ pub(crate) fn open(cx: &mut App, overlay: &OverlayConfig, model: Entity<AppModel
     };
     let click_through = overlay.click_through;
     let result = cx.open_window(options, |window, cx| {
-        platform::set_shadow(window, false);
+        platform::prepare_overlay_panel(window);
         if notch.is_some() {
             platform::pin_to_screen_top(window, display_id, y);
         }
@@ -355,7 +359,7 @@ pub fn open_preview(cx: &mut App, model: Entity<AppModel>) {
         ..Default::default()
     };
     if let Err(error) = cx.open_window(options, |window, cx| {
-        platform::set_shadow(window, false);
+        platform::prepare_overlay_panel(window);
         platform::set_click_through(window, true);
         cx.new(|cx| {
             IslandView::new(
@@ -387,6 +391,44 @@ fn notch_target(notch_width: f32, notch_height: f32, dormant: bool) -> (f32, f32
     (width, notch_height)
 }
 
+fn throat_extent(width: f32, height: f32) -> f32 {
+    THROAT
+        .min(((WIN_W - width) / 2.0).max(0.0))
+        .min(height / 2.0)
+        .max(0.0)
+}
+
+/// Draw only the outward top throats; the existing pill paints the body.
+fn notch_throats(width: f32, height: f32) -> impl IntoElement {
+    canvas(
+        |_, _, _| (),
+        move |bounds, (), window, _| {
+            let t = throat_extent(width, height);
+            if t <= 0.0 {
+                return;
+            }
+            let l = (WIN_W - width) / 2.0;
+            let r = l + width;
+            let p = |x, y| point(bounds.origin.x + px(x), bounds.origin.y + px(y));
+            let mut path = PathBuilder::fill();
+            path.move_to(p(l - t, 0.0));
+            path.line_to(p(l, 0.0));
+            path.line_to(p(l, t));
+            path.cubic_bezier_to(p(l - t, 0.0), p(l, t * 0.3), p(l, 0.0));
+            path.close();
+            path.move_to(p(r, 0.0));
+            path.line_to(p(r + t, 0.0));
+            path.cubic_bezier_to(p(r, t), p(r, 0.0), p(r, t * 0.3));
+            path.close();
+            if let Ok(path) = path.build() {
+                window.paint_path(path, gpui::black());
+            }
+        },
+    )
+    .absolute()
+    .size_full()
+}
+
 fn detail_height(notch_height: f32, dormant: bool, show_details: bool) -> f32 {
     notch_height
         + if !dormant && show_details {
@@ -413,6 +455,14 @@ mod notch_geometry_tests {
     fn active_notch_width_is_stable_as_partial_text_changes() {
         // Text width is deliberately absent from the active geometry contract.
         assert_eq!(notch_target(185.0, 32.0, false), (PILL_MAX_W, 32.0));
+    }
+
+    #[test]
+    fn throat_is_symmetric_and_bounded_by_window_and_height() {
+        assert_eq!(throat_extent(560.0, 38.0), 12.0);
+        assert_eq!(throat_extent(636.0, 38.0), 2.0);
+        assert_eq!(throat_extent(640.0, 38.0), 0.0);
+        assert_eq!(throat_extent(560.0, 8.0), 4.0);
     }
 
     #[test]
@@ -760,7 +810,7 @@ fn spawn_animation_driver(window: gpui::AnyWindowHandle, cx: &Context<IslandView
         loop {
             let active = view.update(cx, |this, cx| {
                 let model = this.model.read(cx);
-                let animate = model.ui.overlay.animation && !model.reduce_motion;
+                let animate = model.ui.overlay.motion_enabled(model.reduce_motion);
                 let visible = !this.island()
                     || model.phase() != Phase::Dormant
                     || this.reveal.current() > 0.0;
@@ -1087,7 +1137,7 @@ impl Render for IslandView {
                 }
             }
         };
-        let animate = overlay.animation && !reduce_motion;
+        let animate = overlay.motion_enabled(reduce_motion);
         let ((w, h), reveal, detail_reveal) =
             self.update_motion(target, &mut content, &overlay, animate);
         let display_text = if island && dormant && reveal > 0.0 {
@@ -1245,8 +1295,8 @@ impl Render for IslandView {
             .text_size(px(FONT_SIZE * scale))
             .child(SharedString::from(display_text));
         if let Some(n) = self.notch {
-            // The physical camera covers the center. Keep each wing centered
-            // and reserve the full notch width instead of drawing beneath it.
+            // The physical camera covers the center. Place the icon near the
+            // outer edge and reserve the full notch width for the camera.
             let wing = ((w - n.width) / 2.0).max(0.0);
             if !dormant || reveal > 0.0 {
                 pill = pill
@@ -1256,7 +1306,8 @@ impl Render for IslandView {
                             .h(px(n.height))
                             .flex()
                             .items_center()
-                            .justify_center()
+                            .justify_start()
+                            .pl(px(PAD_X.min((wing - 24.0).max(0.0))))
                             .overflow_hidden()
                             .opacity(content_opacity)
                             .child(indicator),
@@ -1412,7 +1463,15 @@ impl Render for IslandView {
             window.request_animation_frame();
         }
 
-        let mut root = div().size_full().flex().justify_center().opacity(appear);
+        let mut root = div()
+            .size_full()
+            .relative()
+            .flex()
+            .justify_center()
+            .opacity(appear);
+        if island {
+            root = root.child(notch_throats(w, h));
+        }
         root = if island {
             root.items_start()
         } else {

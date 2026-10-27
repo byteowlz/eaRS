@@ -194,12 +194,18 @@ pub fn row(
     control: impl IntoElement,
     theme: &Theme,
 ) -> Div {
-    let mut text = div().flex().flex_col().gap(px(2.0)).child(
-        div()
-            .text_size(px(FONT_MD))
-            .text_color(theme.roles.foreground)
-            .child(label.into()),
-    );
+    let mut text = div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_w_0()
+        .gap(px(2.0))
+        .child(
+            div()
+                .text_size(px(FONT_MD))
+                .text_color(theme.roles.foreground)
+                .child(label.into()),
+        );
     if let Some(hint) = hint {
         text = text.child(
             div()
@@ -215,7 +221,7 @@ pub fn row(
         .gap(theme.space(4.0))
         .py(theme.space(2.0))
         .child(text)
-        .child(control)
+        .child(div().flex_shrink_0().child(control))
 }
 
 pub fn label(text: impl Into<SharedString>, theme: &Theme) -> Div {
