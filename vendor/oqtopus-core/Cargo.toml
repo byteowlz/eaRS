@@ -1,0 +1,11 @@
+[package]
+name = "oqtopus-core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+flate2 = "1"
+serde = "1"
+serde_json = "1"
+sha2 = "0.10"

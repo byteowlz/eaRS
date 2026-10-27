@@ -1,0 +1,10 @@
+[package]
+name = "oqtopus-render"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+geo = { version = "0.33.1", default-features = false }
+lyon = "1.0.19"
+oqtopus-core = { path = "../oqtopus-core" }

@@ -27,6 +27,9 @@ capture --preview-parametric animated
 capture --preview-parametric-reduced reduced
 capture --preview-parametric-override override
 capture --preview-floating floating
+export EARS_OQTOPUS_PACK="$repo/apps/ears-ui/tests/fixtures/oqtopus-synthetic.oqp"
+capture --preview-oqtopus oqtopus
+capture --preview-oqtopus-reduced oqtopus-reduced
 capture --preview-settings settings
 swift apps/ears-ui/scripts/check-settings-text.swift "$work/settings-a.png"
 uv run --no-project --offline --with pillow python -I - "$work" <<'PY'
@@ -43,10 +46,15 @@ assert a.getbbox() and r.getbbox(), 'synthetic indicator not visible'
 assert ImageChops.difference(a, b).getbbox(), 'animated indicator did not change'
 assert not ImageChops.difference(r, s).getbbox(), 'reduced-motion indicator moved'
 assert ImageChops.difference(u, v).getbbox(), 'explicit reduced-motion override did not animate'
+oa, ob = icon('oqtopus-a.png'), icon('oqtopus-b.png')
+ra, rb = icon('oqtopus-reduced-a.png'), icon('oqtopus-reduced-b.png')
+assert ImageChops.difference(oa, ob).getbbox(), 'synthetic vector Oqtopus did not animate'
+assert not ImageChops.difference(ra, rb).getbbox(), 'reduced-motion Oqtopus moved'
+assert oa.getpixel((20, 15))[2] > 100, 'synthetic vector artwork not visible'
 floating = Image.open(p / 'floating-a.png').convert('RGBA')
 assert all(floating.getpixel((x, 0))[3] == 0 for x in (20, 320, 619)), 'floating window chrome is visible'
 image = Image.open(p / 'animated-a.png').convert('RGBA')
 for x in (35, 604):
     assert image.getpixel((x, 0))[3] > 100 and image.getpixel((x, 8))[3] < 50, 'outward throat missing'
-print('native synthetic windows: throats visible, reduced-motion override works, floating panel borderless')
+print('native synthetic windows: vector animation, reduced motion, throats and borderless floating panel verified')
 PY

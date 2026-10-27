@@ -839,20 +839,27 @@ impl SettingsView {
                 .child(overlay_choice(
                     "indicator-style",
                     "Indicator",
-                    "Choose the dot or animated ears mark.",
+                    "Choose the indicator. Oqtopus needs a local vector pack.",
                     vec![
                         (IndicatorStyle::Dot, "Dot".into()),
-                        (IndicatorStyle::Ears, "Ears · standing wave".into()),
-                        (
-                            IndicatorStyle::ParametricEars,
-                            "Ears · animated bars".into(),
-                        ),
+                        (IndicatorStyle::Ears, "Standing wave".into()),
+                        (IndicatorStyle::ParametricEars, "Animated bars".into()),
+                        (IndicatorStyle::Oqtopus, "Oqtopus".into()),
                     ],
                     overlay.indicator,
                     entity.clone(),
                     theme,
                     |overlay, value| overlay.indicator = value,
                 ))
+                .when(overlay.indicator == IndicatorStyle::Oqtopus, |d| {
+                    let found = crate::oqtopus::pack_path().is_some_and(|path| path.is_file());
+                    d.child(row(
+                        "Oqtopus pack",
+                        Some("Run ears-ui --oqtopus-check to validate; missing or invalid packs use ears.".into()),
+                        badge(if found { "File found" } else { "Missing" }, if found { theme.roles.success } else { theme.roles.danger }, theme),
+                        theme,
+                    ))
+                })
                 .child(overlay_choice(
                     "shape-motion",
                     "Notch motion",

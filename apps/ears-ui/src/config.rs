@@ -65,6 +65,7 @@ pub enum IndicatorStyle {
     Dot,
     Ears,
     ParametricEars,
+    Oqtopus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -218,6 +219,9 @@ mod tests {
         config.overlay.indicator = IndicatorStyle::ParametricEars;
         let parametric: UiConfig = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
         assert_eq!(parametric.overlay.indicator, IndicatorStyle::ParametricEars);
+        config.overlay.indicator = IndicatorStyle::Oqtopus;
+        let oqtopus: UiConfig = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+        assert_eq!(oqtopus.overlay.indicator, IndicatorStyle::Oqtopus);
         assert!(decoded.overlay.show_details);
         assert_eq!(decoded.overlay.shape_motion, ShapeMotion::Smooth);
         assert_eq!(decoded.overlay.content_motion, ContentMotion::Fade);

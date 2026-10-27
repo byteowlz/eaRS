@@ -732,6 +732,8 @@ pub struct IslandView {
     appeared: Instant,
     parametric_state: Option<MarkState>,
     parametric_started: Instant,
+    oqtopus: Option<crate::oqtopus::Worker>,
+    oqtopus_attempted: bool,
 }
 
 /// Small easing with overshoot for the island's springy feel.
@@ -814,7 +816,8 @@ fn spawn_animation_driver(window: gpui::AnyWindowHandle, cx: &Context<IslandView
                 let visible = !this.island()
                     || model.phase() != Phase::Dormant
                     || this.reveal.current() > 0.0;
-                let needs_frame = animate
+                let oqtopus = visible && model.ui.overlay.indicator == IndicatorStyle::Oqtopus;
+                let rapid = animate
                     && (!this.morph.done()
                         || !this.reveal.done()
                         || !this.details.reveal.done()
@@ -822,13 +825,15 @@ fn spawn_animation_driver(window: gpui::AnyWindowHandle, cx: &Context<IslandView
                             && model.ui.overlay.indicator == IndicatorStyle::ParametricEars)
                         || (visible
                             && model.ui.overlay.indicator == IndicatorStyle::Ears
-                            && model.speech_active));
-                if needs_frame {
+                            && model.speech_active)
+                        || oqtopus);
+                let refresh = rapid || oqtopus;
+                if refresh {
                     cx.notify();
                 }
-                needs_frame
+                (refresh, rapid)
             });
-            let Ok(active) = active else { break };
+            let Ok((active, rapid)) = active else { break };
             if active
                 && window
                     .update(cx, |_, window, _| {
@@ -840,7 +845,7 @@ fn spawn_animation_driver(window: gpui::AnyWindowHandle, cx: &Context<IslandView
                 break;
             }
             cx.background_executor()
-                .timer(Duration::from_millis(if active { 33 } else { 250 }))
+                .timer(Duration::from_millis(if rapid { 33 } else { 250 }))
                 .await;
         }
     })
@@ -875,11 +880,38 @@ impl IslandView {
             appeared: Instant::now(),
             parametric_state: None,
             parametric_started: Instant::now(),
+            oqtopus: None,
+            oqtopus_attempted: false,
         }
     }
 
     fn island(&self) -> bool {
         self.notch.is_some()
+    }
+
+    fn oqtopus_indicator(
+        &mut self,
+        state: MarkState,
+        animate: bool,
+        color: Hsla,
+        bg: Hsla,
+        size: f32,
+    ) -> gpui::AnyElement {
+        if !self.oqtopus_attempted {
+            self.oqtopus_attempted = true;
+            if let Some(path) = crate::oqtopus::pack_path() {
+                self.oqtopus = crate::oqtopus::Worker::start(path).ok();
+            }
+        }
+        if let Some(worker) = &self.oqtopus {
+            worker.set(state, animate);
+        }
+        if let Some(snapshot) = self.oqtopus.as_ref().and_then(|worker| worker.snapshot()) {
+            crate::oqtopus::mark(snapshot, color, bg, size).into_any_element()
+        } else {
+            // Missing or unreadable packs retain a working indicator.
+            parametric_mark::mark(color, size * (24.0 / 36.0), state, 0.0, false).into_any_element()
+        }
     }
 
     fn easing(&self, shape_motion: ShapeMotion) -> fn(f32) -> f32 {
@@ -1102,13 +1134,10 @@ impl Render for IslandView {
 
         // Geometry ------------------------------------------------------------
         let dormant = matches!(content.phase, Phase::Dormant);
-        let indicator_width = if matches!(
-            overlay.indicator,
-            IndicatorStyle::Ears | IndicatorStyle::ParametricEars
-        ) {
-            24.0
-        } else {
-            DOT_W
+        let indicator_width = match overlay.indicator {
+            IndicatorStyle::Oqtopus => 36.0,
+            IndicatorStyle::Ears | IndicatorStyle::ParametricEars => 24.0,
+            IndicatorStyle::Dot => DOT_W,
         };
         let max_text_w = match self.notch {
             Some(n) => ((PILL_MAX_W - n.width) / 2.0 - 2.0 * PAD_X).max(0.0),
@@ -1229,7 +1258,23 @@ impl Render for IslandView {
             self.parametric_state = Some(mark_state);
             self.parametric_started = Instant::now();
         }
-        let indicator: gpui::AnyElement = if overlay.indicator == IndicatorStyle::ParametricEars {
+        if overlay.indicator != IndicatorStyle::Oqtopus {
+            self.oqtopus = None;
+            self.oqtopus_attempted = false;
+        }
+        let indicator: gpui::AnyElement = if overlay.indicator == IndicatorStyle::Oqtopus {
+            let background = if island {
+                crate::theme::Color::BLACK
+            } else if theme.is_dark() {
+                theme.slots[0x01]
+            } else {
+                theme.slots[0x00]
+            };
+            let color = cx
+                .global::<IndicatorPalette>()
+                .color(mark_state, background);
+            self.oqtopus_indicator(mark_state, animate, color, bg, indicator_width * scale)
+        } else if overlay.indicator == IndicatorStyle::ParametricEars {
             if animate && (!island || !dormant || reveal > 0.0) {
                 window.request_animation_frame();
             }
@@ -1307,7 +1352,7 @@ impl Render for IslandView {
                             .flex()
                             .items_center()
                             .justify_start()
-                            .pl(px(PAD_X.min((wing - 24.0).max(0.0))))
+                            .pl(px(PAD_X.min((wing - indicator_width).max(0.0))))
                             .overflow_hidden()
                             .opacity(content_opacity)
                             .child(indicator),

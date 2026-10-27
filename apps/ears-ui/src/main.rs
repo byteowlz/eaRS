@@ -7,6 +7,7 @@ mod app;
 mod config;
 mod ears_mark;
 mod indicator_theme;
+mod oqtopus;
 mod overlay;
 mod parametric_mark;
 mod platform;
@@ -26,7 +27,7 @@ use runtime::Runtime;
 
 fn print_help() {
     println!(
-        "ears-ui {}\n\nUsage: ears-ui [--settings] [--no-overlay] [--preview-synthetic|--preview-synthetic-expanded|--preview-placement|--preview-settings|--preview-floating|--preview-parametric|--preview-parametric-reduced|--preview-parametric-override] [--help]\n\n  --settings           open the settings window at launch\n  --no-overlay         start with the floating island disabled\n  --preview-synthetic  display a synthetic notch fixture without starting dictation\n  --preview-synthetic-expanded  show the expanded synthetic fixture\n  --preview-placement  show a synthetic fixture at the actual screen anchor\n  --preview-settings   show settings with synthetic state, without dictation\n  --preview-floating   show a synthetic bottom-anchored floating pill\n  --preview-parametric-override  animate a synthetic icon despite reduced motion\n  --preview-parametric  show animated parametric bars in a synthetic notch\n  --preview-parametric-reduced  show the same fixture with reduced motion\n  --version            print the version\n\nConfig: {}",
+        "ears-ui {}\n\nUsage: ears-ui [--settings] [--no-overlay] [--oqtopus-check] [--preview-synthetic|--preview-synthetic-expanded|--preview-placement|--preview-settings|--preview-floating|--preview-oqtopus|--preview-oqtopus-reduced|--preview-parametric|--preview-parametric-reduced|--preview-parametric-override] [--help]\n\n  --settings           open the settings window at launch\n  --no-overlay         start with the floating island disabled\n  --preview-synthetic  display a synthetic notch fixture without starting dictation\n  --preview-synthetic-expanded  show the expanded synthetic fixture\n  --preview-placement  show a synthetic fixture at the actual screen anchor\n  --preview-settings   show settings with synthetic state, without dictation\n  --preview-floating   show a synthetic bottom-anchored floating pill\n  --oqtopus-check     validate the configured local vector pack without dictation\n  --preview-oqtopus   show the local Oqtopus pack without dictation\n  --preview-oqtopus-reduced   show its static reduced-motion rest frame\n  --preview-parametric-override  animate a synthetic icon despite reduced motion\n  --preview-parametric  show animated parametric bars in a synthetic notch\n  --preview-parametric-reduced  show the same fixture with reduced motion\n  --version            print the version\n\nConfig: {}",
         env!("CARGO_PKG_VERSION"),
         UiConfig::path().display()
     );
@@ -39,6 +40,7 @@ struct PreviewOptions {
     placement: bool,
     floating: bool,
     motion_override: bool,
+    oqtopus: bool,
 }
 
 /// Synthetic UI fixture: no engine, microphone, hotkeys, tray, or settings writes.
@@ -50,17 +52,20 @@ fn preview_synthetic(options: PreviewOptions) {
         placement,
         floating,
         motion_override,
+        oqtopus,
     } = options;
     use config::IndicatorStyle;
     use ears::dictation::{ConnectionState, DictationState};
     let mut ui = UiConfig::default();
-    ui.overlay.indicator = if parametric {
+    ui.overlay.indicator = if oqtopus {
+        IndicatorStyle::Oqtopus
+    } else if parametric {
         IndicatorStyle::ParametricEars
     } else {
         IndicatorStyle::Ears
     };
     ui.overlay.show_details = expanded;
-    ui.overlay.animation = parametric;
+    ui.overlay.animation = parametric || oqtopus;
     ui.overlay.click_through = true;
     ui.overlay.island_mode = placement && !floating;
     ui.overlay.animate_with_reduced_motion = motion_override;
@@ -108,12 +113,15 @@ fn maybe_preview(args: &[String]) -> bool {
         return true;
     }
     let expanded = args.iter().any(|a| a == "--preview-synthetic-expanded");
+    let oqtopus_reduced = args.iter().any(|a| a == "--preview-oqtopus-reduced");
+    let oqtopus = oqtopus_reduced || args.iter().any(|a| a == "--preview-oqtopus");
     let motion_override = args.iter().any(|a| a == "--preview-parametric-override");
     let animated = motion_override || args.iter().any(|a| a == "--preview-parametric");
     let reduced = motion_override || args.iter().any(|a| a == "--preview-parametric-reduced");
     let floating = args.iter().any(|a| a == "--preview-floating");
     let placement = args.iter().any(|a| a == "--preview-placement");
-    if floating
+    if oqtopus
+        || floating
         || placement
         || expanded
         || animated
@@ -123,14 +131,28 @@ fn maybe_preview(args: &[String]) -> bool {
         preview_synthetic(PreviewOptions {
             expanded,
             parametric: animated || reduced,
-            reduced: reduced || !animated,
+            reduced: oqtopus_reduced || (!oqtopus && (reduced || !animated)),
             placement,
             floating,
             motion_override,
+            oqtopus,
         });
         return true;
     }
     false
+}
+
+fn check_oqtopus() {
+    let result = oqtopus::pack_path()
+        .ok_or_else(|| "no data directory available".to_string())
+        .and_then(|path| oqtopus::check(&path));
+    match result {
+        Ok(clips) => println!("{}", serde_json::json!({"ok": true, "clips": clips})),
+        Err(error) => {
+            eprintln!("{}", serde_json::json!({"ok": false, "error": error}));
+            std::process::exit(1);
+        }
+    }
 }
 
 fn main() {
@@ -141,6 +163,10 @@ fn main() {
     }
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!("ears-ui {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+    if args.iter().any(|a| a == "--oqtopus-check") {
+        check_oqtopus();
         return;
     }
     if maybe_preview(&args) {
