@@ -110,6 +110,8 @@ enum HistoryCommand {
     Path,
     /// List retained utterances, oldest first.
     List(HistoryListArgs),
+    /// Print a verified local audio path for an utterance ID.
+    AudioPath { id: String },
     /// Copy all retained audio plus a manifest.jsonl (session-disjoint split
     /// hints) to a directory.
     Export(HistoryExportArgs),
@@ -494,6 +496,9 @@ fn handle_history_command(command: HistoryCommand) -> Result<()> {
                     dir.display()
                 );
             }
+        }
+        HistoryCommand::AudioPath { id } => {
+            println!("{}", audio_history::review_audio_path(&dir, &id)?.display());
         }
         HistoryCommand::Export(args) => {
             if args.out.join("manifest.jsonl").exists() {

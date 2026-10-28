@@ -467,6 +467,7 @@ Each record holds the utterance ID, UTC time, session ID, engine, backend, langu
 ```bash
 ears dictation history path                       # directory and whether retention is on
 ears dictation history list [--json]
+ears dictation history audio-path ID              # verified local WAV path for playback, e.g. afplay on macOS
 ears dictation history export --out DIR           # copies audio + manifest.jsonl with session-disjoint split hints
 ears dictation history purge --id ID | --session ID | --before YYYY-MM-DD | --all
 ```

@@ -506,6 +506,29 @@ pub fn load_records(dir: &Path) -> Result<Vec<UtteranceRecord>> {
     Ok(records)
 }
 
+/// Resolve a retained utterance to a verified local audio file for review.
+/// The ID must uniquely identify an indexed record; missing, escaped or modified
+/// audio is rejected rather than handed to a player.
+pub fn review_audio_path(dir: &Path, id: &str) -> Result<PathBuf> {
+    let records = load_records(dir)?;
+    let mut matches = records.iter().filter(|record| record.id == id);
+    let record = matches.next().context("utterance not found")?;
+    if matches.next().is_some() {
+        bail!("utterance ID is ambiguous");
+    }
+    let root = fs::canonicalize(dir).context("audio history directory unavailable")?;
+    let path = fs::canonicalize(root.join(&record.audio_path))
+        .context("utterance audio unavailable")?;
+    if !path.starts_with(root.join("audio")) || !path.is_file() {
+        bail!("utterance audio is outside the history audio directory");
+    }
+    let bytes = fs::read(&path).context("failed to read utterance audio")?;
+    if hex(&Sha256::digest(&bytes)) != record.sha256 {
+        bail!("utterance audio does not match its recorded sha256");
+    }
+    Ok(path)
+}
+
 /// Replace the index atomically with `records`.
 fn write_records(dir: &Path, records: &[UtteranceRecord]) -> Result<()> {
     let tmp = dir.join(format!("{INDEX_FILE}.tmp"));
@@ -800,6 +823,38 @@ mod tests {
             assert_eq!(mode(&root.join(&record.audio_path)), 0o600);
             assert_eq!(mode(&root.join(INDEX_FILE)), 0o600);
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn review_audio_path_rejects_missing_modified_and_escaping_audio() {
+        let root = temp_dir("review-path");
+        let mut history = AudioHistory::from_config(&enabled_config(&root), None, None)
+            .unwrap()
+            .unwrap();
+        let mut record = record_utterance(&mut history, 0.2, "test");
+        let path = review_audio_path(&root, &record.id).unwrap();
+        assert_eq!(path, fs::canonicalize(root.join(&record.audio_path)).unwrap());
+        assert!(review_audio_path(&root, "unknown").is_err());
+        fs::write(&path, b"modified").unwrap();
+        assert!(review_audio_path(&root, &record.id).is_err());
+        fs::remove_file(&path).unwrap();
+        assert!(review_audio_path(&root, &record.id).is_err());
+        let outside = root.join("outside.wav");
+        fs::write(&outside, b"outside").unwrap();
+        record.audio_path = "outside.wav".into();
+        record.sha256 = hex(&Sha256::digest(b"outside"));
+        write_records(&root, &[record.clone()]).unwrap();
+        assert!(review_audio_path(&root, &record.id).is_err());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&outside, root.join("audio/link.wav")).unwrap();
+            record.audio_path = "audio/link.wav".into();
+            write_records(&root, &[record.clone()]).unwrap();
+            assert!(review_audio_path(&root, &record.id).is_err());
+        }
+        write_records(&root, &[record.clone(), record.clone()]).unwrap();
+        assert!(review_audio_path(&root, &record.id).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 
