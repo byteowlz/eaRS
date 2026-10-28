@@ -28,7 +28,7 @@ use runtime::Runtime;
 
 fn print_help() {
     println!(
-        "ears-ui {}\n\nUsage: ears-ui [--settings] [--no-overlay] [--oqtopus-check] [--preview-synthetic|--preview-synthetic-expanded|--preview-placement|--preview-settings|--preview-floating|--preview-oqtopus|--preview-oqtopus-reduced|--preview-parametric|--preview-parametric-reduced|--preview-parametric-override] [--help]\n\n  --settings           open the settings window at launch\n  --no-overlay         start with the floating island disabled\n  --preview-synthetic  display a synthetic notch fixture without starting dictation\n  --preview-synthetic-expanded  show the expanded synthetic fixture\n  --preview-placement  show a synthetic fixture at the actual screen anchor\n  --preview-settings   show settings with synthetic state, without dictation\n  --preview-floating   show a synthetic bottom-anchored floating pill\n  --oqtopus-check     validate the configured local vector pack without dictation\n  --preview-oqtopus   show the local Oqtopus pack without dictation\n  --preview-oqtopus-reduced   show its static reduced-motion rest frame\n  --preview-parametric-override  animate a synthetic icon despite reduced motion\n  --preview-parametric  show animated parametric bars in a synthetic notch\n  --preview-parametric-reduced  show the same fixture with reduced motion\n  --version            print the version\n\nConfig: {}",
+        "ears-ui {}\n\nUsage: ears-ui [--settings] [--no-overlay] [--oqtopus-check] [--preview-synthetic|--preview-synthetic-expanded|--preview-placement|--preview-click|--preview-settings|--preview-floating|--preview-oqtopus|--preview-oqtopus-reduced|--preview-parametric|--preview-parametric-reduced|--preview-parametric-override] [--help]\n\n  --settings           open the settings window at launch\n  --no-overlay         start with the floating island disabled\n  --preview-synthetic  display a synthetic notch fixture without starting dictation\n  --preview-synthetic-expanded  show the expanded synthetic fixture\n  --preview-placement  show a synthetic fixture at the actual screen anchor\n  --preview-click     show a clickable placement fixture without dictation\n  --preview-settings   show settings with synthetic state, without dictation\n  --preview-floating   show a synthetic bottom-anchored floating pill\n  --oqtopus-check     validate the configured local vector pack without dictation\n  --preview-oqtopus   show the local Oqtopus pack without dictation\n  --preview-oqtopus-reduced   show its static reduced-motion rest frame\n  --preview-parametric-override  animate a synthetic icon despite reduced motion\n  --preview-parametric  show animated parametric bars in a synthetic notch\n  --preview-parametric-reduced  show the same fixture with reduced motion\n  --version            print the version\n\nConfig: {}",
         env!("CARGO_PKG_VERSION"),
         UiConfig::path().display()
     );
@@ -42,6 +42,7 @@ struct PreviewOptions {
     floating: bool,
     motion_override: bool,
     oqtopus: bool,
+    clickable: bool,
 }
 
 /// Synthetic UI fixture: no engine, microphone, hotkeys, tray, or settings writes.
@@ -54,6 +55,7 @@ fn preview_synthetic(options: PreviewOptions) {
         floating,
         motion_override,
         oqtopus,
+        clickable,
     } = options;
     use config::IndicatorStyle;
     use ears::dictation::{ConnectionState, DictationState};
@@ -67,7 +69,7 @@ fn preview_synthetic(options: PreviewOptions) {
     };
     ui.overlay.show_details = expanded;
     ui.overlay.animation = parametric || oqtopus;
-    ui.overlay.click_through = true;
+    ui.overlay.click_through = !clickable;
     ui.overlay.island_mode = placement && !floating;
     ui.overlay.animate_with_reduced_motion = motion_override;
     if floating {
@@ -120,7 +122,8 @@ fn maybe_preview(args: &[String]) -> bool {
     let animated = motion_override || args.iter().any(|a| a == "--preview-parametric");
     let reduced = motion_override || args.iter().any(|a| a == "--preview-parametric-reduced");
     let floating = args.iter().any(|a| a == "--preview-floating");
-    let placement = args.iter().any(|a| a == "--preview-placement");
+    let clickable = args.iter().any(|a| a == "--preview-click");
+    let placement = clickable || args.iter().any(|a| a == "--preview-placement");
     if oqtopus
         || floating
         || placement
@@ -137,6 +140,7 @@ fn maybe_preview(args: &[String]) -> bool {
             floating,
             motion_override,
             oqtopus,
+            clickable,
         });
         return true;
     }

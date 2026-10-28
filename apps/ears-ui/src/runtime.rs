@@ -228,6 +228,9 @@ pub fn apply_theme(cx: &mut App, appearance: Option<WindowAppearance>) {
 }
 
 pub fn open_settings(cx: &mut App) {
+    // Activate before making a settings window key: opening it while the
+    // accessory app is inactive can re-enter GPUI's macOS focus callback.
+    platform::activate_app();
     let existing = cx.global::<Runtime>().settings;
     if let Some(handle) = existing {
         let ok = handle

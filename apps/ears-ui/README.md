@@ -57,6 +57,7 @@ target/debug/ears-ui --oqtopus-check # validate local Oqtopus pack
 target/debug/ears-ui --preview-oqtopus # play local pack without dictation
 target/debug/ears-ui --preview-oqtopus-reduced # static Oqtopus rest
 target/debug/ears-ui --preview-placement # real top anchor, synthetic content
+target/debug/ears-ui --preview-click # click-to-open-settings fixture, no dictation
 target/debug/ears-ui --preview-floating  # bottom floating fixture
 target/debug/ears-ui --preview-settings  # synthetic settings fixture
 ```
