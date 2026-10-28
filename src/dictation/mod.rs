@@ -13,6 +13,9 @@
 //! state and forward user intent.
 
 pub mod audio_history;
+pub mod capture_segments;
+#[cfg(feature = "client-vad")]
+pub mod client_vad;
 mod engine;
 pub mod hotkeys;
 #[cfg(target_os = "macos")]

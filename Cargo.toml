@@ -133,6 +133,8 @@ cudnn = ["candle/cudnn", "candle-nn/cudnn"]
 hooks = []
 # Opt-in evidence adapter only; never loads models/profiles automatically.
 speaker-voqx = ["dep:voqx-recognition"]
+# Optional client-side Silero inference; models are explicit local artifacts.
+client-vad = ["dep:ort", "ort/api-24"]
 
 # Engines
 # parakeet-rs Nemotron streaming engine (ort 2.0.0-rc.12). Activate the exact

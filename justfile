@@ -685,6 +685,19 @@ check-speaker-gate:
     cargo check -p eaRS --no-default-features
     cargo check -p eaRS --no-default-features --features speaker-voqx
 
+# Client-side VAD mechanism; no microphone or model required.
+test-client-vad:
+    cargo check --locked --all-targets --features client-vad
+    cargo test --locked --lib capture_segments
+
+# Explicit-artifact CPU smoke test; caller supplies ORT_DYLIB_PATH.
+test-client-vad-model model:
+    EARS_TEST_VAD_MODEL="{{model}}" cargo test --locked --lib --features client-vad silero_silence_reset_and_bad_frames -- --ignored
+
+# Read-only offline segmentation preview; no recordings are changed.
+preview-client-vad model audio:
+    cargo run --locked --example client_vad_segments --features client-vad -- "{{model}}" "{{audio}}"
+
 # === Maintenance ===
 
 # Clean build artifacts
