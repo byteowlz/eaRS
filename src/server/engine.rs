@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
+#[cfg(any(feature = "moonshine", feature = "parakeet-rs"))]
+use crossbeam_channel::{SendTimeoutError, Sender};
 
 use crate::{TranscriptionSink, WebSocketMessage};
 
@@ -57,8 +59,35 @@ pub trait EngineSession: Send {
     fn send_speech_boundary(&self, _active: bool) -> Result<bool> {
         Ok(false)
     }
+    /// True only when `request_drain` shares the engine's accepted-audio FIFO.
+    fn supports_ordered_drain(&self) -> bool {
+        false
+    }
+    /// Queue a terminal barrier after all prior accepted audio. On success the
+    /// worker must finalize, emit a cumulative-session `Final` (see its protocol
+    /// contract in `WebSocketMessage`), emit `Drained { request_id }`, then close
+    /// its sink. Final text must preserve the exact previously emitted Word-token
+    /// prefix; it is not just the last utterance. Failure must never synthesize
+    /// an ACK. Admission must be bounded.
+    fn request_drain(&self, _request_id: u64) -> Result<()> {
+        anyhow::bail!("ordered drain is not supported by this engine")
+    }
     fn request_stop(&self);
     fn supports_language(&self) -> bool;
+}
+
+/// Shared bounded admission policy for engines with an accepted-audio FIFO.
+/// A failed enqueue is not accepted input and must never result in a drain ACK.
+/// Keep the distinction between a stalled and disconnected worker explicit.
+#[cfg(any(feature = "moonshine", feature = "parakeet-rs"))]
+pub(super) fn queue_command<T>(sender: &Sender<T>, command: T) -> Result<()> {
+    match sender.send_timeout(command, std::time::Duration::from_secs(1)) {
+        Ok(()) => Ok(()),
+        Err(SendTimeoutError::Timeout(_)) => anyhow::bail!("engine command queue timed out"),
+        Err(SendTimeoutError::Disconnected(_)) => {
+            anyhow::bail!("engine command queue disconnected")
+        }
+    }
 }
 
 pub trait Engine: Send + Sync {

@@ -125,6 +125,73 @@ impl SpeechScorer for SileroVad {
     }
 }
 
+/// Stateful 24 kHz capture -> 16 kHz scoring adapter shared by recording and
+/// idle control. Each owner has separate state so privacy resets cannot affect
+/// a controller that must also work with retention disabled.
+pub(super) struct CaptureScorer {
+    detector: Box<dyn SpeechScorer>,
+    resampler: super::wake::Resampler,
+    input: std::collections::VecDeque<f32>,
+    output: std::collections::VecDeque<f32>,
+    clock: u64,
+}
+
+pub(super) struct ScoredFrame {
+    pub start: u64,
+    pub pcm: Vec<f32>,
+    pub probability: f32,
+}
+
+impl CaptureScorer {
+    pub fn new(detector: Box<dyn SpeechScorer>) -> Self {
+        Self {
+            detector,
+            resampler: super::wake::Resampler::new(24_000, 16_000),
+            input: Default::default(),
+            output: Default::default(),
+            clock: 0,
+        }
+    }
+    pub fn reset(&mut self) {
+        self.detector.reset();
+        self.resampler = super::wake::Resampler::new(24_000, 16_000);
+        self.input.clear();
+        self.output.clear();
+        self.clock = 0;
+    }
+    pub fn push(&mut self, pcm: &[f32]) -> Result<Vec<ScoredFrame>> {
+        ensure!(
+            pcm.iter().all(|v| v.is_finite()),
+            "non-finite capture input"
+        );
+        self.input.extend(pcm.iter().copied());
+        while self.input.len() >= 768 {
+            let source: Vec<_> = self.input.drain(..768).collect();
+            self.output.extend(self.resampler.push(&source));
+        }
+        let mut frames = Vec::new();
+        while self.output.len() >= FRAME_SAMPLES {
+            let pcm: Vec<_> = self.output.drain(..FRAME_SAMPLES).collect();
+            let probability = self.detector.score(&pcm)?;
+            ensure!(
+                probability.is_finite() && (0.0..=1.0).contains(&probability),
+                "invalid capture speech probability"
+            );
+            let start = self.clock;
+            self.clock = self
+                .clock
+                .checked_add(FRAME_SAMPLES as u64)
+                .context("capture VAD clock overflow")?;
+            frames.push(ScoredFrame {
+                start,
+                pcm,
+                probability,
+            });
+        }
+        Ok(frames)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

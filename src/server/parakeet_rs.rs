@@ -12,14 +12,13 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{Context, Result};
-use crossbeam_channel::{Receiver, Sender, select, unbounded};
+use crossbeam_channel::{Receiver, Sender, bounded};
 use parakeet_rs::{Nemotron, NemotronHandle, NemotronMode};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-use crate::server::engine::{Engine, EngineKind, EngineSession};
+use crate::server::engine::{Engine, EngineKind, EngineSession, queue_command};
 use crate::server::{SessionSink, current_timestamp};
 use crate::{TranscriptionOptions, TranscriptionSink, WebSocketMessage, WordTimestamp};
 
@@ -359,62 +358,33 @@ impl Engine for ParakeetRsEngine {
         }
 
         let multilingual = matches!(model.mode(), NemotronMode::Multilingual);
-        let (audio_tx, audio_rx) = unbounded::<Vec<f32>>();
-        let (lang_tx, lang_rx) = unbounded::<String>();
-        let (control_tx, control_rx) = unbounded::<ParakeetRsControl>();
-        let handle = ParakeetRsSessionHandle {
-            audio_tx,
-            lang_tx,
-            control_tx,
-            multilingual,
-        };
-
+        // Audio and controls share one FIFO: separate select! channels cannot
+        // establish an accepted-audio drain barrier.
+        let (tx, rx) = bounded(64);
+        let handle = ParakeetRsSessionHandle { tx, multilingual };
         std::thread::spawn(move || {
-            run_parakeet_rs_session(model, audio_rx, lang_rx, control_rx, sink, permit);
+            let mut sink = sink;
+            if let Err(err) = run_parakeet_rs_session(model, rx, &mut sink, permit) {
+                eprintln!("[parakeet-rs] session failed: {err:#}");
+            }
+            sink.close();
         });
-
-        Ok(Some(Box::new(handle) as Box<dyn EngineSession>))
+        Ok(Some(Box::new(handle)))
     }
 }
 
 #[derive(Debug)]
-enum ParakeetRsControl {
+enum ParakeetRsCommand {
+    Audio(Vec<f32>),
+    Language(String),
     Stop,
-    /// Acoustic end-of-utterance from the server ingress VAD. Flush delayed
-    /// decoder output while retaining cache, then emit `Speech(false)`.
     UtteranceEnd,
+    Drain(u64),
 }
 
 struct ParakeetRsSessionHandle {
-    audio_tx: Sender<Vec<f32>>,
-    lang_tx: Sender<String>,
-    control_tx: Sender<ParakeetRsControl>,
+    tx: Sender<ParakeetRsCommand>,
     multilingual: bool,
-}
-
-impl ParakeetRsSessionHandle {
-    pub fn send_audio(&self, pcm: Vec<f32>) -> Result<()> {
-        self.audio_tx
-            .send(pcm)
-            .context("failed to send audio chunk to parakeet-rs engine")
-            .map(|_| ())
-    }
-
-    pub fn set_language(&self, lang: String) -> Result<()> {
-        self.lang_tx
-            .send(lang)
-            .context("failed to send language command to parakeet-rs engine")
-    }
-
-    pub fn request_stop(&self) {
-        let _ = self.control_tx.send(ParakeetRsControl::Stop);
-    }
-}
-
-impl Drop for ParakeetRsSessionHandle {
-    fn drop(&mut self) {
-        // Drop closes the senders; the session loop observes the disconnect.
-    }
 }
 
 impl EngineSession for ParakeetRsSessionHandle {
@@ -423,25 +393,35 @@ impl EngineSession for ParakeetRsSessionHandle {
     }
 
     fn send_audio(&self, pcm: Vec<f32>) -> Result<()> {
-        ParakeetRsSessionHandle::send_audio(self, pcm)
+        queue_command(&self.tx, ParakeetRsCommand::Audio(pcm))
     }
 
     fn set_language(&self, lang: String) -> Result<()> {
-        ParakeetRsSessionHandle::set_language(self, lang)
+        queue_command(&self.tx, ParakeetRsCommand::Language(lang))
     }
 
     fn send_speech_boundary(&self, active: bool) -> Result<bool> {
         if active {
             return Ok(false);
         }
-        self.control_tx
-            .send(ParakeetRsControl::UtteranceEnd)
-            .context("failed to send utterance boundary to parakeet-rs engine")?;
+        queue_command(&self.tx, ParakeetRsCommand::UtteranceEnd)?;
         Ok(true)
     }
 
+    fn supports_ordered_drain(&self) -> bool {
+        true
+    }
+
+    fn request_drain(&self, request_id: u64) -> Result<()> {
+        if request_id == 0 {
+            anyhow::bail!("drain request_id must be nonzero");
+        }
+        queue_command(&self.tx, ParakeetRsCommand::Drain(request_id))
+    }
+
     fn request_stop(&self) {
-        ParakeetRsSessionHandle::request_stop(self);
+        // Bound admission; subsequent handle drop disconnects even a full FIFO.
+        let _ = queue_command(&self.tx, ParakeetRsCommand::Stop);
     }
 
     fn supports_language(&self) -> bool {
@@ -449,92 +429,54 @@ impl EngineSession for ParakeetRsSessionHandle {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Tests use the production FIFO, resampling, tail flush and message emission
+/// with a deterministic decoder, without loading ONNX or any audio files.
+trait StreamingDecoder {
+    fn transcribe_chunk(&mut self, chunk: &[f32]) -> Result<String>;
+    fn set_target_lang(&mut self, lang: &str) -> Result<()>;
+    fn reset(&mut self);
+}
+
+impl StreamingDecoder for Nemotron {
+    fn transcribe_chunk(&mut self, chunk: &[f32]) -> Result<String> {
+        Ok(Nemotron::transcribe_chunk(self, chunk)?)
+    }
+    fn set_target_lang(&mut self, lang: &str) -> Result<()> {
+        Ok(Nemotron::set_target_lang(self, lang)?)
+    }
+    fn reset(&mut self) {
+        Nemotron::reset(self);
+    }
+}
+
 fn run_parakeet_rs_session(
-    mut model: Nemotron,
-    audio_rx: Receiver<Vec<f32>>,
-    lang_rx: Receiver<String>,
-    control_rx: Receiver<ParakeetRsControl>,
-    mut sink: SessionSink,
+    mut model: impl StreamingDecoder,
+    rx: Receiver<ParakeetRsCommand>,
+    sink: &mut SessionSink,
     _permit: OwnedSemaphorePermit,
-) {
-    let mut buffer_24k: Vec<f32> = Vec::new();
-    let mut buffer_16k: Vec<f32> = Vec::new();
-    let mut stop_requested = false;
-    let mut total_input_secs: f64 = 0.0;
-    let mut committed_words: Vec<WordTimestamp> = Vec::new();
-    // Nemotron returns incremental SentencePiece fragments. Hold the trailing
-    // unbounded fragment so it is not typed as a separate word (e.g. `spli` +
-    // `t` becoming `spli t`).
+) -> Result<()> {
+    let mut buffer_24k = Vec::new();
+    let mut buffer_16k = Vec::new();
+    let mut total_input_secs = 0.0;
+    let mut committed_words = Vec::new();
     let mut pending_text = String::new();
-    let mut utterance_end_requested = false;
 
-    while !stop_requested {
-        select! {
-            recv(audio_rx) -> msg => match msg {
-                Ok(chunk) => buffer_24k.extend_from_slice(&chunk),
-                Err(_) => stop_requested = true,
-            },
-            recv(lang_rx) -> msg => match msg {
-                Ok(lang) => {
-                    // A language prompt is session-scoped, like Kyutai's
-                    // set_language. Treat a live change as an utterance boundary:
-                    // commit pending text, discard at most one unprocessed chunk,
-                    // and reset cache/decoder state before applying the prompt.
-                    emit_delta(
-                        "",
-                        true,
-                        total_input_secs,
-                        &mut pending_text,
-                        &mut committed_words,
-                        &mut sink,
-                    );
-                    buffer_24k.clear();
-                    buffer_16k.clear();
-                    match model.set_target_lang(&lang) {
-                        Ok(()) => {
-                            model.reset();
-                            sink.handle_message(WebSocketMessage::LanguageChanged {
-                                lang: lang.clone(),
-                            });
-                            eprintln!("[parakeet-rs] switched session language to {lang}");
-                        }
-                        Err(err) => {
-                            eprintln!("[parakeet-rs] set_language({lang}) failed: {err}");
-                        }
-                    }
-                }
-                Err(_) => stop_requested = true,
-            },
-            recv(control_rx) -> msg => match msg {
-                Ok(ParakeetRsControl::UtteranceEnd) => utterance_end_requested = true,
-                Ok(ParakeetRsControl::Stop) | Err(_) => stop_requested = true,
-            },
-            default(Duration::from_millis(10)) => {}
+    loop {
+        // Disconnection is legacy shutdown, never an acknowledged drain.
+        let command = rx.recv().unwrap_or(ParakeetRsCommand::Stop);
+        if let ParakeetRsCommand::Audio(chunk) = &command {
+            buffer_24k.extend_from_slice(chunk);
         }
-
-        // Preserve ordering across the separate audio/control channels: drain
-        // audio already queued before processing a boundary or stop.
-        for chunk in audio_rx.try_iter() {
-            buffer_24k.extend_from_slice(&chunk);
+        // Also resample a short (<1600 sample) tail at every boundary/terminal
+        // command. Previously that accepted tail was abandoned on shutdown.
+        let flush_input = !matches!(command, ParakeetRsCommand::Audio(_));
+        if !buffer_24k.is_empty() && (flush_input || buffer_24k.len() >= RESAMPLE_MIN_SAMPLES) {
+            let input = std::mem::take(&mut buffer_24k);
+            let samples = kaudio::resample(&input, SERVER_SAMPLE_RATE, NEMOTRON_SAMPLE_RATE)
+                .context("parakeet-rs resampling accepted audio")?;
+            total_input_secs += input.len() as f64 / SERVER_SAMPLE_RATE as f64;
+            buffer_16k.extend(samples);
         }
-
-        // Resample 24k -> 16k in windows the resampler is happy with.
-        while buffer_24k.len() >= RESAMPLE_MIN_SAMPLES {
-            let drained: Vec<f32> = buffer_24k.drain(..buffer_24k.len()).collect();
-            match kaudio::resample(&drained, SERVER_SAMPLE_RATE, NEMOTRON_SAMPLE_RATE) {
-                Ok(samples_16k) => {
-                    if !samples_16k.is_empty() {
-                        total_input_secs += samples_16k.len() as f64 / NEMOTRON_SAMPLE_RATE as f64;
-                        buffer_16k.extend_from_slice(&samples_16k);
-                    }
-                }
-                Err(err) => eprintln!("[parakeet-rs] resample failed: {err}"),
-            }
-        }
-
-        // Feed fixed 560 ms chunks continuously. Speech boundaries are owned by
-        // the single server-ingress VAD, not a second engine-local energy gate.
         while buffer_16k.len() >= CHUNK_SAMPLES_16K {
             let chunk: Vec<f32> = buffer_16k.drain(..CHUNK_SAMPLES_16K).collect();
             feed_chunk(
@@ -543,62 +485,80 @@ fn run_parakeet_rs_session(
                 total_input_secs,
                 &mut pending_text,
                 &mut committed_words,
-                &mut sink,
-            );
+                sink,
+            )?;
         }
-
-        if utterance_end_requested {
-            flush_utterance(
-                &mut model,
-                &mut buffer_16k,
-                total_input_secs,
-                &mut pending_text,
-                &mut committed_words,
-                &mut sink,
-                1,
-            );
-            sink.handle_message(WebSocketMessage::Speech {
-                active: false,
-                timestamp: current_timestamp(),
-            });
-            utterance_end_requested = false;
-            eprintln!("[parakeet-rs] utterance flushed; decoder state retained");
-        }
-
-        if stop_requested {
-            flush_utterance(
-                &mut model,
-                &mut buffer_16k,
-                total_input_secs,
-                &mut pending_text,
-                &mut committed_words,
-                &mut sink,
-                3,
-            );
-
-            let final_text = committed_words
-                .iter()
-                .map(|w| w.word.clone())
-                .collect::<Vec<_>>()
-                .join(" ");
-            sink.handle_message(WebSocketMessage::Final {
-                text: final_text,
-                words: committed_words.clone(),
-            });
-            sink.close();
+        match command {
+            ParakeetRsCommand::Audio(_) => {}
+            ParakeetRsCommand::Language(lang) => {
+                flush_utterance(
+                    &mut model,
+                    &mut buffer_16k,
+                    total_input_secs,
+                    &mut pending_text,
+                    &mut committed_words,
+                    sink,
+                    1,
+                )?;
+                match model.set_target_lang(&lang) {
+                    Ok(()) => {
+                        model.reset();
+                        sink.handle_message(WebSocketMessage::LanguageChanged { lang });
+                    }
+                    Err(err) => eprintln!("[parakeet-rs] set_language failed: {err}"),
+                }
+            }
+            ParakeetRsCommand::UtteranceEnd => {
+                flush_utterance(
+                    &mut model,
+                    &mut buffer_16k,
+                    total_input_secs,
+                    &mut pending_text,
+                    &mut committed_words,
+                    sink,
+                    1,
+                )?;
+                sink.handle_message(WebSocketMessage::Speech {
+                    active: false,
+                    timestamp: current_timestamp(),
+                });
+            }
+            terminal @ (ParakeetRsCommand::Stop | ParakeetRsCommand::Drain(_)) => {
+                flush_utterance(
+                    &mut model,
+                    &mut buffer_16k,
+                    total_input_secs,
+                    &mut pending_text,
+                    &mut committed_words,
+                    sink,
+                    3,
+                )?;
+                sink.handle_message(WebSocketMessage::Final {
+                    text: committed_words
+                        .iter()
+                        .map(|w| w.word.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    words: committed_words,
+                });
+                if let ParakeetRsCommand::Drain(request_id) = terminal {
+                    sink.handle_message(WebSocketMessage::Drained { request_id });
+                }
+                return Ok(());
+            }
         }
     }
 }
 
 fn flush_utterance(
-    model: &mut Nemotron,
+    model: &mut impl StreamingDecoder,
     buffer_16k: &mut Vec<f32>,
     total_input_secs: f64,
     pending_text: &mut String,
     committed_words: &mut Vec<WordTimestamp>,
     sink: &mut SessionSink,
     zero_chunks: usize,
-) {
+) -> Result<()> {
     // Pad the remaining speech to one model chunk, then feed enough zero chunks
     // to release delayed tokens. Boundaries use one to avoid polluting the
     // retained cache; final shutdown uses upstream's full three-chunk drain.
@@ -612,7 +572,7 @@ fn flush_utterance(
             pending_text,
             committed_words,
             sink,
-        );
+        )?;
     }
     let zeros = vec![0.0f32; CHUNK_SAMPLES_16K];
     for _ in 0..zero_chunks {
@@ -623,7 +583,7 @@ fn flush_utterance(
             pending_text,
             committed_words,
             sink,
-        );
+        )?;
     }
     emit_delta(
         "",
@@ -633,29 +593,30 @@ fn flush_utterance(
         committed_words,
         sink,
     );
+    Ok(())
 }
 
 fn feed_chunk(
-    model: &mut Nemotron,
+    model: &mut impl StreamingDecoder,
     chunk: &[f32],
     total_input_secs: f64,
     pending_text: &mut String,
     committed_words: &mut Vec<WordTimestamp>,
     sink: &mut SessionSink,
-) {
-    match model.transcribe_chunk(chunk) {
-        Ok(text) => {
-            emit_delta(
-                &text,
-                false,
-                total_input_secs,
-                pending_text,
-                committed_words,
-                sink,
-            );
-        }
-        Err(err) => eprintln!("[parakeet-rs] transcribe_chunk failed: {err}"),
-    }
+) -> Result<()> {
+    // A swallowed decoder error would make a subsequent drain ACK dishonest.
+    let text = model
+        .transcribe_chunk(chunk)
+        .context("parakeet-rs transcribe_chunk")?;
+    emit_delta(
+        &text,
+        false,
+        total_input_secs,
+        pending_text,
+        committed_words,
+        sink,
+    );
+    Ok(())
 }
 
 /// Buffer a transcription delta and emit only text ending at a word boundary.
@@ -705,6 +666,290 @@ fn emit_delta(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct FakeDecoder {
+        calls: Arc<std::sync::Mutex<Vec<bool>>>,
+        fail_on: Option<usize>,
+    }
+
+    impl StreamingDecoder for FakeDecoder {
+        fn transcribe_chunk(&mut self, chunk: &[f32]) -> Result<String> {
+            assert_eq!(chunk.len(), CHUNK_SAMPLES_16K);
+            let mut calls = self.calls.lock().unwrap();
+            let speech = chunk.iter().any(|value| value.abs() > 1e-8);
+            calls.push(speech);
+            if self.fail_on == Some(calls.len()) {
+                anyhow::bail!("injected decode failure");
+            }
+            Ok(if speech { " first" } else { " tail" }.into())
+        }
+        fn set_target_lang(&mut self, _: &str) -> Result<()> {
+            Ok(())
+        }
+        fn reset(&mut self) {}
+    }
+
+    fn fake_worker(
+        commands: Vec<ParakeetRsCommand>,
+        fail_on: Option<usize>,
+    ) -> (Result<()>, Vec<serde_json::Value>, Vec<bool>, usize) {
+        let (tx, rx) = bounded(16);
+        for command in commands {
+            tx.send(command).unwrap();
+        }
+        drop(tx);
+        let (msg_tx, mut msg_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut sink = SessionSink::new(msg_tx);
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let decoder = FakeDecoder {
+            calls: calls.clone(),
+            fail_on,
+        };
+        let semaphore = Arc::new(Semaphore::new(1));
+        let permit = semaphore.clone().try_acquire_owned().unwrap();
+        let result = run_parakeet_rs_session(decoder, rx, &mut sink, permit);
+        // Same unconditional close used by the native worker wrapper.
+        sink.close();
+        let mut messages = Vec::new();
+        let mut closes = 0;
+        while let Ok(message) = msg_rx.try_recv() {
+            match message {
+                tokio_tungstenite::tungstenite::Message::Text(text) => {
+                    messages.push(serde_json::from_str(&text).unwrap())
+                }
+                tokio_tungstenite::tungstenite::Message::Close(_) => closes += 1,
+                _ => panic!("unexpected worker output"),
+            }
+        }
+        assert_eq!(closes, 1);
+        assert_eq!(semaphore.available_permits(), 1);
+        let calls = calls.lock().unwrap().clone();
+        (result, messages, calls, closes)
+    }
+
+    #[tokio::test]
+    async fn websocket_uses_real_parakeet_fifo_and_worker_with_fake_decoder() {
+        use futures::{SinkExt, StreamExt};
+        use std::time::Duration;
+        use tokio_tungstenite::{connect_async, tungstenite::Message};
+
+        struct FakeNativeEngine {
+            calls: Arc<std::sync::Mutex<Vec<bool>>>,
+            semaphore: Arc<Semaphore>,
+        }
+        impl Engine for FakeNativeEngine {
+            fn kind(&self) -> EngineKind {
+                EngineKind::ParakeetRs
+            }
+            fn allocate(&self, mut sink: SessionSink) -> Result<Option<Box<dyn EngineSession>>> {
+                let permit = self.semaphore.clone().try_acquire_owned()?;
+                let (tx, rx) = bounded(64);
+                let decoder = FakeDecoder {
+                    calls: self.calls.clone(),
+                    fail_on: None,
+                };
+                std::thread::spawn(move || {
+                    let result = run_parakeet_rs_session(decoder, rx, &mut sink, permit);
+                    sink.close();
+                    result.unwrap();
+                });
+                Ok(Some(Box::new(ParakeetRsSessionHandle {
+                    tx,
+                    multilingual: true,
+                })))
+            }
+        }
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let semaphore = Arc::new(Semaphore::new(1));
+        let mut manager = super::super::engine::EngineManager::new();
+        manager.register(Arc::new(FakeNativeEngine {
+            calls: calls.clone(),
+            semaphore: semaphore.clone(),
+        }));
+        let tcp = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = tcp.local_addr().unwrap();
+        let registry = super::super::listener::StreamRegistry::new();
+        let reg = registry.clone();
+        let server = tokio::spawn(async move {
+            let (stream, _) = tcp.accept().await.unwrap();
+            super::super::run_connection(
+                stream,
+                manager,
+                Some(reg),
+                None,
+                EngineKind::ParakeetRs,
+                TranscriptionOptions {
+                    boundary_vad: false,
+                    ..Default::default()
+                },
+                Duration::from_secs(2),
+            )
+            .await
+        });
+        let (mut client, _) = connect_async(format!("ws://{addr}")).await.unwrap();
+        let pcm: Vec<u8> = vec![0.1f32; 800]
+            .into_iter()
+            .flat_map(f32::to_le_bytes)
+            .collect();
+        client.send(Message::binary(pcm)).await.unwrap();
+        client
+            .send(Message::text(r#"{"type":"drain","request_id":42}"#))
+            .await
+            .unwrap();
+        let mut messages: Vec<serde_json::Value> = Vec::new();
+        loop {
+            match tokio::time::timeout(Duration::from_secs(3), client.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap()
+            {
+                Message::Text(text) => messages.push(serde_json::from_str(&text).unwrap()),
+                Message::Close(_) => break,
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        assert_eq!(messages[0]["engine"], "parakeet-rs");
+        assert_eq!(
+            messages[1]["features"],
+            serde_json::json!(["dictation-drain/1"])
+        );
+        let final_idx = messages.iter().position(|m| m["type"] == "final").unwrap();
+        assert_eq!(messages[final_idx]["text"], "first tail tail tail");
+        assert_eq!(
+            messages[final_idx + 1],
+            serde_json::json!({"type":"drained","request_id":42})
+        );
+        assert_eq!(messages.len(), final_idx + 2);
+        tokio::time::timeout(Duration::from_secs(3), server)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(registry.list_active_streams().is_empty());
+        assert_eq!(semaphore.available_permits(), 1);
+        assert_eq!(*calls.lock().unwrap(), [true, false, false, false]);
+    }
+
+    #[test]
+    fn drain_flushes_short_accepted_tail_before_final_and_ack() {
+        let (result, messages, calls, _) = fake_worker(
+            vec![
+                ParakeetRsCommand::Audio(vec![0.1; 800]),
+                ParakeetRsCommand::Drain(42),
+                // Must never be decoded after the terminal FIFO command.
+                ParakeetRsCommand::Audio(vec![0.7; 24_000]),
+                ParakeetRsCommand::Drain(99),
+            ],
+            None,
+        );
+        result.unwrap();
+        assert_eq!(calls, [true, false, false, false]);
+        let final_idx = messages.iter().position(|m| m["type"] == "final").unwrap();
+        assert_eq!(messages[final_idx]["text"], "first tail tail tail");
+        assert_eq!(
+            messages[final_idx + 1],
+            serde_json::json!({"type":"drained","request_id":42})
+        );
+        assert_eq!(final_idx + 2, messages.len());
+    }
+
+    #[test]
+    fn fifo_boundaries_and_language_commands_cannot_overtake_audio_or_drain() {
+        let (result, messages, calls, _) = fake_worker(
+            vec![
+                ParakeetRsCommand::Audio(vec![0.1; 800]),
+                ParakeetRsCommand::UtteranceEnd,
+                ParakeetRsCommand::Language("de".into()),
+                ParakeetRsCommand::Audio(vec![0.2; 800]),
+                ParakeetRsCommand::Drain(7),
+            ],
+            None,
+        );
+        result.unwrap();
+        assert_eq!(calls, [true, false, false, true, false, false, false]);
+        let speech = messages.iter().position(|m| m["type"] == "speech").unwrap();
+        let language = messages
+            .iter()
+            .position(|m| m["type"] == "languagechanged")
+            .unwrap();
+        let final_idx = messages.iter().position(|m| m["type"] == "final").unwrap();
+        assert!(speech < language && language < final_idx);
+        assert_eq!(messages.last().unwrap()["request_id"], 7);
+    }
+
+    #[test]
+    fn decoder_failure_during_audio_or_tail_never_acks() {
+        for fail_on in [1, 4] {
+            let (result, messages, _, _) = fake_worker(
+                vec![
+                    ParakeetRsCommand::Audio(vec![0.1; 24_000]),
+                    ParakeetRsCommand::Drain(42),
+                ],
+                Some(fail_on),
+            );
+            assert!(result.is_err());
+            assert!(!messages.iter().any(|m| m["type"] == "drained"));
+            assert!(!messages.iter().any(|m| m["type"] == "final"));
+        }
+    }
+
+    #[test]
+    fn legacy_stop_and_disconnection_never_ack() {
+        for commands in [
+            vec![
+                ParakeetRsCommand::Audio(vec![0.1; 800]),
+                ParakeetRsCommand::Stop,
+            ],
+            vec![ParakeetRsCommand::Audio(vec![0.1; 800])],
+        ] {
+            let (result, messages, calls, _) = fake_worker(commands, None);
+            result.unwrap();
+            assert_eq!(calls, [true, false, false, false]);
+            assert_eq!(messages.last().unwrap()["type"], "final");
+            assert!(!messages.iter().any(|m| m["type"] == "drained"));
+        }
+    }
+
+    #[test]
+    fn session_handle_queues_audio_boundary_language_and_drain_in_order() {
+        let (tx, rx) = bounded(4);
+        let handle = ParakeetRsSessionHandle {
+            tx,
+            multilingual: true,
+        };
+        assert!(handle.supports_ordered_drain());
+        assert!(handle.request_drain(0).is_err());
+        assert!(rx.is_empty());
+        handle.send_audio(vec![0.1]).unwrap();
+        handle.send_speech_boundary(false).unwrap();
+        handle.set_language("de".into()).unwrap();
+        handle.request_drain(42).unwrap();
+        drop(handle);
+        assert!(matches!(rx.recv().unwrap(), ParakeetRsCommand::Audio(_)));
+        assert!(matches!(
+            rx.recv().unwrap(),
+            ParakeetRsCommand::UtteranceEnd
+        ));
+        assert!(matches!(rx.recv().unwrap(), ParakeetRsCommand::Language(_)));
+        assert!(matches!(rx.recv().unwrap(), ParakeetRsCommand::Drain(42)));
+        assert!(rx.recv().is_err());
+    }
+
+    #[test]
+    fn drain_admission_is_bounded_and_cleanup_does_not_block() {
+        let (tx, rx) = bounded(1);
+        let handle = ParakeetRsSessionHandle {
+            tx,
+            multilingual: true,
+        };
+        handle.send_audio(vec![0.1]).unwrap();
+        assert!(handle.request_drain(42).is_err());
+        handle.request_stop();
+        drop(handle);
+        assert!(matches!(rx.recv().unwrap(), ParakeetRsCommand::Audio(_)));
+        assert!(rx.recv().is_err());
+    }
 
     #[test]
     fn onnx_runtime_search_skips_rejected_candidates() {

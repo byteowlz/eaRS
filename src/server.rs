@@ -430,6 +430,27 @@ async fn handle_connection(
     default_engine: EngineKind,
     transcription: TranscriptionOptions,
 ) -> Result<()> {
+    run_connection(
+        stream,
+        engine_manager,
+        registry,
+        validator,
+        default_engine,
+        transcription,
+        SESSION_FINISH_TIMEOUT,
+    )
+    .await
+}
+
+async fn run_connection(
+    stream: tokio::net::TcpStream,
+    engine_manager: EngineManager,
+    registry: Option<listener::StreamRegistry>,
+    validator: Option<listener::TokenValidator>,
+    default_engine: EngineKind,
+    transcription: TranscriptionOptions,
+    finish_timeout: Duration,
+) -> Result<()> {
     let _ = stream.set_nodelay(true);
 
     let ws_stream = accept_async(stream).await?;
@@ -467,18 +488,28 @@ async fn handle_connection(
     let mut current_engine = default_engine;
     let session = allocate_session(&engine_manager, current_engine, sink.clone(), &msg_tx)?;
     if session.is_none() {
+        if let Some(ref reg) = registry {
+            reg.unregister_stream(session_id);
+        }
+        // Allocation errors were queued before the writer exists.
+        while let Ok(msg) = msg_rx.try_recv() {
+            let _ = tokio::time::timeout(finish_timeout, ws_writer.send(msg)).await;
+        }
+        let _ = tokio::time::timeout(finish_timeout, ws_writer.close()).await;
         return Ok(());
     }
     let mut sink_for_status = sink.clone();
     send_engine_changed(&mut sink_for_status, current_engine);
+    send_capabilities(&mut sink_for_status, session.as_deref());
     eprintln!(
         "[ears-server] session {} allocated with engine {:?}",
         session_id, current_engine
     );
 
-    let writer = tokio::spawn(async move {
+    let mut writer = tokio::spawn(async move {
         while let Some(msg) = msg_rx.recv().await {
-            if ws_writer.send(msg).await.is_err() {
+            let closing = matches!(msg, Message::Close(_));
+            if ws_writer.send(msg).await.is_err() || closing {
                 break;
             }
         }
@@ -490,7 +521,7 @@ async fn handle_connection(
     let mut session_opt = session;
     let transcription_options = transcription.clone();
 
-    let reader = tokio::spawn(async move {
+    let mut reader = tokio::spawn(async move {
         let mut ws_debug = WsDebugLog::from_env(session_id);
         let mut codec = SessionCodec::Pcm;
         // Single engine-agnostic speech-boundary detector for this connection.
@@ -515,9 +546,16 @@ async fn handle_connection(
             if let Some(debug) = ws_debug.as_mut() {
                 debug.observe(current_engine, &msg_debug, result.is_ok());
             }
-            if let Err(err) = result {
-                eprintln!("[ears-server] failed to process initial message: {err}");
-                return;
+            match result {
+                Ok(ClientAction::Continue) => {}
+                Ok(ClientAction::Draining) => return,
+                Err(err) => {
+                    eprintln!("[ears-server] failed to process initial message: {err}");
+                    if let Some(sess) = session_opt.take() {
+                        sess.request_stop();
+                    }
+                    return;
+                }
             }
         }
 
@@ -539,9 +577,13 @@ async fn handle_connection(
                     if let Some(debug) = ws_debug.as_mut() {
                         debug.observe(current_engine, &msg_debug, result.is_ok());
                     }
-                    if let Err(err) = result {
-                        eprintln!("[ears-server] reader error: {err}");
-                        break;
+                    match result {
+                        Ok(ClientAction::Continue) => {}
+                        Ok(ClientAction::Draining) => return,
+                        Err(err) => {
+                            eprintln!("[ears-server] reader error: {err}");
+                            break;
+                        }
                     }
                 }
                 Ok(Some(Err(e))) => {
@@ -559,10 +601,26 @@ async fn handle_connection(
                 }
             }
         }
+        if let Some(sess) = session_opt.take() {
+            sess.request_stop();
+        }
     });
 
-    let _ = reader.await;
-    let _ = writer.await;
+    // An engine Close must release an idle reader. After reader exit, bound
+    // finalization and writes; expiry is never evidence of a successful drain.
+    tokio::select! {
+        _ = &mut writer => {
+            reader.abort();
+            let _ = reader.await;
+        }
+        _ = &mut reader => {
+            if tokio::time::timeout(finish_timeout, &mut writer).await.is_err() {
+                eprintln!("[ears-server] session {session_id} finalization timed out; no ACK synthesized");
+                writer.abort();
+                let _ = writer.await;
+            }
+        }
+    }
 
     if let Some(ref reg) = registry_clone {
         reg.unregister_stream(session_id);
@@ -679,7 +737,8 @@ async fn handle_listener_connection(
 
     let writer = tokio::spawn(async move {
         while let Some(msg) = msg_rx.recv().await {
-            if ws_writer.send(msg).await.is_err() {
+            let closing = matches!(msg, Message::Close(_));
+            if ws_writer.send(msg).await.is_err() || closing {
                 break;
             }
         }
@@ -797,6 +856,15 @@ async fn handle_listener_connection(
     Ok(())
 }
 
+/// Includes engine finalization and writes. Expiry closes without claiming success.
+const SESSION_FINISH_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Debug, PartialEq, Eq)]
+enum ClientAction {
+    Continue,
+    Draining,
+}
+
 fn handle_client_message(
     msg: Message,
     session: &mut Option<Box<dyn EngineSession>>,
@@ -807,25 +875,44 @@ fn handle_client_message(
     transcription: &TranscriptionOptions,
     codec: &mut SessionCodec,
     boundary_vad: &mut vad::BoundaryVad,
-) -> Result<()> {
+) -> Result<ClientAction> {
     match msg {
         Message::Binary(data) => {
             if data.is_empty() {
-                return Ok(());
+                return Ok(ClientAction::Continue);
             }
             let chunk = match codec {
-                SessionCodec::Pcm => decode_audio_chunk(&data),
+                SessionCodec::Pcm => {
+                    if data.len() % 4 != 0 {
+                        send_error(
+                            msg_tx,
+                            "invalid PCM sample framing; stream cannot be finalized safely",
+                        );
+                        return Err(anyhow!("incomplete PCM sample"));
+                    }
+                    decode_audio_chunk(&data)
+                }
                 SessionCodec::Opus(decoder) => match decoder.decode(&data) {
                     Ok(Some(pcm)) => pcm.to_vec(),
-                    Ok(None) => return Ok(()),
+                    Ok(None) => return Ok(ClientAction::Continue),
                     Err(err) => {
-                        eprintln!("[ears-server] opus decode failed: {err}");
-                        return Ok(());
+                        send_error(
+                            msg_tx,
+                            "Opus decode failed; stream cannot be finalized safely",
+                        );
+                        return Err(anyhow!("Opus decode failed: {err}"));
                     }
                 },
             };
             if chunk.is_empty() {
-                return Ok(());
+                return Ok(ClientAction::Continue);
+            }
+            if !chunk.iter().all(|sample| sample.is_finite()) {
+                send_error(
+                    msg_tx,
+                    "nonfinite audio sample; stream cannot be finalized safely",
+                );
+                return Err(anyhow!("nonfinite audio sample"));
             }
             // Detect at the single engine-agnostic ingress. Engines may take
             // ownership of emitting a boundary when they must flush first.
@@ -834,7 +921,7 @@ fn handle_client_message(
                 *session = allocate_session(engine_manager, *current_engine, sink.clone(), msg_tx)?;
                 if session.is_none() {
                     eprintln!("[ears-server] failed to allocate session when receiving audio");
-                    return Ok(());
+                    return Ok(ClientAction::Continue);
                 } else {
                     eprintln!(
                         "[ears-server] allocated session on engine {:?} for audio",
@@ -865,6 +952,27 @@ fn handle_client_message(
 
             if let Ok(cmd) = serde_json::from_str::<crate::WebSocketCommand>(&text) {
                 match cmd {
+                    crate::WebSocketCommand::Drain { request_id } => {
+                        if request_id == 0 {
+                            send_error(msg_tx, "drain request_id must be nonzero");
+                        } else if let Some(sess) = session.as_ref() {
+                            if !sess.supports_ordered_drain() {
+                                send_error(msg_tx, "ordered drain is not supported by this engine");
+                            } else {
+                                sess.request_drain(request_id).map_err(|err| {
+                                    send_error(msg_tx, "failed to queue ordered drain");
+                                    err
+                                })?;
+                                // Stop reading immediately. Do not enqueue ordinary Stop:
+                                // only the queued barrier may ACK. Handle disconnection
+                                // follows, rather than overtakes, the accepted Drain.
+                                session.take();
+                                return Ok(ClientAction::Draining);
+                            }
+                        } else {
+                            send_error(msg_tx, "no active engine session to drain");
+                        }
+                    }
                     crate::WebSocketCommand::SetLanguage { lang } => {
                         if let Some(sess) = session.as_mut() {
                             if sess.supports_language() {
@@ -886,6 +994,7 @@ fn handle_client_message(
                             }
                             *session = Some(new_session);
                             send_engine_changed(sink, *current_engine);
+                            send_capabilities(sink, session.as_deref());
                         }
                     }
                     crate::WebSocketCommand::SetEngine { engine } => {
@@ -907,6 +1016,7 @@ fn handle_client_message(
                                         *session = Some(new_session);
                                         *current_engine = kind;
                                         send_engine_changed(sink, kind);
+                                        send_capabilities(sink, session.as_deref());
                                         eprintln!(
                                             "[ears-server] SetEngine: successfully switched to {kind:?}"
                                         );
@@ -924,6 +1034,7 @@ fn handle_client_message(
                                 }
                             } else {
                                 send_engine_changed(sink, kind);
+                                send_capabilities(sink, session.as_deref());
                             }
                         } else {
                             send_error(msg_tx, "unknown engine");
@@ -960,7 +1071,13 @@ fn handle_client_message(
                     }
                     crate::WebSocketCommand::Pause | crate::WebSocketCommand::Resume => {}
                 }
-                return Ok(());
+                return Ok(ClientAction::Continue);
+            }
+            if serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .is_some_and(|value| value["type"] == "drain")
+            {
+                send_error(msg_tx, "invalid drain request_id (expected a nonzero u64)");
             }
         }
         Message::Close(_) => {
@@ -972,7 +1089,7 @@ fn handle_client_message(
         _ => {}
     }
 
-    Ok(())
+    Ok(ClientAction::Continue)
 }
 
 fn allocate_session(
@@ -1000,6 +1117,15 @@ pub(crate) fn current_timestamp() -> f64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs_f64()
+}
+
+fn send_capabilities(sink: &mut SessionSink, session: Option<&dyn EngineSession>) {
+    let features = if session.is_some_and(EngineSession::supports_ordered_drain) {
+        vec![crate::DICTATION_DRAIN_CAPABILITY.to_string()]
+    } else {
+        vec![]
+    };
+    sink.handle_message(WebSocketMessage::Capabilities { features });
 }
 
 fn send_status(sink: &mut SessionSink, transcription: &TranscriptionOptions, engine: EngineKind) {
@@ -1192,5 +1318,609 @@ struct PidFileGuard(PathBuf);
 impl Drop for PidFileGuard {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.0);
+    }
+}
+
+#[cfg(test)]
+mod drain_tests {
+    use super::engine::Engine;
+    use super::*;
+    use crossbeam_channel::{Receiver, Sender, unbounded};
+    use std::sync::Mutex;
+    use tokio::sync::Semaphore;
+    use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
+
+    type Client = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Mode {
+        Normal,
+        RejectDrain,
+        FailDrain,
+        CloseOnAudio,
+    }
+
+    #[derive(Clone)]
+    struct FakeEngine {
+        kind: EngineKind,
+        supported: bool,
+        mode: Mode,
+        gate: Option<Receiver<()>>,
+        early_final: bool,
+        quiet_stop: bool,
+        accepted: Arc<Mutex<Vec<f32>>>,
+        drains: Arc<Mutex<Vec<u64>>>,
+        permits: Arc<Semaphore>,
+    }
+
+    impl FakeEngine {
+        fn new(supported: bool) -> Self {
+            Self {
+                kind: EngineKind::Kyutai,
+                supported,
+                mode: Mode::Normal,
+                gate: None,
+                early_final: false,
+                quiet_stop: false,
+                accepted: Arc::new(Mutex::new(vec![])),
+                drains: Arc::new(Mutex::new(vec![])),
+                permits: Arc::new(Semaphore::new(1)),
+            }
+        }
+    }
+
+    enum Command {
+        Audio(Vec<f32>),
+        Drain(u64),
+        Stop,
+    }
+
+    struct FakeSession {
+        tx: Sender<Command>,
+        supported: bool,
+        reject: bool,
+        kind: EngineKind,
+    }
+
+    impl EngineSession for FakeSession {
+        fn engine(&self) -> EngineKind {
+            self.kind
+        }
+        fn send_audio(&self, pcm: Vec<f32>) -> Result<()> {
+            self.tx.send(Command::Audio(pcm)).map_err(Into::into)
+        }
+        fn set_language(&self, _: String) -> Result<()> {
+            Ok(())
+        }
+        fn supports_language(&self) -> bool {
+            false
+        }
+        fn supports_ordered_drain(&self) -> bool {
+            self.supported
+        }
+        fn request_drain(&self, id: u64) -> Result<()> {
+            if self.reject {
+                return Err(anyhow!("fake queue rejected drain"));
+            }
+            self.tx.send(Command::Drain(id)).map_err(Into::into)
+        }
+        fn request_stop(&self) {
+            let _ = self.tx.send(Command::Stop);
+        }
+    }
+
+    impl Engine for FakeEngine {
+        fn kind(&self) -> EngineKind {
+            self.kind
+        }
+        fn allocate(&self, mut sink: SessionSink) -> Result<Option<Box<dyn EngineSession>>> {
+            let Ok(permit) = self.permits.clone().try_acquire_owned() else {
+                return Ok(None);
+            };
+            let (tx, rx) = unbounded();
+            let engine = self.clone();
+            std::thread::spawn(move || {
+                let _permit = permit;
+                let mut text = Vec::new();
+                while let Ok(command) = rx.recv() {
+                    match command {
+                        Command::Audio(pcm) => {
+                            engine.accepted.lock().unwrap().extend(&pcm);
+                            text.extend(pcm.iter().map(|n| n.to_string()));
+                            if engine.mode == Mode::CloseOnAudio {
+                                sink.close();
+                                return;
+                            }
+                            if engine.early_final {
+                                sink.handle_message(WebSocketMessage::Final {
+                                    text: "unrelated final".into(),
+                                    words: vec![],
+                                });
+                            }
+                        }
+                        Command::Drain(request_id) => {
+                            engine.drains.lock().unwrap().push(request_id);
+                            if let Some(gate) = &engine.gate {
+                                gate.recv_timeout(Duration::from_secs(3)).unwrap();
+                            }
+                            if engine.mode != Mode::FailDrain {
+                                sink.handle_message(WebSocketMessage::Final {
+                                    text: text.join(" "),
+                                    words: vec![],
+                                });
+                                sink.handle_message(WebSocketMessage::Drained { request_id });
+                            }
+                            sink.close();
+                            return;
+                        }
+                        Command::Stop => {
+                            if !engine.quiet_stop {
+                                sink.handle_message(WebSocketMessage::Final {
+                                    text: text.join(" "),
+                                    words: vec![],
+                                });
+                                sink.close();
+                            }
+                            return;
+                        }
+                    }
+                }
+                // A raw disconnect is not a drain either.
+                if !engine.quiet_stop {
+                    sink.close();
+                }
+            });
+            Ok(Some(Box::new(FakeSession {
+                tx,
+                supported: self.supported,
+                reject: self.mode == Mode::RejectDrain,
+                kind: self.kind,
+            })))
+        }
+    }
+
+    async fn connect(
+        manager: EngineManager,
+        kind: EngineKind,
+        finish: Duration,
+    ) -> (
+        Client,
+        tokio::task::JoinHandle<Result<()>>,
+        listener::StreamRegistry,
+    ) {
+        let tcp = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = tcp.local_addr().unwrap();
+        let registry = listener::StreamRegistry::new();
+        let reg = registry.clone();
+        let server = tokio::spawn(async move {
+            let (stream, _) = tcp.accept().await?;
+            run_connection(
+                stream,
+                manager,
+                Some(reg),
+                None,
+                kind,
+                TranscriptionOptions {
+                    boundary_vad: false,
+                    ..Default::default()
+                },
+                finish,
+            )
+            .await
+        });
+        let (client, _) = connect_async(format!("ws://{address}")).await.unwrap();
+        (client, server, registry)
+    }
+
+    async fn setup(
+        engine: &FakeEngine,
+    ) -> (
+        Client,
+        tokio::task::JoinHandle<Result<()>>,
+        listener::StreamRegistry,
+    ) {
+        let mut manager = EngineManager::new();
+        manager.register(Arc::new(engine.clone()));
+        let (mut client, server, registry) =
+            connect(manager, engine.kind, Duration::from_millis(500)).await;
+        client
+            .send(Message::text(r#"{"type":"getstatus"}"#))
+            .await
+            .unwrap();
+        assert_eq!(next_json(&mut client).await["type"], "enginechanged");
+        let caps = next_json(&mut client).await;
+        assert_eq!(caps["type"], "capabilities");
+        assert_eq!(
+            caps["features"],
+            if engine.supported {
+                json!(["dictation-drain/1"])
+            } else {
+                json!([])
+            }
+        );
+        assert_eq!(next_json(&mut client).await["type"], "status");
+        (client, server, registry)
+    }
+
+    async fn next_json(client: &mut Client) -> serde_json::Value {
+        let message = tokio::time::timeout(Duration::from_secs(2), client.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        match message {
+            Message::Text(text) => serde_json::from_str(&text).unwrap(),
+            other => panic!("expected JSON, got {other:?}"),
+        }
+    }
+
+    async fn closed(client: &mut Client) {
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(2), client.next())
+                .await
+                .unwrap(),
+            Some(Ok(Message::Close(_))) | None
+        ));
+    }
+
+    async fn cleaned(
+        server: tokio::task::JoinHandle<Result<()>>,
+        registry: &listener::StreamRegistry,
+        engine: &FakeEngine,
+    ) {
+        tokio::time::timeout(Duration::from_secs(2), server)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(registry.list_active_streams().is_empty());
+        let permit = tokio::time::timeout(
+            Duration::from_secs(2),
+            engine.permits.clone().acquire_owned(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        drop(permit);
+    }
+
+    #[tokio::test]
+    async fn ws_bad_audio_closes_without_acknowledging_dropped_input() {
+        for (codec, data) in [
+            ("pcm", vec![1, 2, 3]),
+            ("pcm", f32::NAN.to_le_bytes().to_vec()),
+            ("opus", vec![0; 64]),
+        ] {
+            let engine = FakeEngine::new(true);
+            let (mut client, server, registry) = setup(&engine).await;
+            client
+                .send(Message::text(
+                    json!({"type":"setcodec", "codec":codec}).to_string(),
+                ))
+                .await
+                .unwrap();
+            client.send(Message::binary(data)).await.unwrap();
+            let _ = client
+                .send(Message::text(r#"{"type":"drain","request_id":17}"#))
+                .await;
+            assert_eq!(next_json(&mut client).await["type"], "error");
+            assert_eq!(next_json(&mut client).await["type"], "final"); // Legacy stop only, never ACK.
+            closed(&mut client).await;
+            cleaned(server, &registry, &engine).await;
+            assert!(engine.accepted.lock().unwrap().is_empty());
+            assert!(engine.drains.lock().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn ws_drain_orders_audio_final_ack_close_and_stops_reader() {
+        let (release, gate) = unbounded();
+        let mut engine = FakeEngine::new(true);
+        engine.gate = Some(gate);
+        engine.early_final = true;
+        let (mut client, server, registry) = setup(&engine).await;
+        for n in [1f32, 2f32] {
+            client
+                .send(Message::binary(n.to_le_bytes().to_vec()))
+                .await
+                .unwrap();
+        }
+        // An ordinary Final does not authorize an ACK.
+        assert_eq!(next_json(&mut client).await["text"], "unrelated final");
+        assert_eq!(next_json(&mut client).await["text"], "unrelated final");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), client.next())
+                .await
+                .is_err()
+        );
+
+        client
+            .send(Message::text(
+                r#"{"type":"drain","request_id":18446744073709551615}"#,
+            ))
+            .await
+            .unwrap();
+        // These frames follow the barrier and must not reach the engine.
+        let _ = client
+            .send(Message::binary(3f32.to_le_bytes().to_vec()))
+            .await;
+        let _ = client
+            .send(Message::text(r#"{"type":"drain","request_id":7}"#))
+            .await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), client.next())
+                .await
+                .is_err()
+        );
+        release.send(()).unwrap();
+
+        let final_message = next_json(&mut client).await;
+        assert_eq!(final_message["type"], "final");
+        assert_eq!(final_message["text"], "1 2");
+        assert_eq!(
+            next_json(&mut client).await,
+            json!({"type":"drained","request_id":u64::MAX})
+        );
+        closed(&mut client).await;
+        cleaned(server, &registry, &engine).await;
+        assert_eq!(*engine.accepted.lock().unwrap(), [1.0, 2.0]);
+        assert_eq!(*engine.drains.lock().unwrap(), [u64::MAX]);
+    }
+
+    #[tokio::test]
+    async fn ws_drain_as_first_frame_finalizes_empty_session() {
+        let engine = FakeEngine::new(true);
+        let mut manager = EngineManager::new();
+        manager.register(Arc::new(engine.clone()));
+        let (mut client, server, registry) =
+            connect(manager, engine.kind, Duration::from_millis(500)).await;
+        client
+            .send(Message::text(r#"{"type":"drain","request_id":1}"#))
+            .await
+            .unwrap();
+        assert_eq!(next_json(&mut client).await["type"], "enginechanged");
+        assert_eq!(
+            next_json(&mut client).await["features"],
+            json!(["dictation-drain/1"])
+        );
+        assert_eq!(next_json(&mut client).await["type"], "final");
+        assert_eq!(
+            next_json(&mut client).await,
+            json!({"type":"drained","request_id":1})
+        );
+        closed(&mut client).await;
+        cleaned(server, &registry, &engine).await;
+    }
+
+    #[tokio::test]
+    async fn ws_busy_allocation_does_not_advertise_or_leak_registration() {
+        let engine = FakeEngine::new(true);
+        let permit = engine.permits.clone().try_acquire_owned().unwrap();
+        let mut manager = EngineManager::new();
+        manager.register(Arc::new(engine.clone()));
+        let (mut client, server, registry) =
+            connect(manager, engine.kind, Duration::from_millis(500)).await;
+        client
+            .send(Message::text(r#"{"type":"drain","request_id":1}"#))
+            .await
+            .unwrap();
+        assert_eq!(next_json(&mut client).await["type"], "error");
+        closed(&mut client).await;
+        drop(permit);
+        cleaned(server, &registry, &engine).await;
+    }
+
+    #[tokio::test]
+    async fn ws_invalid_and_stale_messages_never_ack_or_poison_valid_drain() {
+        let engine = FakeEngine::new(true);
+        let (mut client, server, registry) = setup(&engine).await;
+        for raw_id in ["0", "-1", "1.0", "\"1\"", "null", "18446744073709551616"] {
+            client
+                .send(Message::text(format!(
+                    r#"{{"type":"drain","request_id":{raw_id}}}"#
+                )))
+                .await
+                .unwrap();
+            assert_eq!(next_json(&mut client).await["type"], "error");
+        }
+        client
+            .send(Message::text(r#"{"type":"drain"}"#))
+            .await
+            .unwrap();
+        assert_eq!(next_json(&mut client).await["type"], "error");
+        // An unsolicited/stale ACK-shaped client message is not a command.
+        client
+            .send(Message::text(r#"{"type":"drained","request_id":99}"#))
+            .await
+            .unwrap();
+        client
+            .send(Message::text(r#"{"type":"getstatus"}"#))
+            .await
+            .unwrap();
+        assert_eq!(next_json(&mut client).await["type"], "status");
+        assert!(engine.drains.lock().unwrap().is_empty());
+        client
+            .send(Message::text(r#"{"type":"drain","request_id":5}"#))
+            .await
+            .unwrap();
+        assert_eq!(next_json(&mut client).await["type"], "final");
+        assert_eq!(
+            next_json(&mut client).await,
+            json!({"type":"drained","request_id":5})
+        );
+        closed(&mut client).await;
+        cleaned(server, &registry, &engine).await;
+    }
+
+    #[tokio::test]
+    async fn ws_unsupported_engine_and_legacy_stop_never_ack() {
+        let engine = FakeEngine::new(false);
+        let (mut client, server, registry) = setup(&engine).await;
+        client
+            .send(Message::text(r#"{"type":"drain","request_id":1}"#))
+            .await
+            .unwrap();
+        assert_eq!(next_json(&mut client).await["type"], "error");
+        client
+            .send(Message::binary(9f32.to_le_bytes().to_vec()))
+            .await
+            .unwrap();
+        client.send(Message::text("stop")).await.unwrap();
+        let final_message = next_json(&mut client).await;
+        assert_eq!(final_message["type"], "final");
+        assert_eq!(final_message["text"], "9");
+        closed(&mut client).await;
+        cleaned(server, &registry, &engine).await;
+        assert!(engine.drains.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn ws_queue_and_worker_failures_never_ack() {
+        for mode in [Mode::RejectDrain, Mode::FailDrain] {
+            let mut engine = FakeEngine::new(true);
+            engine.mode = mode;
+            let (mut client, server, registry) = setup(&engine).await;
+            client
+                .send(Message::text(r#"{"type":"drain","request_id":1}"#))
+                .await
+                .unwrap();
+            if mode == Mode::RejectDrain {
+                assert_eq!(next_json(&mut client).await["type"], "error");
+                assert_eq!(next_json(&mut client).await["type"], "final");
+            }
+            closed(&mut client).await;
+            cleaned(server, &registry, &engine).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn ws_engine_close_releases_idle_reader_and_registry() {
+        let mut engine = FakeEngine::new(true);
+        engine.mode = Mode::CloseOnAudio;
+        let (mut client, server, registry) = setup(&engine).await;
+        client
+            .send(Message::binary(1f32.to_le_bytes().to_vec()))
+            .await
+            .unwrap();
+        closed(&mut client).await;
+        cleaned(server, &registry, &engine).await;
+    }
+
+    #[tokio::test]
+    async fn ws_peer_disconnect_releases_worker_and_registry() {
+        let engine = FakeEngine::new(true);
+        let (client, server, registry) = setup(&engine).await;
+        drop(client);
+        cleaned(server, &registry, &engine).await;
+    }
+
+    #[tokio::test]
+    async fn ws_finalization_deadline_never_synthesizes_ack() {
+        let (release, gate) = unbounded();
+        let mut engine = FakeEngine::new(true);
+        engine.gate = Some(gate);
+        let (mut client, server, registry) = setup(&engine).await;
+        client
+            .send(Message::text(r#"{"type":"drain","request_id":1}"#))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), server)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(registry.list_active_streams().is_empty());
+        // The socket is gone; a late successful worker must not deliver any ACK.
+        assert!(matches!(client.next().await, None | Some(Err(_))));
+        release.send(()).unwrap();
+        let _permit = tokio::time::timeout(
+            Duration::from_secs(2),
+            engine.permits.clone().acquire_owned(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    }
+
+    #[cfg(feature = "moonshine")]
+    #[tokio::test]
+    async fn ws_engine_change_revokes_and_restores_capabilities() {
+        let mut supported = FakeEngine::new(true);
+        supported.kind = EngineKind::Moonshine;
+        // This fixture intentionally does not close the shared sink on an old
+        // engine Stop. The unrelated production SetEngine shared-sink bug is
+        // not fixed or claimed tested here.
+        supported.quiet_stop = true;
+        let mut unsupported = FakeEngine::new(false);
+        unsupported.quiet_stop = true;
+        let mut manager = EngineManager::new();
+        manager.register(Arc::new(supported.clone()));
+        manager.register(Arc::new(unsupported.clone()));
+        let (mut client, server, registry) =
+            connect(manager, supported.kind, Duration::from_millis(500)).await;
+        client
+            .send(Message::text(r#"{"type":"getstatus"}"#))
+            .await
+            .unwrap();
+        assert_eq!(next_json(&mut client).await["type"], "enginechanged");
+        assert_eq!(
+            next_json(&mut client).await["features"],
+            json!(["dictation-drain/1"])
+        );
+        assert_eq!(next_json(&mut client).await["type"], "status");
+        // Same-engine selection also refreshes capabilities.
+        client
+            .send(Message::text(
+                r#"{"type":"setengine","engine":"moonshine"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(next_json(&mut client).await["type"], "enginechanged");
+        assert_eq!(
+            next_json(&mut client).await["features"],
+            json!(["dictation-drain/1"])
+        );
+        client
+            .send(Message::text(r#"{"type":"setengine","engine":"kyutai"}"#))
+            .await
+            .unwrap();
+        assert_eq!(next_json(&mut client).await["type"], "enginechanged");
+        assert_eq!(next_json(&mut client).await["features"], json!([]));
+        client
+            .send(Message::text(r#"{"type":"drain","request_id":1}"#))
+            .await
+            .unwrap();
+        assert_eq!(next_json(&mut client).await["type"], "error");
+        // Wait for the previous fixture worker's permit before reallocation.
+        let permit = tokio::time::timeout(
+            Duration::from_secs(2),
+            supported.permits.clone().acquire_owned(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        drop(permit);
+        client
+            .send(Message::text(
+                r#"{"type":"setengine","engine":"moonshine"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(next_json(&mut client).await["type"], "enginechanged");
+        assert_eq!(
+            next_json(&mut client).await["features"],
+            json!(["dictation-drain/1"])
+        );
+        client
+            .send(Message::text(r#"{"type":"drain","request_id":2}"#))
+            .await
+            .unwrap();
+        assert_eq!(next_json(&mut client).await["type"], "final");
+        assert_eq!(
+            next_json(&mut client).await,
+            json!({"type":"drained","request_id":2})
+        );
+        closed(&mut client).await;
+        cleaned(server, &registry, &supported).await;
     }
 }

@@ -698,6 +698,13 @@ test-client-vad-model model:
 preview-client-vad model audio:
     cargo run --locked --example client_vad_segments --features client-vad -- "{{model}}" "{{audio}}"
 
+# Capture inactivity, client loopback WS and ordered server finalization.
+# Native acoustic probes stay opt-in; this never opens the microphone.
+test-auto-pause:
+    cargo check --locked --all-targets --features client-vad,moonshine,parakeet-rs
+    cargo test --locked --lib --features client-vad,moonshine,parakeet-rs
+    cargo test --locked -p ears-ui --features ears/client-vad,ears/moonshine,ears/parakeet-rs
+
 # === Maintenance ===
 
 # Clean build artifacts

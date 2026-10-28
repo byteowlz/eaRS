@@ -123,6 +123,16 @@
           "default": false,
           "description": "Start dictation in paused mode (true) or live mode (false)"
         },
+        "auto_pause": {
+          "type": "object",
+          "description": "Opt-in capture-VAD silence pause with owned final/ACK drain. Requires client-vad and dictation-drain/1 server support; independent of recording retention.",
+          "properties": {
+            "idle_ms": {"type": "integer", "default": 0, "anyOf": [{"const": 0}, {"minimum": 500, "maximum": 3600000}], "description": "Zero disables; otherwise capture silence before starting finalization"},
+            "drain_timeout_ms": {"type": "integer", "default": 10000, "minimum": 100, "maximum": 60000, "description": "Maximum client finalization wait; timeout is failure, never success. Server also bounds completion."},
+            "vad": {"$ref": "#/properties/dictation/properties/audio_history/properties/client_vad"}
+          },
+          "additionalProperties": false
+        },
         "codec": {
           "type": "string",
           "enum": [
@@ -234,7 +244,7 @@
             },
             "client_vad": {
               "type": "object",
-              "description": "Optional client Silero segmentation; requires client-vad build. No automatic downloads or fallback if unavailable.",
+              "description": "Explicit local Silero model/runtime configuration; requires client-vad build. No automatic downloads or fallback if unavailable.",
               "required": ["model_path", "model_sha256", "runtime_path"],
               "properties": {
                 "model_path": {"type": "string", "minLength": 1},

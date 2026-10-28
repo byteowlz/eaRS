@@ -13,6 +13,7 @@
 //! state and forward user intent.
 
 pub mod audio_history;
+pub mod auto_pause;
 pub mod capture_segments;
 #[cfg(feature = "client-vad")]
 pub mod client_vad;
@@ -296,6 +297,8 @@ pub(crate) use vlog;
 /// State shared between the engine loop, the hotkey listener and handles.
 pub(crate) struct Shared {
     capturing: Mutex<bool>,
+    capture_generation: std::sync::atomic::AtomicU64,
+    ptt_held: AtomicBool,
     state: Mutex<DictationState>,
     hotkey_mode: Mutex<crate::config::DictationHotkeyMode>,
     escape_cancels: Mutex<bool>,
@@ -322,6 +325,8 @@ impl Shared {
     ) -> Self {
         Self {
             capturing: Mutex::new(capturing),
+            capture_generation: std::sync::atomic::AtomicU64::new(0),
+            ptt_held: AtomicBool::new(false),
             state: Mutex::new(DictationState::Inactive),
             hotkey_mode: Mutex::new(config.hotkeys.mode),
             running: AtomicBool::new(true),
@@ -356,6 +361,16 @@ impl Shared {
         *self.capturing.lock().unwrap()
     }
 
+    pub(crate) fn capture_generation(&self) -> u64 {
+        self.capture_generation.load(Ordering::SeqCst)
+    }
+    pub(crate) fn ptt_held(&self) -> bool {
+        self.ptt_held.load(Ordering::SeqCst)
+    }
+    pub(crate) fn set_ptt_held(&self, held: bool) {
+        self.ptt_held.store(held, Ordering::SeqCst);
+    }
+
     pub(crate) fn state(&self) -> DictationState {
         *self.state.lock().unwrap()
     }
@@ -366,6 +381,7 @@ impl Shared {
 
     pub(crate) fn set_hotkey_mode(&self, mode: crate::config::DictationHotkeyMode) {
         *self.hotkey_mode.lock().unwrap() = mode;
+        self.ptt_held.store(false, Ordering::SeqCst);
     }
 
     pub(crate) fn escape_cancels(&self) -> bool {
@@ -391,6 +407,7 @@ impl Shared {
             return false;
         }
         *guard = on;
+        self.capture_generation.fetch_add(1, Ordering::SeqCst);
         drop(guard);
         if !on {
             self.wake_started.store(false, Ordering::SeqCst);
@@ -407,6 +424,7 @@ impl Shared {
     pub(crate) fn toggle(&self) -> bool {
         let mut guard = self.capturing.lock().unwrap();
         *guard = !*guard;
+        self.capture_generation.fetch_add(1, Ordering::SeqCst);
         let on = *guard;
         drop(guard);
         self.set_state(if on {

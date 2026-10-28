@@ -448,6 +448,14 @@ Unchanged live words omit the `replaced` field by default:
 
 Buffers flush every few seconds, after enough events, on disconnect, and on shutdown. This avoids writing to disk for every live word while keeping recent dictation persisted.
 
+## Automatic pause (opt-in)
+
+`[dictation.auto_pause] idle_ms = 3000` requests a pause after three seconds of
+capture-VAD silence, then rearms wake detection only after owned final results
+have drained. It requires matching client/server support, is independent of
+recording retention, and never cuts a held push-to-talk key. Default: off.
+See [configuration, protocol and qualification limits](docs/auto-pause.md).
+
 ## Audio history (opt-in)
 
 With `[dictation.audio_history] enabled = true`, dictation also keeps the audio of every committed utterance, so your own dictation becomes training and evaluation data (your voice, microphones and vocabulary). It is off by default and never enabled implicitly. While it is on, the "Dictation enabled" notification says `(audio history on)` and `ears dictation status` reports it.

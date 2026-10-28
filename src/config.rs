@@ -140,6 +140,9 @@ pub struct DictationConfig {
     pub type_live_words: bool,
     #[serde(default)]
     pub start_paused: bool,
+    /// Capture-side silence timeout with acknowledged ASR finalization.
+    #[serde(default)]
+    pub auto_pause: crate::dictation::auto_pause::AutoPauseConfig,
     /// Audio transport codec for dictation: "pcm" (default) or "opus".
     #[serde(default = "default_audio_codec")]
     pub codec: String,
@@ -328,6 +331,7 @@ impl Default for DictationConfig {
             enabled: false,
             type_live_words: true,
             start_paused: false,
+            auto_pause: Default::default(),
             codec: default_audio_codec(),
             default_server: default_server_alias(),
             servers: default_servers(),
@@ -598,9 +602,15 @@ ref_audio = "~/.local/share/ears/ref_audio"
     #[test]
     fn moonshine_defaults_to_public_base_and_accepts_local_export() {
         assert!(AppConfig::default().moonshine.model_dir.is_none());
-        let config: MoonshineConfig = toml::from_str("model_dir = \"/private/local-export\"").unwrap();
+        let config: MoonshineConfig =
+            toml::from_str("model_dir = \"/private/local-export\"").unwrap();
         assert_eq!(config.model_dir.as_deref(), Some("/private/local-export"));
-        assert!(toml::from_str::<MoonshineConfig>("").unwrap().model_dir.is_none());
+        assert!(
+            toml::from_str::<MoonshineConfig>("")
+                .unwrap()
+                .model_dir
+                .is_none()
+        );
     }
 
     #[test]

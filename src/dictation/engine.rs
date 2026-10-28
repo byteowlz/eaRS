@@ -62,13 +62,98 @@ enum WriterCommand {
     Stop,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Flow {
     Continue,
     Reconnect,
+    Restart,
+    DrainedPause,
+    DrainedResume,
     Exit,
 }
 
+#[derive(Default)]
+struct AutoPauseSession {
+    runtime: Option<super::auto_pause::AutoPause>,
+    supported: bool,
+    capabilities_known: bool,
+    capture_generation: Option<u64>,
+    warned: bool,
+    frozen: std::collections::VecDeque<Vec<f32>>,
+    frozen_samples: usize,
+    replay: std::collections::VecDeque<Vec<f32>>,
+    words: Vec<String>,
+    word_bytes: usize,
+    word_overflow: bool,
+}
+impl AutoPauseSession {
+    fn draining(&self) -> bool {
+        self.runtime
+            .as_ref()
+            .is_some_and(|auto| auto.control.draining())
+    }
+    fn accepts(&self, generation: u64) -> bool {
+        self.runtime
+            .as_ref()
+            .is_none_or(|auto| auto.control.accepts(generation))
+    }
+    fn clear_audio(&mut self) {
+        self.frozen.clear();
+        self.replay.clear();
+        self.frozen_samples = 0;
+    }
+    fn freeze(&mut self, chunk: Vec<f32>) -> Result<()> {
+        let limit = self
+            .runtime
+            .as_ref()
+            .context("auto-pause detector unavailable")?
+            .buffer_limit;
+        anyhow::ensure!(
+            self.frozen_samples.saturating_add(chunk.len()) <= limit,
+            "auto-pause replay buffer exceeded its bound"
+        );
+        self.frozen_samples += chunk.len();
+        self.frozen.push_back(chunk);
+        Ok(())
+    }
+    fn resume_audio(&mut self) {
+        self.replay = std::mem::take(&mut self.frozen);
+        self.frozen_samples = 0;
+    }
+    fn reset_words(&mut self) {
+        self.words.clear();
+        self.word_bytes = 0;
+        self.word_overflow = false;
+    }
+    fn note_word(&mut self, text: &str) {
+        if self.runtime.is_none() || self.word_overflow {
+            return;
+        }
+        for word in text.split_whitespace() {
+            if self.word_bytes.saturating_add(word.len() + 1) > 262_144 {
+                self.word_overflow = true;
+                return;
+            }
+            self.word_bytes += word.len() + 1;
+            self.words.push(word.to_owned());
+        }
+    }
+    fn missing_final_words(&self, text: &str) -> Result<Vec<String>> {
+        anyhow::ensure!(
+            !self.word_overflow && text.len() <= 262_144,
+            "final transcript exceeds reconciliation bound"
+        );
+        let words: Vec<_> = text.split_whitespace().map(str::to_owned).collect();
+        anyhow::ensure!(
+            words.starts_with(&self.words),
+            "final transcript does not match the stream word prefix; refusing to guess or retype"
+        );
+        Ok(words[self.words.len()..].to_vec())
+    }
+}
+
 struct Engine {
+    auto_pause: AutoPauseSession,
     config: AppConfig,
     options: DictationOptions,
     shared: Arc<Shared>,
@@ -242,7 +327,23 @@ pub(crate) async fn run(
         }
     };
 
+    let auto_pause = match super::auto_pause::AutoPause::from_config(
+        &config.dictation.auto_pause,
+        config.dictation.audio_history.client_vad.as_ref(),
+    ) {
+        Ok(runtime) => AutoPauseSession {
+            runtime,
+            ..Default::default()
+        },
+        Err(err) => {
+            shared.emit(DictationEvent::Error {
+                message: format!("auto-pause unavailable: {err:#}"),
+            });
+            AutoPauseSession::default()
+        }
+    };
     let mut engine = Engine {
+        auto_pause,
         history,
         router: {
             let mut router = Router::new(config.voice_commands.mode);
@@ -327,6 +428,12 @@ impl Engine {
                     if matches!(flow, Flow::Exit) || !self.shared.is_running() {
                         break;
                     }
+                    if matches!(
+                        flow,
+                        Flow::Restart | Flow::DrainedPause | Flow::DrainedResume
+                    ) {
+                        continue;
+                    }
                     vlog!("Disconnected, reconnecting in 2s...");
                 }
                 Err(e) => {
@@ -370,6 +477,19 @@ impl Engine {
         >,
         audio_rx: Receiver<Vec<f32>>,
     ) -> Result<Flow> {
+        self.auto_pause.supported = false;
+        self.auto_pause.capabilities_known = false;
+        self.auto_pause.warned = false;
+        let connected_at = Instant::now();
+        self.auto_pause.reset_words();
+        let generation = self.shared.capture_generation();
+        if self.shared.is_capturing() {
+            if let Some(auto) = &mut self.auto_pause.runtime {
+                if !auto.control.active(generation) {
+                    auto.start(generation);
+                }
+            }
+        }
         let (mut write, mut read) = ws_stream.split();
         let (writer_tx, mut writer_rx) = mpsc::unbounded_channel::<WriterCommand>();
         self.writer = Some(writer_tx.clone());
@@ -406,7 +526,7 @@ impl Engine {
         // session. No detached receiver may steal chunks after reconnect.
 
         let ping_sent = self.ping_sent.clone();
-        let writer_handle = tokio::spawn(async move {
+        let mut writer_handle = tokio::spawn(async move {
             while let Some(cmd) = writer_rx.recv().await {
                 match cmd {
                     WriterCommand::Audio(bytes) => {
@@ -441,70 +561,40 @@ impl Engine {
             if !self.shared.is_running() {
                 break Flow::Exit;
             }
-            let mut exit = false;
-            while let Ok(command) = self.commands.try_recv() {
-                if matches!(self.handle_command(command)?, Flow::Exit) {
-                    exit = true;
-                }
+            if let Some(flow) = self.poll_commands()? {
+                break flow;
             }
-            if exit {
-                break Flow::Exit;
+            if let Some(flow) = self.advance_capture(&audio_rx)? {
+                break flow;
             }
-
-            let capturing = self.shared.is_capturing();
-            if capturing != self.was_capturing {
-                self.on_capture_edge(capturing)?;
+            if let Some(flow) = self.capture_batch(&audio_rx, &mut opus_encoder)? {
+                break flow;
             }
-            if capturing {
-                self.evaluate_profiles(false)?;
+            if let Some(flow) = self.begin_idle_drain(&audio_rx, &mut opus_encoder, connected_at)? {
+                break flow;
             }
-            let context = if self
-                .history
-                .as_ref()
-                .is_some_and(AudioHistory::client_vad_enabled)
-            {
-                capture_context(self.effective_lang.clone())
-            } else {
-                CommitContext::default()
-            };
-            // Bound each batch so controls and recognition keep making progress.
-            for chunk in audio_rx.try_iter().take(32) {
-                if !capturing {
-                    continue;
-                }
-                let retention_error = self
-                    .history
-                    .as_mut()
-                    .and_then(|history| history.record_capture(&chunk, &context).err());
-                if let Some(err) = retention_error {
-                    self.history = None; // Never fall back to known-clipped slicing.
-                    self.shared.audio_history.store(false, Ordering::SeqCst);
-                    let message = format!("retention stopped: {err:#}");
-                    self.shared.emit(DictationEvent::AudioHistory {
-                        active: false,
-                        note: Some(message.clone()),
-                    });
-                    self.shared.emit(DictationEvent::Error { message });
-                }
-                let bytes = match opus_encoder.as_mut() {
-                    Some(enc) => enc.encode_page(&chunk).context("opus encode failed")?,
-                    None => encode_chunk(&chunk),
-                };
-                if !bytes.is_empty() {
-                    let _ = writer_tx.send(WriterCommand::Audio(bytes));
-                }
-            }
-            if last_ping.elapsed() >= PING_INTERVAL {
+            if last_ping.elapsed() >= PING_INTERVAL && !self.auto_pause.draining() {
                 last_ping = Instant::now();
                 let _ = writer_tx.send(WriterCommand::Ping);
             }
 
-            match tokio::time::timeout(READ_TIMEOUT, read.next()).await {
+            let incoming = tokio::time::timeout(READ_TIMEOUT, read.next()).await;
+            if self.auto_pause.draining() {
+                if let Some(flow) = self.poll_commands()? {
+                    break flow;
+                }
+                if let Some(flow) = self.interrupted_drain()? {
+                    break flow;
+                }
+            }
+            match incoming {
                 Ok(Some(message)) => match message {
                     Ok(Message::Text(text)) => {
                         vlog!("[WS RECEIVED] {}", text);
                         if let Ok(json) = serde_json::from_str::<Value>(&text) {
-                            self.handle_message(&json)?;
+                            if let Some(flow) = self.handle_session_message(&json)? {
+                                break flow;
+                            }
                         } else {
                             vlog!("[ERROR] Failed to parse JSON");
                         }
@@ -525,9 +615,21 @@ impl Engine {
                     }
                     Ok(Message::Close(_)) => {
                         vlog!("WebSocket closed");
+                        if self.auto_pause.draining()
+                            && self.auto_pause.accepts(self.shared.capture_generation())
+                        {
+                            break self.auto_pause_failure(
+                                "server closed without an owned finalization acknowledgement",
+                            );
+                        }
                         break Flow::Reconnect;
                     }
                     Err(e) => {
+                        if self.auto_pause.draining() {
+                            break self.auto_pause_failure(
+                                "server connection failed before finalization acknowledgement",
+                            );
+                        }
                         vlog!("WebSocket error: {}", e);
                         self.shared.emit(DictationEvent::Error {
                             message: format!("connection error: {e}"),
@@ -536,7 +638,16 @@ impl Engine {
                     }
                     _ => {}
                 },
-                Ok(None) => break Flow::Reconnect,
+                Ok(None) => {
+                    if self.auto_pause.draining()
+                        && self.auto_pause.accepts(self.shared.capture_generation())
+                    {
+                        break self.auto_pause_failure(
+                            "server disconnected before finalization acknowledgement",
+                        );
+                    }
+                    break Flow::Reconnect;
+                }
                 Err(_) => {
                     // Timed out waiting for WS data; loop back so commands are
                     // observed promptly. Only retain text that could begin a
@@ -558,10 +669,22 @@ impl Engine {
         // half-heard command or let it join the first words after reconnect.
         self.router.discard_pending();
         self.utterance.clear();
-        self.discard_history();
+        if flow != Flow::DrainedResume {
+            self.discard_history();
+            self.auto_pause.clear_audio();
+            if let Some(auto) = &mut self.auto_pause.runtime {
+                auto.stop();
+            }
+        }
         self.buffer.discard();
         let _ = writer_tx.send(WriterCommand::Stop);
-        let _ = writer_handle.await;
+        if tokio::time::timeout(Duration::from_secs(1), &mut writer_handle)
+            .await
+            .is_err()
+        {
+            writer_handle.abort();
+            let _ = writer_handle.await;
+        }
         self.writer = None;
         self.backend.latency_ms = None;
         if let Some(typed) = self.buffer.flush_all(
@@ -575,13 +698,163 @@ impl Engine {
         Ok(flow)
     }
 
+    fn abort_auto_pause(&mut self) {
+        if let Some(auto) = &mut self.auto_pause.runtime {
+            auto.stop();
+        }
+        self.auto_pause.clear_audio();
+        self.was_capturing = false; // New capture generation starts a fresh insertion session.
+        self.auto_pause.capture_generation = None;
+    }
+
+    fn auto_pause_failure(&mut self, message: &str) -> Flow {
+        self.buffer.discard();
+        self.router.discard_pending();
+        self.utterance.clear();
+        self.discard_history();
+        self.abort_auto_pause();
+        self.shared.set_capturing(false);
+        self.shared.emit(DictationEvent::Error {
+            message: format!("auto-pause: {message}"),
+        });
+        Flow::Restart
+    }
+
+    fn handle_session_message(&mut self, json: &Value) -> Result<Option<Flow>> {
+        use super::auto_pause::{Completion, DRAIN_CAPABILITY};
+        let generation = self.shared.capture_generation();
+        if !self.auto_pause.accepts(generation) {
+            return Ok(None);
+        }
+        match json.get("type").and_then(Value::as_str) {
+            Some("capabilities") => {
+                self.auto_pause.capabilities_known = true;
+                self.auto_pause.supported = json
+                    .get("features")
+                    .and_then(Value::as_array)
+                    .is_some_and(|features| {
+                        features
+                            .iter()
+                            .any(|value| value.as_str() == Some(DRAIN_CAPABILITY))
+                    });
+                if self.auto_pause.draining() && !self.auto_pause.supported {
+                    return Ok(Some(self.auto_pause_failure(
+                        "server withdrew ordered-drain support during finalization",
+                    )));
+                }
+            }
+            Some("enginechanged") => {
+                if self.auto_pause.draining() {
+                    return Ok(Some(
+                        self.auto_pause_failure("engine changed during finalization"),
+                    ));
+                }
+                self.auto_pause.reset_words();
+                self.handle_message(json)?;
+            }
+            Some("drained") if self.auto_pause.draining() => {
+                let Some(id) = json.get("request_id").and_then(Value::as_u64) else {
+                    return Ok(Some(
+                        self.auto_pause_failure("invalid finalization acknowledgement"),
+                    ));
+                };
+                if self.shared.ptt_held() {
+                    self.auto_pause
+                        .runtime
+                        .as_mut()
+                        .unwrap()
+                        .control
+                        .resume(generation);
+                }
+                let outcome = self
+                    .auto_pause
+                    .runtime
+                    .as_mut()
+                    .unwrap()
+                    .control
+                    .acknowledge(id, generation);
+                match outcome {
+                    Ok(Completion::Stale) => {}
+                    Ok(Completion::Resume) => {
+                        self.auto_pause.resume_audio();
+                        eprintln!(
+                            "auto-pause: speech resumed during finalization; replaying on a new stream"
+                        );
+                        return Ok(Some(Flow::DrainedResume));
+                    }
+                    Ok(Completion::Paused) => {
+                        self.shared.set_capturing(false);
+                        self.on_capture_edge(false)?;
+                        eprintln!("auto-pause: paused after finalized capture");
+                        return Ok(Some(Flow::DrainedPause));
+                    }
+                    Err(err) => return Ok(Some(self.auto_pause_failure(&err.to_string()))),
+                }
+            }
+            Some("final") if self.auto_pause.draining() => {
+                let Some(text) = json.get("text").and_then(Value::as_str) else {
+                    return Ok(Some(
+                        self.auto_pause_failure("final result is missing text"),
+                    ));
+                };
+                let suffix = match self.auto_pause.missing_final_words(text) {
+                    Ok(suffix) => suffix,
+                    Err(err) => return Ok(Some(self.auto_pause_failure(&err.to_string()))),
+                };
+                for word in suffix {
+                    if !self.shared.is_capturing() || self.shared.capture_generation() != generation
+                    {
+                        return Ok(None);
+                    }
+                    self.auto_pause.note_word(&word);
+                    self.on_word(&word)?;
+                }
+                if !self.shared.is_capturing() || self.shared.capture_generation() != generation {
+                    return Ok(None);
+                }
+                if !self.utterance.is_empty() {
+                    self.complete_utterance()?;
+                    self.just_finished = true;
+                }
+                if self.shared.capture_generation() == generation {
+                    if let Some(auto) = &mut self.auto_pause.runtime {
+                        auto.control.final_seen(generation);
+                    }
+                }
+            }
+            _ => {
+                if json.get("type").and_then(Value::as_str) == Some("word") {
+                    if let Some(word) = json.get("word").and_then(Value::as_str) {
+                        self.auto_pause.note_word(word);
+                    }
+                }
+                self.handle_message(json)?;
+            }
+        }
+        Ok(None)
+    }
+
     fn send_text(&self, text: String) {
         if let Some(writer) = &self.writer {
             let _ = writer.send(WriterCommand::Text(text));
         }
     }
 
+    fn poll_commands(&mut self) -> Result<Option<Flow>> {
+        while let Ok(command) = self.commands.try_recv() {
+            let flow = self.handle_command(command)?;
+            if matches!(flow, Flow::Exit | Flow::Restart) {
+                return Ok(Some(flow));
+            }
+        }
+        Ok(None)
+    }
+
     fn handle_command(&mut self, command: DictationCommand) -> Result<Flow> {
+        let draining = self.auto_pause.draining();
+        let keep_active = matches!(&command, DictationCommand::SetCapturing(true))
+            && self.shared.is_capturing()
+            && self.auto_pause.accepts(self.shared.capture_generation());
         match command {
             DictationCommand::SetCapturing(on) => {
                 self.shared.set_capturing(on);
@@ -670,6 +943,19 @@ impl Engine {
                 return Ok(Flow::Exit);
             }
         }
+        if draining {
+            if keep_active {
+                if let Some(auto) = &mut self.auto_pause.runtime {
+                    auto.control.resume(self.shared.capture_generation());
+                }
+            } else {
+                if !self.shared.is_capturing() && self.was_capturing {
+                    self.on_capture_edge(false)?;
+                }
+                self.abort_auto_pause();
+                return Ok(Flow::Restart);
+            }
+        }
         Ok(Flow::Continue)
     }
 
@@ -685,7 +971,12 @@ impl Engine {
 
     fn on_capture_edge(&mut self, capturing: bool) -> Result<()> {
         self.was_capturing = capturing;
+        self.auto_pause.capture_generation = Some(self.shared.capture_generation());
         if capturing {
+            self.auto_pause.clear_audio();
+            if let Some(auto) = &mut self.auto_pause.runtime {
+                auto.start(self.shared.capture_generation());
+            }
             self.router.discard_pending();
             self.utterance.clear();
             if let Some(history) = self.history.as_mut() {
@@ -695,7 +986,15 @@ impl Engine {
             self.last_profile_eval = None;
             self.evaluate_profiles(true)?;
         } else {
-            let context = capture_context(self.effective_lang.clone());
+            if let Some(auto) = &mut self.auto_pause.runtime {
+                auto.stop();
+            }
+            self.auto_pause.clear_audio();
+            let context = if self.history.is_some() {
+                capture_context(self.effective_lang.clone())
+            } else {
+                CommitContext::default()
+            };
             if let Some(history) = self.history.as_mut() {
                 if let Err(err) = history.end_capture(&context) {
                     self.shared.emit(DictationEvent::Error {
@@ -816,6 +1115,9 @@ impl Engine {
     }
 
     fn handle_message(&mut self, json: &Value) -> Result<()> {
+        if !self.auto_pause.accepts(self.shared.capture_generation()) {
+            return Ok(());
+        }
         let is_capturing = self.shared.is_capturing();
         let Some(event_type) = json.get("type").and_then(|v| v.as_str()) else {
             return Ok(());
@@ -871,7 +1173,9 @@ impl Engine {
         self.just_finished = false;
         if self.speaker_gate_enabled()
             && (self.utterance.len() >= crate::speaker_gate::MAX_TEXT_BYTES
-                || self.utterance.iter().map(String::len).sum::<usize>() + self.utterance.len() + word.len()
+                || self.utterance.iter().map(String::len).sum::<usize>()
+                    + self.utterance.len()
+                    + word.len()
                     > crate::speaker_gate::MAX_TEXT_BYTES)
         {
             // No gated text ever reaches typing buffers, including oversized
@@ -896,7 +1200,8 @@ impl Engine {
             return Ok(());
         }
         if self.shared.take_wake_started() {
-            self.router.arm_wake_strip(&self.config.dictation.wake.strip_words, 3);
+            self.router
+                .arm_wake_strip(&self.config.dictation.wake.strip_words, 3);
         }
         if let Some(safe) = self.router.word(word) {
             self.buffer.push(safe);
@@ -1013,7 +1318,8 @@ impl Engine {
             self.router.discard_pending();
             self.discard_history();
             self.shared.emit(DictationEvent::VoiceDecision {
-                raw: String::new(), normalized: String::new(),
+                raw: String::new(),
+                normalized: String::new(),
                 outcome: "speaker_gate_unavailable_audio_binding".into(),
             });
             self.shared.emit(DictationEvent::Error {
@@ -1094,6 +1400,15 @@ fn capture_context(language: Option<String>) -> CommitContext {
     }
 }
 
+fn flush_opus_for_drain(encoder: &mut kaudio::ogg_opus::Encoder) -> Result<Vec<u8>> {
+    // kaudio 0.2.1 uses 960-sample encoder frames with no flush API. One full
+    // zero frame emits every retained source sample; any residual is only pad.
+    // Padding is transport-only, never part of retained PCM or the VAD clock.
+    encoder
+        .encode_page(&[0.0; 960])
+        .context("flushing retained Opus samples")
+}
+
 fn encode_chunk(chunk: &[f32]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(chunk.len() * 4);
     for sample in chunk {
@@ -1101,6 +1416,13 @@ fn encode_chunk(chunk: &[f32]) -> Vec<u8> {
     }
     bytes
 }
+
+#[path = "engine_capture.rs"]
+mod capture;
+
+#[cfg(all(test, feature = "client-vad"))]
+#[path = "engine_auto_pause_tests.rs"]
+mod auto_pause_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1147,6 +1469,7 @@ mod tests {
             was_capturing: true,
             utterance: Vec::new(),
             router,
+            auto_pause: Default::default(),
             registry: Registry::new(dir.join("commands.toml")),
             just_finished: false,
             ping_sent: Arc::new(Mutex::new(None)),
@@ -1158,9 +1481,13 @@ mod tests {
         };
         let say = |engine: &mut Engine, words: &[&str]| {
             for word in words {
-                engine.handle_message(&serde_json::json!({"type":"word","word":word})).unwrap();
+                engine
+                    .handle_message(&serde_json::json!({"type":"word","word":word}))
+                    .unwrap();
             }
-            engine.handle_message(&serde_json::json!({"type":"speech","active":false})).unwrap();
+            engine
+                .handle_message(&serde_json::json!({"type":"speech","active":false}))
+                .unwrap();
         };
         // the wake path set capture on and marked the pre-roll
         shared.mark_wake_started();
@@ -1170,7 +1497,11 @@ mod tests {
         say(&mut engine, &["Okto,", "stopp."]);
         assert_eq!(&*typed.lock().unwrap(), "schreib bitte ");
         assert!(!shared.is_capturing(), "stop phrase paused capture");
-        assert!(events_rx.try_iter().any(|e| matches!(e, DictationEvent::Cancelled)));
+        assert!(
+            events_rx
+                .try_iter()
+                .any(|e| matches!(e, DictationEvent::Cancelled))
+        );
         // a hotkey start does not strip anything
         shared.set_capturing(true);
         say(&mut engine, &["Hey", "Anna"]);
@@ -1215,6 +1546,7 @@ mod tests {
             was_capturing: true,
             utterance: Vec::new(),
             router: Router::new(VoiceMode::CommandAware),
+            auto_pause: Default::default(),
             registry: Registry::new(path),
             just_finished: false,
             ping_sent: Arc::new(Mutex::new(None)),
@@ -1355,7 +1687,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    fn retention_engine(
+    pub(super) fn retention_engine(
         config: AppConfig,
         history: Option<AudioHistory>,
     ) -> (Engine, Arc<Mutex<String>>) {
@@ -1383,6 +1715,7 @@ mod tests {
             was_capturing: true,
             utterance: Vec::new(),
             router: Router::new(VoiceMode::Dictation),
+            auto_pause: Default::default(),
             registry: Registry::new(std::env::temp_dir().join("ears-no-commands.toml")),
             just_finished: false,
             ping_sent: Arc::new(Mutex::new(None)),
@@ -1396,7 +1729,7 @@ mod tests {
     }
 
     /// Synthetic audio through the dictation message path, as the session's
-    /// audio thread would feed it, without a microphone or server.
+    /// audio consumer would feed it, without a microphone or server.
     fn dictate(
         engine: &mut Engine,
         tap: Option<&super::super::audio_history::AudioTap>,
@@ -1426,7 +1759,8 @@ mod tests {
     #[test]
     fn audio_history_keeps_one_wav_per_utterance_only_when_enabled() {
         use super::super::audio_history::{self, AudioHistoryConfig};
-        let root = std::env::temp_dir().join(format!("ears-engine-history-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("ears-engine-history-{}", uuid::Uuid::new_v4()));
 
         // Off (the default): a whole dictation session writes nothing.
         let mut config = AppConfig::default();
@@ -1434,7 +1768,8 @@ mod tests {
         config.transcripts.enabled = false;
         config.dictation.audio_history.path = root.join("off").to_string_lossy().to_string();
         assert!(!config.dictation.audio_history.enabled);
-        let history = AudioHistory::from_config(&config.dictation.audio_history, None, None).unwrap();
+        let history =
+            AudioHistory::from_config(&config.dictation.audio_history, None, None).unwrap();
         assert!(history.is_none());
         let (mut engine, typed) = retention_engine(config, history);
         dictate(&mut engine, None, &["hallo", "welt"]);

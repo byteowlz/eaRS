@@ -182,6 +182,9 @@ pub struct WordTimestamp {
 /// # With timestamps and VAD
 /// ears --live --ws 8080 --timestamps --vad
 /// ```
+/// Negotiated ordered-finalization capability. Never an authorization token.
+pub const DICTATION_DRAIN_CAPABILITY: &str = "dictation-drain/1";
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum WebSocketMessage {
@@ -208,6 +211,15 @@ pub enum WebSocketMessage {
         active: bool,
         timestamp: f64,
     },
+    /// Completed transcript. For `dictation-drain/1`, the drain's terminal
+    /// `Final.text` is cumulative for the allocated engine session, not merely
+    /// its last utterance: its whitespace-token sequence must begin with all
+    /// tokens already emitted through that session's `Word` messages, in order.
+    /// A client may append only the remaining suffix after verifying that exact
+    /// prefix. A mismatch is a protocol failure, never permission to guess,
+    /// replace or erase previously committed text. Moonshine and Parakeet
+    /// currently join their entire emitted Word histories, so that suffix is
+    /// empty. The terminal Final must precede the matching queued-drain ACK.
     Final {
         text: String,
         words: Vec<WordTimestamp>,
@@ -217,6 +229,19 @@ pub enum WebSocketMessage {
     },
     EngineChanged {
         engine: String,
+    },
+    /// Connection-scoped features of the currently allocated engine. An empty
+    /// list revokes previously advertised features after an engine change.
+    Capabilities {
+        features: Vec<String>,
+    },
+    /// Successful completion of the actual queued drain, after all final text.
+    /// IDs are scoped to this connection; clients must match their outstanding
+    /// nonzero ID, not infer completion from an unrelated `Final` or a timeout.
+    /// The drain's preceding terminal `Final` obeys the cumulative-session text
+    /// contract above; an utterance-local or unrelated Final is not a substitute.
+    Drained {
+        request_id: u64,
     },
     Status {
         paused: bool,
@@ -241,6 +266,12 @@ impl TranscriptionSink for NullSink {
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum WebSocketCommand {
+    /// Stop accepting input, finalize all previously accepted audio in FIFO
+    /// order, emit `Drained` with this nonzero ID, then close the connection.
+    /// Only valid after negotiation of `dictation-drain/1`.
+    Drain {
+        request_id: u64,
+    },
     Restart,
     Pause,
     Resume,
@@ -831,6 +862,14 @@ impl Model {
                                                     engine: None,
                                                 };
                                                 let _ = ws_tx.send(status);
+                                            }
+                                            WebSocketCommand::Drain { .. } => {
+                                                // This legacy broadcast path cannot acknowledge
+                                                // an ordered per-client engine drain.
+                                                let _ =
+                                                    ws_tx.send(WebSocketMessage::Capabilities {
+                                                        features: Vec::new(),
+                                                    });
                                             }
                                             WebSocketCommand::SetEngine { .. } => {}
                                             WebSocketCommand::SetBoundaryVad { .. } => {

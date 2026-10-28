@@ -16,7 +16,7 @@ use crossbeam_channel::{Receiver, Sender, bounded};
 use moonshine_rs::{ModelArch, Transcriber, TranscriberOptions, Transcript};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-use super::engine::{Engine, EngineKind, EngineSession};
+use super::engine::{Engine, EngineKind, EngineSession, queue_command};
 use super::{SessionSink, current_timestamp};
 use crate::{TranscriptionSink, WebSocketMessage, WordTimestamp};
 
@@ -76,6 +76,7 @@ impl Engine for MoonshineEngine {
 enum Command {
     Audio(Vec<f32>),
     Boundary,
+    Drain(u64),
     Stop,
 }
 
@@ -91,10 +92,9 @@ impl EngineSession for Session {
     fn send_audio(&self, pcm: Vec<f32>) -> Result<()> {
         // File transcription bursts faster than real time. This synchronous
         // EngineSession seam backpressures the producer while the independent
-        // native thread drains a bounded queue; accepted audio is never dropped.
-        self.tx
-            .send(Command::Audio(pcm))
-            .context("Moonshine audio queue disconnected")
+        // native thread drains a bounded queue. Admission times out on a stalled
+        // worker; already accepted audio is never dropped or falsely ACKed.
+        queue_command(&self.tx, Command::Audio(pcm))
     }
 
     fn set_language(&self, _lang: String) -> Result<()> {
@@ -107,14 +107,25 @@ impl EngineSession for Session {
         if active {
             return Ok(false);
         }
-        self.tx
-            .send(Command::Boundary)
-            .context("Moonshine boundary queue disconnected")?;
+        queue_command(&self.tx, Command::Boundary)?;
         Ok(true)
     }
 
+    fn supports_ordered_drain(&self) -> bool {
+        true
+    }
+
+    fn request_drain(&self, request_id: u64) -> Result<()> {
+        if request_id == 0 {
+            bail!("drain request_id must be nonzero");
+        }
+        queue_command(&self.tx, Command::Drain(request_id))
+    }
+
     fn request_stop(&self) {
-        let _ = self.tx.send(Command::Stop);
+        // Bound cleanup admission on a stalled worker. Subsequent handle drop
+        // disconnects the FIFO, also finalizing previously accepted audio.
+        let _ = queue_command(&self.tx, Command::Stop);
     }
     fn supports_language(&self) -> bool {
         false
@@ -205,7 +216,7 @@ fn run_session(
                     timestamp: current_timestamp(),
                 });
             }
-            Ok(Command::Stop) | Err(_) => {
+            terminal @ (Ok(Command::Stop | Command::Drain(_)) | Err(_)) => {
                 if received_audio {
                     output.absorb(stream.finalize()?, true, offset, sink);
                 }
@@ -218,6 +229,9 @@ fn run_session(
                         .join(" "),
                     words: output.words,
                 });
+                if let Ok(Command::Drain(request_id)) = terminal {
+                    sink.handle_message(WebSocketMessage::Drained { request_id });
+                }
                 return Ok(());
             }
         }
@@ -268,6 +282,35 @@ mod tests {
         assert!(session.send_speech_boundary(false).unwrap());
         session.request_stop();
         reader.join().unwrap();
+    }
+
+    #[test]
+    fn drain_uses_audio_fifo_and_survives_handle_disconnect() {
+        let (tx, rx) = bounded(4);
+        let session = Session { tx };
+        assert!(session.request_drain(0).is_err());
+        assert!(rx.is_empty());
+        session.send_audio(vec![0.1]).unwrap();
+        session.send_speech_boundary(false).unwrap();
+        session.request_drain(42).unwrap();
+        drop(session);
+        assert!(matches!(rx.recv().unwrap(), Command::Audio(pcm) if pcm == [0.1]));
+        assert!(matches!(rx.recv().unwrap(), Command::Boundary));
+        assert!(matches!(rx.recv().unwrap(), Command::Drain(42)));
+        assert!(rx.recv().is_err());
+    }
+
+    #[test]
+    fn drain_admission_failure_does_not_queue_a_barrier() {
+        let (tx, rx) = bounded(1);
+        let session = Session { tx };
+        session.send_audio(vec![0.1]).unwrap();
+        assert!(session.request_drain(42).is_err());
+        // Cleanup must not block behind the full worker queue.
+        session.request_stop();
+        drop(session);
+        assert!(matches!(rx.recv().unwrap(), Command::Audio(_)));
+        assert!(rx.recv().is_err());
     }
 
     #[test]

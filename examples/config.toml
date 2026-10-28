@@ -98,6 +98,19 @@ pause_message = "Dictation paused"
 # Message shown when dictation stops completely
 stop_message = "Dictation disabled"
 
+# Automatic pause after scored capture silence (off by default).
+# Requires matching client/server dictation-drain/1 support; older/unsupported
+# servers leave manual capture active and report that auto-pause is unavailable.
+[dictation.auto_pause]
+idle_ms = 0                 # trial: 3000; 0 disables
+drain_timeout_ms = 10000    # failure bound, not a substitute for a final/ACK
+# Detector metadata defaults to audio_history.client_vad when configured,
+# including when retention is disabled. Or supply independent explicit paths:
+# [dictation.auto_pause.vad]
+# model_path = "/path/to/silero_vad.onnx"
+# model_sha256 = "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3"
+# runtime_path = "/path/to/libonnxruntime.dylib"
+
 # Opt-in local retention of dictation audio (one WAV + metadata per utterance)
 # for your own training/evaluation data. Off by default; local only; nothing is
 # marked training-eligible. Only enable it for your own speech, not meetings or

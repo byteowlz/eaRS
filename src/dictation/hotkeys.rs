@@ -184,6 +184,7 @@ pub(crate) fn spawn_listener(config: HotkeyConfig, escape_cancels: bool, shared:
                             shared.hotkey_mode(),
                             DictationHotkeyMode::PushToTalk | DictationHotkeyMode::Hybrid
                         ) {
+                            shared.set_ptt_held(true);
                             if shared.set_capturing(true) {
                                 held_from_paused = true;
                                 vlog!("Audio capture started (hold)");
@@ -194,6 +195,10 @@ pub(crate) fn spawn_listener(config: HotkeyConfig, escape_cancels: bool, shared:
                     }
                 }
                 EventType::KeyRelease(key) => {
+                    // Release the hold guard even if modifiers were released first.
+                    if key == toggle.key {
+                        shared.set_ptt_held(false);
+                    }
                     if !shared.is_running() {
                         return;
                     }

@@ -95,6 +95,18 @@ pub struct ClientVadConfig {
     pub runtime_path: String,
 }
 
+#[cfg(feature = "client-vad")]
+impl ClientVadConfig {
+    pub(crate) fn load_detector(&self) -> Result<super::client_vad::SileroVad> {
+        let model = crate::replacement::expand_tilde(&self.model_path);
+        if hex(&Sha256::digest(fs::read(&model)?)) != self.model_sha256 {
+            bail!("client VAD model hash does not match configuration");
+        }
+        let runtime = crate::replacement::expand_tilde(&self.runtime_path);
+        super::client_vad::SileroVad::load(&model, &runtime)
+    }
+}
+
 impl Default for AudioHistoryConfig {
     fn default() -> Self {
         Self {
@@ -316,12 +328,7 @@ impl AudioHistory {
             .client_vad
             .as_ref()
             .map(|vad| -> Result<_> {
-                let model = crate::replacement::expand_tilde(&vad.model_path);
-                if hex(&Sha256::digest(fs::read(&model)?)) != vad.model_sha256 {
-                    bail!("client VAD model hash does not match configuration");
-                }
-                let runtime = crate::replacement::expand_tilde(&vad.runtime_path);
-                let detector = super::client_vad::SileroVad::load(&model, &runtime)?;
+                let detector = vad.load_detector()?;
                 super::recording_vad::RecordingVad::new(
                     Box::new(detector),
                     config.max_utterance_secs,
@@ -1236,7 +1243,8 @@ mod tests {
             runtime_path: String::new(),
         });
         history.capture_vad = Some(
-            super::super::recording_vad::RecordingVad::new(Box::new(MarkerScorer), 120, 1000).unwrap(),
+            super::super::recording_vad::RecordingVad::new(Box::new(MarkerScorer), 120, 1000)
+                .unwrap(),
         );
         history
     }
