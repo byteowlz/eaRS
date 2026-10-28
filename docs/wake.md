@@ -16,8 +16,8 @@ Off by default (`[dictation.wake]`, see `examples/config.toml`).
     `{"type":"error","message":"..."}`. stderr is free-form logging.
 - `actions` maps reported phrases to `start_dictation` or `ignore`. Unlisted phrases do
   nothing. `min_score` adds an optional floor.
-- The reference detector is `wake listen --manifest <release-dir>` from the `wake`
-  repository. A release directory (`manifest.json` with a sha256 per file) holds the
+- The reference detector is `waqy listen --manifest <release-dir>` from the
+  [waqy](https://github.com/byteowlz/waqy) repository. A release directory (`manifest.json` with a sha256 per file) holds the
   shared front end and one classifier per phrase, so swapping models means pointing the
   command at another directory.
 
@@ -45,7 +45,7 @@ supported; it would stop dictation whenever the word is dictated.
 With `log = true` (default when wake is enabled) every detection and near miss is appended
 to `$XDG_STATE_HOME/ears/wake-log.jsonl` (mode 0600): time, phrase, score and what eaRS did
 (`started`, `ignored`, `below_min_score`, `unmapped`, `already_capturing`; near misses
-`none`). No audio. Near misses need a detector that reports them (`wake listen
+`none`). No audio. Near misses need a detector that reports them (`waqy listen
 --report-above 0.3`). The console shows the same as `wake: hey_oqto 0.74 -> started`.
 
 ## Boundaries

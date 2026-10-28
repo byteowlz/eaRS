@@ -121,7 +121,7 @@ pause_on_secure_input = true
 [dictation.wake]
 enabled = false
 # --report-above makes the detector also report near misses (logged only)
-command = ["wake", "listen", "--manifest", "/path/to/wake-models/<release>", "--report-above", "0.3"]
+command = ["waqy", "listen", "--manifest", "/path/to/models/waqy/<release>", "--report-above", "0.3"]
 # min_score = 0.6           # optional floor on top of the detector's own threshold
 preroll_ms = 1500           # audio before the detection sent after a wake (first words are kept)
 # strip_words: leading words dropped once after a wake (the phrase as the ASR spells it)

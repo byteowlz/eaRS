@@ -36,7 +36,7 @@ pub enum WakeAction {
 pub struct WakeConfig {
     pub enabled: bool,
     /// Detector process and arguments, e.g.
-    /// `["wake", "listen", "--manifest", "/path/to/release"]`.
+    /// `["waqy", "listen", "--manifest", "/path/to/release"]`.
     pub command: Vec<String>,
     /// Phrase reported by the detector -> action. Phrases not listed are ignored.
     pub actions: HashMap<String, WakeAction>,
@@ -550,7 +550,7 @@ mod tests {
     fn config_maps_phrases_and_respects_floor() {
         let mut config = WakeConfig {
             enabled: true,
-            command: vec!["wake".into()],
+            command: vec!["waqy".into()],
             ..Default::default()
         };
         config
@@ -793,6 +793,29 @@ mod tests {
                 .iter()
                 .any(|d| d.phrase == "hey_oqto" && d.score >= 0.5)
         );
+    }
+
+    #[test]
+    fn two_heads_firing_on_one_utterance_start_capture_once() {
+        use super::super::DictationEvent;
+        // "Hey Okto" contains "Okto": both heads report the same utterance.
+        let dir = std::env::temp_dir().join(format!("ears-wake-test2-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let two = "{\"type\":\"detection\",\"phrase\":\"hey_oqto\",\"score\":0.91,\"at_sample\":16000}\n{\"type\":\"detection\",\"phrase\":\"oqto\",\"score\":0.88,\"at_sample\":16160}";
+        let (capturing, events, _) = run_tee(
+            fake_detector(&dir, two),
+            &[("hey_oqto", WakeAction::StartDictation), ("oqto", WakeAction::StartDictation)],
+            500,
+        );
+        assert!(capturing);
+        let wakes: Vec<_> = events.iter().filter(|e| matches!(e, DictationEvent::Wake { .. })).collect();
+        assert_eq!(wakes.len(), 1, "only the first detection acts: {wakes:?}");
+        // and the state change is emitted once
+        let listening: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, DictationEvent::State(s) if *s == super::super::DictationState::Listening))
+            .collect();
+        assert_eq!(listening.len(), 1, "one capture start, not two");
     }
 
     #[test]
