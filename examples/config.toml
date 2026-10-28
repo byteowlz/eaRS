@@ -113,6 +113,15 @@ pause_on_secure_input = true
 # excluded_apps defaults to common password managers; setting it replaces the list.
 # excluded_apps = ["com.1password.1password", "com.bitwarden.desktop"]
 
+# Optional acoustic clip boundaries on the client (requires client-vad build).
+# Original 24 kHz PCM is saved; 16 kHz Silero is used only for detection.
+# Clips are initially untranscribed; recognition.jsonl keeps unassigned ASR
+# suggestions separately. See docs/client-vad.md before enabling.
+# [dictation.audio_history.client_vad]
+# model_path = "/path/to/silero_vad.onnx"
+# model_sha256 = "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3"
+# runtime_path = "/path/to/libonnxruntime.dylib"
+
 # Wake phrases: start dictation by voice instead of the hotkey. Off by default.
 # eaRS keeps the microphone and streams 16 kHz audio (only while dictation is paused)
 # to any detector process speaking wake-stream/1 (see the `wake` repository); the

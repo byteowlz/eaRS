@@ -36,6 +36,7 @@ use sha2::{Digest, Sha256};
 /// Sample rate of the dictation capture stream (resampled by `audio`).
 pub const SAMPLE_RATE: u32 = 24_000;
 const INDEX_FILE: &str = "index.jsonl";
+const RECOGNITION_FILE: &str = "recognition.jsonl";
 const RECORD_VERSION: u32 = 1;
 
 /// Bundle ids / binaries of password managers and credential prompts where
@@ -64,6 +65,8 @@ pub struct AudioHistoryConfig {
     /// Keep the audio of committed utterances. Off by default; never enabled
     /// implicitly.
     pub enabled: bool,
+    /// Optional client-owned acoustic segmentation. Requires `client-vad` build.
+    pub client_vad: Option<ClientVadConfig>,
     /// History directory, or "default" for `$XDG_STATE_HOME/ears/audio-history`.
     /// Must not be inside a git working tree.
     pub path: String,
@@ -71,7 +74,8 @@ pub struct AudioHistoryConfig {
     pub max_total_mb: u64,
     /// Utterances older than this are deleted (0 keeps them indefinitely).
     pub max_age_days: u32,
-    /// Audio kept before the first recognised word.
+    /// Legacy: before the first recognized word. Client VAD: before acoustic
+    /// onset, rounded up to whole detector frames.
     pub pre_roll_ms: u32,
     /// Longest utterance kept; longer ones are truncated to their last part.
     pub max_utterance_secs: u32,
@@ -83,10 +87,19 @@ pub struct AudioHistoryConfig {
     pub pause_on_secure_input: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ClientVadConfig {
+    pub model_path: String,
+    pub model_sha256: String,
+    pub runtime_path: String,
+}
+
 impl Default for AudioHistoryConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            client_vad: None,
             path: "default".to_string(),
             max_total_mb: 2048,
             max_age_days: 90,
@@ -137,6 +150,33 @@ pub struct UtteranceRecord {
     pub target_app: Option<String>,
     pub label_status: String,
     pub training_eligible: bool,
+    /// None for legacy arrival-time clips. Client-VAD clips are untranscribed;
+    /// recognition events are stored separately, never guessed onto a clip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_boundary: Option<CaptureBoundary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CaptureBoundary {
+    pub source: String,
+    pub start_sample: u64,
+    pub end_sample: u64,
+    pub complete: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+struct RecognitionEvent {
+    recorded_at: String,
+    session_id: String,
+    at_capture_sample: u64,
+    engine: Option<String>,
+    backend: Option<String>,
+    language: Option<String>,
+    raw_transcript: String,
+    replaced_transcript: String,
+    inserted_text: String,
+    alignment: String,
+    training_eligible: bool,
 }
 
 impl UtteranceRecord {
@@ -185,7 +225,7 @@ impl AudioTap {
     }
 
     /// Samples in `[start, end)` that are still buffered.
-    fn slice(&self, start: u64, end: u64) -> Vec<f32> {
+    pub(super) fn slice(&self, start: u64, end: u64) -> Vec<f32> {
         let inner = self.inner.lock().unwrap();
         let oldest = inner.position - inner.samples.len() as u64;
         let start = start.max(oldest);
@@ -198,6 +238,12 @@ impl AudioTap {
             .range((start - oldest) as usize..(end - oldest) as usize)
             .copied()
             .collect()
+    }
+}
+
+impl AudioTap {
+    fn clear(&self) {
+        self.inner.lock().unwrap().samples.clear();
     }
 }
 
@@ -235,6 +281,10 @@ pub struct AudioHistory {
     engine: Option<String>,
     backend: Option<String>,
     device: Option<String>,
+    #[cfg(feature = "client-vad")]
+    capture_vad: Option<super::recording_vad::RecordingVad>,
+    capture_app: Option<String>,
+    capture_needs_quiet: bool,
 }
 
 impl AudioHistory {
@@ -257,6 +307,28 @@ impl AudioHistory {
                 repo.display()
             );
         }
+        #[cfg(not(feature = "client-vad"))]
+        if config.client_vad.is_some() {
+            bail!("client VAD retention requires an eaRS build with client-vad");
+        }
+        #[cfg(feature = "client-vad")]
+        let capture_vad = config
+            .client_vad
+            .as_ref()
+            .map(|vad| -> Result<_> {
+                let model = crate::replacement::expand_tilde(&vad.model_path);
+                if hex(&Sha256::digest(fs::read(&model)?)) != vad.model_sha256 {
+                    bail!("client VAD model hash does not match configuration");
+                }
+                let runtime = crate::replacement::expand_tilde(&vad.runtime_path);
+                let detector = super::client_vad::SileroVad::load(&model, &runtime)?;
+                super::recording_vad::RecordingVad::new(
+                    Box::new(detector),
+                    config.max_utterance_secs,
+                    config.pre_roll_ms,
+                )
+            })
+            .transpose()?;
         let capacity = config.max_utterance_secs + config.pre_roll_ms / 1000 + 10;
         let history = Self {
             config: config.clone(),
@@ -269,6 +341,10 @@ impl AudioHistory {
             engine: None,
             backend,
             device,
+            #[cfg(feature = "client-vad")]
+            capture_vad,
+            capture_app: None,
+            capture_needs_quiet: false,
         };
         enforce_limits(&history.dir, &history.config)?;
         Ok(Some(history))
@@ -291,6 +367,13 @@ impl AudioHistory {
     pub fn begin_session(&mut self) {
         self.session_id = new_id();
         self.discard();
+        self.capture_app = None;
+        self.capture_needs_quiet = false;
+        self.tap.clear();
+        #[cfg(feature = "client-vad")]
+        if let Some(vad) = &mut self.capture_vad {
+            vad.reset(self.tap.position(), false);
+        }
     }
 
     /// The first word of an utterance arrived.
@@ -323,6 +406,11 @@ impl AudioHistory {
             self.last_end = self.tap.position();
         }
         self.inserted.clear();
+        #[cfg(feature = "client-vad")]
+        if let Some(vad) = &mut self.capture_vad {
+            self.capture_needs_quiet = true;
+            vad.reset(self.tap.position(), true);
+        }
     }
 
     /// Write the current utterance. Returns the stored record, or why it was
@@ -351,6 +439,16 @@ impl AudioHistory {
             return Ok(Err(Skip::NoAudio));
         }
 
+        self.store_clip(ctx, &pcm, inserted, None).map(Ok)
+    }
+
+    fn store_clip(
+        &mut self,
+        ctx: &CommitContext,
+        pcm: &[f32],
+        inserted: String,
+        boundary: Option<CaptureBoundary>,
+    ) -> Result<UtteranceRecord> {
         let now = time::OffsetDateTime::now_utc();
         let recorded_at = now
             .format(&time::format_description::well_known::Rfc3339)
@@ -385,10 +483,166 @@ impl AudioHistory {
             target_app: ctx.app_bundle_id.clone().or_else(|| ctx.app_binary.clone()),
             label_status: "unreviewed".to_string(),
             training_eligible: false,
+            capture_boundary: boundary,
         };
         append_record(&self.dir, &record)?;
         enforce_limits(&self.dir, &self.config)?;
-        Ok(Ok(record))
+        Ok(record)
+    }
+
+    pub fn client_vad_enabled(&self) -> bool {
+        self.config.client_vad.is_some()
+    }
+
+    /// Feed original 24 kHz capture PCM on the engine thread, before transport.
+    /// Privacy is observed at each capture batch, not inferred from an ASR final.
+    pub fn record_capture(&mut self, pcm: &[f32], ctx: &CommitContext) -> Result<()> {
+        if !self.client_vad_enabled() {
+            self.tap.push(pcm);
+            return Ok(());
+        }
+        #[cfg(feature = "client-vad")]
+        {
+            let app = ctx
+                .app_bundle_id
+                .as_ref()
+                .or(ctx.app_binary.as_ref())
+                .or(ctx.app_name.as_ref());
+            let allowed = app.is_some()
+                && self.excluded_app(ctx).is_none()
+                && !(self.config.pause_on_secure_input && ctx.secure_input);
+            if !allowed {
+                self.tap.clear();
+                self.capture_app = None;
+                self.capture_needs_quiet = true;
+                self.capture_vad
+                    .as_mut()
+                    .context("client VAD unavailable")?
+                    .reset(self.tap.position(), true);
+                return Ok(());
+            }
+            if self.capture_app.as_ref() != app {
+                let wait = self.capture_needs_quiet || self.capture_app.is_some();
+                self.capture_needs_quiet = wait;
+                self.tap.clear();
+                self.capture_vad
+                    .as_mut()
+                    .context("client VAD unavailable")?
+                    .reset(self.tap.position(), wait);
+                self.capture_app = app.cloned();
+            }
+            self.tap.push(pcm);
+            let clips = self
+                .capture_vad
+                .as_mut()
+                .context("client VAD unavailable")?
+                .push(pcm, &self.tap)?;
+            for clip in clips {
+                self.store_capture_clip(clip, ctx)?;
+            }
+            Ok(())
+        }
+        #[cfg(not(feature = "client-vad"))]
+        {
+            let _ = ctx;
+            bail!("client VAD unavailable")
+        }
+    }
+
+    /// Explicit capture release retains available PCM but marks it incomplete.
+    /// Cancel/disconnect must call discard instead, never manufacture a boundary.
+    pub fn end_capture(&mut self, ctx: &CommitContext) -> Result<()> {
+        #[cfg(feature = "client-vad")]
+        if self.client_vad_enabled() {
+            let app = ctx
+                .app_bundle_id
+                .as_ref()
+                .or(ctx.app_binary.as_ref())
+                .or(ctx.app_name.as_ref());
+            if app.is_none()
+                || self.capture_app.as_ref() != app
+                || self.excluded_app(ctx).is_some()
+                || (self.config.pause_on_secure_input && ctx.secure_input)
+            {
+                self.discard();
+                return Ok(());
+            }
+            if let Some(clip) = self
+                .capture_vad
+                .as_mut()
+                .context("client VAD unavailable")?
+                .finish(&self.tap)?
+            {
+                self.store_capture_clip(clip, ctx)?;
+            }
+        }
+        let _ = ctx;
+        Ok(())
+    }
+
+    #[cfg(feature = "client-vad")]
+    fn store_capture_clip(
+        &mut self,
+        clip: super::recording_vad::Clip,
+        ctx: &CommitContext,
+    ) -> Result<()> {
+        let context = CommitContext {
+            raw: String::new(),
+            replaced: String::new(),
+            ..ctx.clone()
+        };
+        self.store_clip(
+            &context,
+            &clip.pcm,
+            String::new(),
+            Some(CaptureBoundary {
+                source: "client_silero".into(),
+                start_sample: clip.start,
+                end_sample: clip.end,
+                complete: clip.complete,
+            }),
+        )?;
+        Ok(())
+    }
+
+    /// ASR output is retained as an explicitly unaligned suggestion, not a label
+    /// guessed onto the next VAD clip. Original recognition remains inspectable.
+    pub fn record_recognition(&mut self, ctx: &CommitContext) -> Result<()> {
+        let inserted = std::mem::take(&mut self.inserted);
+        self.utterance_start = None;
+        if self.capture_needs_quiet
+            || self.excluded_app(ctx).is_some()
+            || (self.config.pause_on_secure_input && ctx.secure_input)
+            || ctx
+                .app_bundle_id
+                .as_ref()
+                .or(ctx.app_binary.as_ref())
+                .or(ctx.app_name.as_ref())
+                .is_none()
+        {
+            return Ok(());
+        }
+        let event = RecognitionEvent {
+            recorded_at: time::OffsetDateTime::now_utc()
+                .format(&time::format_description::well_known::Rfc3339)?,
+            session_id: self.session_id.clone(),
+            at_capture_sample: self.tap.position(),
+            engine: self.engine.clone(),
+            backend: self.backend.clone(),
+            language: ctx.language.clone(),
+            raw_transcript: ctx.raw.clone(),
+            replaced_transcript: ctx.replaced.clone(),
+            inserted_text: inserted,
+            alignment: "unassigned".into(),
+            training_eligible: false,
+        };
+        let mut file = private_options()
+            .create(true)
+            .append(true)
+            .open(self.dir.join(RECOGNITION_FILE))?;
+        writeln!(file, "{}", serde_json::to_string(&event)?)?;
+        enforce_limits(&self.dir, &self.config)?;
+        Ok(())
     }
 
     fn excluded_app(&self, ctx: &CommitContext) -> Option<String> {
@@ -517,8 +771,8 @@ pub fn review_audio_path(dir: &Path, id: &str) -> Result<PathBuf> {
         bail!("utterance ID is ambiguous");
     }
     let root = fs::canonicalize(dir).context("audio history directory unavailable")?;
-    let path = fs::canonicalize(root.join(&record.audio_path))
-        .context("utterance audio unavailable")?;
+    let path =
+        fs::canonicalize(root.join(&record.audio_path)).context("utterance audio unavailable")?;
     if !path.starts_with(root.join("audio")) || !path.is_file() {
         bail!("utterance audio is outside the history audio directory");
     }
@@ -591,7 +845,48 @@ pub fn purge(dir: &Path, filter: &PurgeFilter) -> Result<Vec<UtteranceRecord>> {
     if filter.all {
         remove_orphaned_audio(dir)?;
     }
+    prune_recognition(dir, &removed, filter)?;
     Ok(removed)
+}
+
+fn prune_recognition(dir: &Path, removed: &[UtteranceRecord], filter: &PurgeFilter) -> Result<()> {
+    let path = dir.join(RECOGNITION_FILE);
+    if !path.exists()
+        || (removed.is_empty()
+            && !filter.all
+            && filter.before.is_none()
+            && filter.session_id.is_none())
+    {
+        return Ok(());
+    }
+    if filter.all {
+        fs::remove_file(path)?;
+        return Ok(());
+    }
+    let sessions: std::collections::HashSet<_> =
+        removed.iter().map(|record| &record.session_id).collect();
+    let mut kept = String::new();
+    for line in BufReader::new(File::open(&path)?).lines() {
+        let line = line?;
+        let event: RecognitionEvent =
+            serde_json::from_str(&line).context("invalid recognition event; purge incomplete")?;
+        let remove = sessions.contains(&event.session_id)
+            || filter.session_id.as_ref() == Some(&event.session_id)
+            || filter.before.as_ref().is_some_and(|date| {
+                event
+                    .recorded_at
+                    .get(..10)
+                    .is_some_and(|day| day < date.as_str())
+            });
+        if !remove {
+            kept.push_str(&line);
+            kept.push('\n');
+        }
+    }
+    let tmp = dir.join(format!("recognition-{}.tmp", new_id()));
+    write_private(&tmp, kept.as_bytes())?;
+    fs::rename(tmp, path)?;
+    Ok(())
 }
 
 fn validate_date(date: &str) -> Result<()> {
@@ -656,7 +951,10 @@ fn apply_limits(dir: &Path, max_age_days: u32, cap: u64) -> Result<Vec<Utterance
         removed.extend(old);
         records = keep;
     }
-    let mut total: u64 = records.iter().map(|r| r.bytes).sum();
+    let mut total: u64 = records.iter().map(|r| r.bytes).sum::<u64>()
+        + fs::metadata(dir.join(RECOGNITION_FILE))
+            .map(|file| file.len())
+            .unwrap_or(0);
     let mut evict = 0;
     while total > cap && evict < records.len() {
         total -= records[evict].bytes;
@@ -667,6 +965,24 @@ fn apply_limits(dir: &Path, max_age_days: u32, cap: u64) -> Result<Vec<Utterance
         remove_audio(dir, &removed)?;
         write_records(dir, &records)?;
     }
+    let before = if max_age_days > 0 {
+        Some(
+            (time::OffsetDateTime::now_utc() - time::Duration::days(max_age_days as i64))
+                .date()
+                .to_string(),
+        )
+    } else {
+        None
+    };
+    prune_recognition(
+        dir,
+        &removed,
+        &PurgeFilter {
+            all: total > cap && records.is_empty(),
+            before,
+            ..PurgeFilter::default()
+        },
+    )?;
     Ok(removed)
 }
 
@@ -710,6 +1026,22 @@ pub fn export(dir: &Path, out: &Path) -> Result<usize> {
             split_group: &record.session_id,
         })?);
         manifest.push('\n');
+    }
+    let recognition = dir.join(RECOGNITION_FILE);
+    if recognition.exists() {
+        let mut events = String::new();
+        for line in BufReader::new(File::open(recognition)?).lines() {
+            let line = line?;
+            let event: RecognitionEvent = serde_json::from_str(&line)?;
+            if records
+                .iter()
+                .any(|record| record.session_id == event.session_id)
+            {
+                events.push_str(&line);
+                events.push('\n');
+            }
+        }
+        write_private(&out.join(RECOGNITION_FILE), events.as_bytes())?;
     }
     write_private(&out.join("manifest.jsonl"), manifest.as_bytes())?;
     Ok(records.len())
@@ -780,6 +1112,23 @@ mod tests {
     }
 
     #[test]
+    fn configured_client_vad_never_falls_back_when_unavailable() {
+        let root = temp_dir("client-unavailable");
+        let model = root.join("invalid.onnx");
+        fs::write(&model, b"not a model").unwrap();
+        let mut config = enabled_config(&root);
+        config.client_vad = Some(ClientVadConfig {
+            model_path: model.to_string_lossy().into_owned(),
+            model_sha256: "wrong hash".into(),
+            runtime_path: "missing-runtime".into(),
+        });
+        assert!(AudioHistory::from_config(&config, None, None).is_err());
+        assert!(!root.join(INDEX_FILE).exists());
+        assert!(!root.join("audio").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn commit_writes_one_private_wav_with_matching_metadata() {
         let root = temp_dir("commit");
         let mut history = AudioHistory::from_config(
@@ -834,7 +1183,10 @@ mod tests {
             .unwrap();
         let mut record = record_utterance(&mut history, 0.2, "test");
         let path = review_audio_path(&root, &record.id).unwrap();
-        assert_eq!(path, fs::canonicalize(root.join(&record.audio_path)).unwrap());
+        assert_eq!(
+            path,
+            fs::canonicalize(root.join(&record.audio_path)).unwrap()
+        );
         assert!(review_audio_path(&root, "unknown").is_err());
         fs::write(&path, b"modified").unwrap();
         assert!(review_audio_path(&root, &record.id).is_err());
@@ -855,6 +1207,227 @@ mod tests {
         }
         write_records(&root, &[record.clone(), record.clone()]).unwrap();
         assert!(review_audio_path(&root, &record.id).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(feature = "client-vad")]
+    fn client_history(root: &Path) -> AudioHistory {
+        // Only synthetic tests use marker energy as an explicit probability
+        // source. Production always loads the hash-verified Silero model.
+        struct MarkerScorer;
+        impl super::super::client_vad::SpeechScorer for MarkerScorer {
+            fn reset(&mut self) {}
+            fn score(&mut self, frame: &[f32]) -> Result<f32> {
+                Ok(
+                    if frame.iter().map(|v| v.abs()).sum::<f32>() / frame.len() as f32 > 0.05 {
+                        0.9
+                    } else {
+                        0.0
+                    },
+                )
+            }
+        }
+        let mut history = AudioHistory::from_config(&enabled_config(root), None, None)
+            .unwrap()
+            .unwrap();
+        history.config.client_vad = Some(ClientVadConfig {
+            model_path: String::new(),
+            model_sha256: String::new(),
+            runtime_path: String::new(),
+        });
+        history.capture_vad = Some(
+            super::super::recording_vad::RecordingVad::new(Box::new(MarkerScorer), 120, 1000).unwrap(),
+        );
+        history
+    }
+
+    #[cfg(feature = "client-vad")]
+    #[test]
+    fn client_vad_records_original_pcm_despite_delayed_recognition() {
+        let root = temp_dir("client-delayed-asr");
+        let mut history = client_history(&root);
+        let mut audio = vec![0.0; 12_000];
+        let onset = audio.len();
+        audio.extend(vec![0.7; 2400]);
+        audio.extend(vec![0.2; 48_000]);
+        audio.extend(vec![-0.6; 2400]);
+        let end = audio.len();
+        audio.extend(vec![0.0; 24_000]);
+        for chunk in audio.chunks(1920) {
+            history.record_capture(chunk, &ctx("")).unwrap();
+        }
+        let records = load_records(&root).unwrap();
+        assert_eq!(records.len(), 1);
+        let record = &records[0];
+        let span = record.capture_boundary.as_ref().unwrap();
+        assert!(
+            span.complete && span.start_sample <= onset as u64 && span.end_sample >= end as u64
+        );
+        let expected = encode_wav(
+            &audio[span.start_sample as usize..span.end_sample as usize],
+            SAMPLE_RATE,
+        );
+        assert_eq!(fs::read(root.join(&record.audio_path)).unwrap(), expected);
+        assert!(record.raw_transcript.is_empty() && !record.training_eligible);
+        // An ASR result delayed past the entire utterance cannot move its audio.
+        history.begin_utterance();
+        history.note_inserted("delayed text");
+        history.record_recognition(&ctx("delayed text")).unwrap();
+        assert_eq!(load_records(&root).unwrap(), records);
+        let events = fs::read_to_string(root.join(RECOGNITION_FILE)).unwrap();
+        assert!(events.contains("unassigned") && events.contains("delayed text"));
+        let export_root = temp_dir("client-export");
+        export(&root, &export_root).unwrap();
+        assert_eq!(
+            fs::read_to_string(export_root.join(RECOGNITION_FILE)).unwrap(),
+            events
+        );
+        purge(
+            &root,
+            &PurgeFilter {
+                id: Some(record.id.clone()),
+                ..PurgeFilter::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            fs::read_to_string(root.join(RECOGNITION_FILE))
+                .unwrap()
+                .is_empty()
+        );
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(export_root).unwrap();
+    }
+
+    #[cfg(feature = "client-vad")]
+    #[test]
+    fn client_vad_callback_partitions_do_not_change_retained_pcm() {
+        let first = temp_dir("client-whole");
+        let second = temp_dir("client-partitioned");
+        let mut a = client_history(&first);
+        let mut b = client_history(&second);
+        let mut audio = vec![0.0; 12_000];
+        audio.extend(vec![0.3; 24_000]);
+        audio.extend(vec![0.0; 24_000]);
+        a.record_capture(&audio, &ctx("")).unwrap();
+        for chunk in audio.chunks(113) {
+            b.record_capture(chunk, &ctx("")).unwrap();
+        }
+        let ar = load_records(&first).unwrap();
+        let br = load_records(&second).unwrap();
+        assert_eq!(ar.len(), 1);
+        assert_eq!(br.len(), 1);
+        assert_eq!(ar[0].capture_boundary, br[0].capture_boundary);
+        assert_eq!(
+            fs::read(first.join(&ar[0].audio_path)).unwrap(),
+            fs::read(second.join(&br[0].audio_path)).unwrap()
+        );
+        fs::remove_dir_all(first).unwrap();
+        fs::remove_dir_all(second).unwrap();
+    }
+
+    #[cfg(feature = "client-vad")]
+    #[test]
+    fn client_vad_cancel_discards_prefix_and_requires_new_onset() {
+        let root = temp_dir("client-cancel");
+        let mut history = client_history(&root);
+        for _ in 0..20 {
+            history.record_capture(&vec![0.7; 1920], &ctx("")).unwrap();
+        }
+        history.discard();
+        for _ in 0..20 {
+            history.record_capture(&vec![0.7; 1920], &ctx("")).unwrap();
+        }
+        for _ in 0..12 {
+            history.record_capture(&vec![0.0; 1920], &ctx("")).unwrap();
+        }
+        assert!(load_records(&root).unwrap().is_empty());
+        for _ in 0..20 {
+            history.record_capture(&vec![0.2; 1920], &ctx("")).unwrap();
+        }
+        for _ in 0..12 {
+            history.record_capture(&vec![0.0; 1920], &ctx("")).unwrap();
+        }
+        let records = load_records(&root).unwrap();
+        assert_eq!(records.len(), 1);
+        let wav = fs::read(root.join(&records[0].audio_path)).unwrap();
+        assert!(
+            wav[44..]
+                .chunks_exact(2)
+                .all(|b| i16::from_le_bytes([b[0], b[1]]).abs() < 7000)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(feature = "client-vad")]
+    #[test]
+    fn client_vad_privacy_transition_cancels_and_requires_quiet() {
+        let root = temp_dir("client-privacy");
+        let mut history = client_history(&root);
+        for _ in 0..20 {
+            history.record_capture(&vec![0.3; 1920], &ctx("")).unwrap();
+        }
+        let mut secure = ctx("");
+        secure.secure_input = true;
+        history.record_capture(&vec![0.99; 1920], &secure).unwrap();
+        // Returning mid-word must not save a chopped suffix as a new utterance.
+        for _ in 0..20 {
+            history.record_capture(&vec![0.3; 1920], &ctx("")).unwrap();
+        }
+        assert!(load_records(&root).unwrap().is_empty());
+        for _ in 0..12 {
+            history.record_capture(&vec![0.0; 1920], &ctx("")).unwrap();
+        }
+        for _ in 0..20 {
+            history.record_capture(&vec![0.2; 1920], &ctx("")).unwrap();
+        }
+        for _ in 0..12 {
+            history.record_capture(&vec![0.0; 1920], &ctx("")).unwrap();
+        }
+        let records = load_records(&root).unwrap();
+        assert_eq!(records.len(), 1);
+        let wav = fs::read(root.join(&records[0].audio_path)).unwrap();
+        let max = wav[44..]
+            .chunks_exact(2)
+            .map(|b| i16::from_le_bytes([b[0], b[1]]).abs())
+            .max()
+            .unwrap();
+        assert!(max < 7000); // No pre-transition or protected marker in this clip.
+        history
+            .record_recognition(&ctx("possibly stale private result"))
+            .unwrap();
+        assert!(!root.join(RECOGNITION_FILE).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(feature = "client-vad")]
+    #[test]
+    fn client_vad_release_is_marked_incomplete_and_unknown_context_is_not_saved() {
+        let root = temp_dir("client-release");
+        let mut history = client_history(&root);
+        history
+            .record_capture(&vec![0.8; 24_000], &CommitContext::default())
+            .unwrap();
+        assert_eq!(history.tap.position(), 0);
+        history.begin_session();
+        for _ in 0..20 {
+            history.record_capture(&vec![0.2; 1920], &ctx("")).unwrap();
+        }
+        history.end_capture(&ctx("")).unwrap();
+        let records = load_records(&root).unwrap();
+        assert_eq!(records.len(), 1);
+        let boundary = records[0].capture_boundary.as_ref().unwrap();
+        assert!(!boundary.complete && boundary.end_sample == 20 * 1920);
+        assert!(!records[0].training_eligible);
+        purge(
+            &root,
+            &PurgeFilter {
+                all: true,
+                ..PurgeFilter::default()
+            },
+        )
+        .unwrap();
+        assert!(!root.join(RECOGNITION_FILE).exists());
         fs::remove_dir_all(root).unwrap();
     }
 

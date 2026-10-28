@@ -41,10 +41,10 @@ fn main() -> anyhow::Result<()> {
         channels: 1,
         frame_samples: FRAME_SAMPLES,
         speech_threshold: 0.5,
-        pre_roll_frames: 8,
+        pre_roll_frames: 32,
         min_speech_frames: 4,
         silence_frames: 16,
-        post_roll_frames: 8,
+        post_roll_frames: 16,
         max_segment_frames: 3750,
     })?;
     // Buffer output until success: an error cannot masquerade as a complete run.

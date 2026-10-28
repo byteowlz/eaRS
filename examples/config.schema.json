@@ -207,7 +207,7 @@
             "enabled": {
               "type": "boolean",
               "default": false,
-              "description": "Keep one WAV plus metadata per committed dictation utterance"
+              "description": "Keep local dictation WAVs and metadata; optional client_vad cuts on captured audio independently of ASR"
             },
             "path": {
               "type": "string",
@@ -230,7 +230,18 @@
               "type": "integer",
               "minimum": 0,
               "default": 1000,
-              "description": "Audio kept before the first recognised word"
+              "description": "Legacy: before first recognized word; client_vad: before acoustic onset, rounded up to detector frames"
+            },
+            "client_vad": {
+              "type": "object",
+              "description": "Optional client Silero segmentation; requires client-vad build. No automatic downloads or fallback if unavailable.",
+              "required": ["model_path", "model_sha256", "runtime_path"],
+              "properties": {
+                "model_path": {"type": "string", "minLength": 1},
+                "model_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+                "runtime_path": {"type": "string", "minLength": 1}
+              },
+              "additionalProperties": false
             },
             "max_utterance_secs": {
               "type": "integer",

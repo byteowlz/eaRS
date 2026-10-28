@@ -688,7 +688,7 @@ check-speaker-gate:
 # Client-side VAD mechanism; no microphone or model required.
 test-client-vad:
     cargo check --locked --all-targets --features client-vad
-    cargo test --locked --lib capture_segments
+    cargo test --locked --lib --features client-vad
 
 # Explicit-artifact CPU smoke test; caller supplies ORT_DYLIB_PATH.
 test-client-vad-model model:

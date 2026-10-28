@@ -472,6 +472,12 @@ ears dictation history export --out DIR           # copies audio + manifest.json
 ears dictation history purge --id ID | --session ID | --before YYYY-MM-DD | --all
 ```
 
+For capture-owned acoustic boundaries instead of ASR-arrival slicing, see
+[client-side VAD](docs/client-vad.md). This optional mode saves untranscribed clips
+and keeps original recognition as explicitly unassigned suggestions; it never
+silently creates training pairs. [Microphone conversion](docs/audio-input.md)
+preserves continuous resampling state and original amplitude.
+
 Utterance audio is cut from the first recognised word (minus `pre_roll_ms`) to the server's end-of-speech boundary, by arrival time. It is suitable as training data but is not authoritative speaker-gate evidence.
 
 ## Configuration

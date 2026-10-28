@@ -15,6 +15,13 @@ pub const FRAME_SAMPLES: usize = 512;
 const CONTEXT_SAMPLES: usize = 64;
 const STATE_SAMPLES: usize = 256;
 
+/// Injectable scoring seam. Production uses Silero; deterministic tests supply
+/// explicit probabilities without loading a model or opening a microphone.
+pub trait SpeechScorer: Send {
+    fn score(&mut self, frame: &[f32]) -> Result<f32>;
+    fn reset(&mut self);
+}
+
 /// One detector per capture stream. Never share recurrent state across sessions.
 pub struct SileroVad {
     session: Session,
@@ -106,6 +113,15 @@ impl SileroVad {
         self.context
             .copy_from_slice(&frame[FRAME_SAMPLES - CONTEXT_SAMPLES..]);
         Ok(probability)
+    }
+}
+
+impl SpeechScorer for SileroVad {
+    fn score(&mut self, frame: &[f32]) -> Result<f32> {
+        SileroVad::score(self, frame)
+    }
+    fn reset(&mut self) {
+        SileroVad::reset(self);
     }
 }
 

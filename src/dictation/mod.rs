@@ -20,6 +20,8 @@ mod engine;
 pub mod hotkeys;
 #[cfg(target_os = "macos")]
 mod mac_hotkeys;
+#[cfg(feature = "client-vad")]
+mod recording_vad;
 pub mod typing;
 pub mod voice_commands;
 pub mod wake;
@@ -299,8 +301,8 @@ pub(crate) struct Shared {
     escape_cancels: Mutex<bool>,
     running: AtomicBool,
     notifications: DictationNotificationConfig,
-    /// Audio retention is configured on; the listening notification says so.
-    audio_history: bool,
+    /// Actual initialized retention state, not merely configuration intent.
+    audio_history: AtomicBool,
     #[cfg(feature = "hooks")]
     hooks: crate::config::DictationHooksConfig,
     events: Sender<DictationEvent>,
@@ -325,7 +327,7 @@ impl Shared {
             running: AtomicBool::new(true),
             escape_cancels: Mutex::new(escape_cancels),
             notifications: config.dictation.notifications.clone(),
-            audio_history: config.dictation.audio_history.enabled,
+            audio_history: AtomicBool::new(false),
             #[cfg(feature = "hooks")]
             hooks: config.dictation.hooks.clone(),
             events,
@@ -425,7 +427,11 @@ impl Shared {
         *guard = new_state;
         drop(guard);
         self.emit(DictationEvent::State(new_state));
-        send_toggle_notification(new_state, &self.notifications, self.audio_history);
+        send_toggle_notification(
+            new_state,
+            &self.notifications,
+            self.audio_history.load(Ordering::SeqCst),
+        );
         #[cfg(feature = "hooks")]
         if let Err(err) = run_hook_command(new_state, &self.hooks) {
             eprintln!("Failed to run dictation hook command: {}", err);

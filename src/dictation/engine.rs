@@ -217,6 +217,7 @@ pub(crate) async fn run(
     ) {
         Ok(Some(mut history)) => {
             history.set_engine(options.engine.clone());
+            shared.audio_history.store(true, Ordering::SeqCst);
             eprintln!(
                 "audio history ON: keeping utterance audio in {}",
                 history.dir().display()
@@ -230,6 +231,10 @@ pub(crate) async fn run(
         Ok(None) => None,
         Err(err) => {
             eprintln!("audio history disabled: {err:#}");
+            shared.emit(DictationEvent::AudioHistory {
+                active: false,
+                note: Some(format!("retention unavailable: {err:#}")),
+            });
             shared.emit(DictationEvent::Error {
                 message: format!("audio history disabled: {err:#}"),
             });
@@ -344,10 +349,14 @@ impl Engine {
                         return Ok(());
                     }
                 }
+                // Disconnected audio must not be replayed under a new focus or
+                // capture generation when the next connection succeeds.
+                for _ in audio_rx.try_iter() {}
                 let capturing = self.shared.is_capturing();
                 if capturing != self.was_capturing {
                     self.on_capture_edge(capturing)?;
                 }
+                self.discard_history(); // No chopped suffix after offline capture.
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
@@ -390,38 +399,11 @@ impl Engine {
         } else {
             None
         };
-        let audio_writer = writer_tx.clone();
-        let audio_shared = self.shared.clone();
-        let audio_tap = self.history.as_ref().map(AudioHistory::tap);
-        thread::spawn(move || {
-            if let Some(enc) = opus_encoder.as_ref() {
-                let _ = audio_writer.send(WriterCommand::Audio(enc.header_data().to_vec()));
-            }
-            while let Ok(chunk) = audio_rx.recv() {
-                if !audio_shared.is_capturing() {
-                    continue;
-                }
-                if let Some(tap) = &audio_tap {
-                    tap.push(&chunk);
-                }
-                let bytes = match opus_encoder.as_mut() {
-                    Some(enc) => match enc.encode_page(&chunk) {
-                        Ok(bytes) => bytes,
-                        Err(err) => {
-                            eprintln!("opus encode failed: {err}");
-                            break;
-                        }
-                    },
-                    None => encode_chunk(&chunk),
-                };
-                if bytes.is_empty() {
-                    continue;
-                }
-                if audio_writer.send(WriterCommand::Audio(bytes)).is_err() {
-                    break;
-                }
-            }
-        });
+        if let Some(enc) = opus_encoder.as_ref() {
+            let _ = writer_tx.send(WriterCommand::Audio(enc.header_data().to_vec()));
+        }
+        // One consumer owns capture ordering, retention and transport for this
+        // session. No detached receiver may steal chunks after reconnect.
 
         let ping_sent = self.ping_sent.clone();
         let writer_handle = tokio::spawn(async move {
@@ -475,6 +457,42 @@ impl Engine {
             }
             if capturing {
                 self.evaluate_profiles(false)?;
+            }
+            let context = if self
+                .history
+                .as_ref()
+                .is_some_and(AudioHistory::client_vad_enabled)
+            {
+                capture_context(self.effective_lang.clone())
+            } else {
+                CommitContext::default()
+            };
+            // Bound each batch so controls and recognition keep making progress.
+            for chunk in audio_rx.try_iter().take(32) {
+                if !capturing {
+                    continue;
+                }
+                let retention_error = self
+                    .history
+                    .as_mut()
+                    .and_then(|history| history.record_capture(&chunk, &context).err());
+                if let Some(err) = retention_error {
+                    self.history = None; // Never fall back to known-clipped slicing.
+                    self.shared.audio_history.store(false, Ordering::SeqCst);
+                    let message = format!("retention stopped: {err:#}");
+                    self.shared.emit(DictationEvent::AudioHistory {
+                        active: false,
+                        note: Some(message.clone()),
+                    });
+                    self.shared.emit(DictationEvent::Error { message });
+                }
+                let bytes = match opus_encoder.as_mut() {
+                    Some(enc) => enc.encode_page(&chunk).context("opus encode failed")?,
+                    None => encode_chunk(&chunk),
+                };
+                if !bytes.is_empty() {
+                    let _ = writer_tx.send(WriterCommand::Audio(bytes));
+                }
             }
             if last_ping.elapsed() >= PING_INTERVAL {
                 last_ping = Instant::now();
@@ -631,8 +649,9 @@ impl Engine {
                 self.evaluate_profiles(true)?;
             }
             DictationCommand::SetEscapeCancels(on) => {
-                self.shared
-                    .set_escape_cancels(on || self.router.mode != VoiceMode::Dictation || self.speaker_gate_enabled());
+                self.shared.set_escape_cancels(
+                    on || self.router.mode != VoiceMode::Dictation || self.speaker_gate_enabled(),
+                );
             }
             DictationCommand::SetHotkeyMode(mode) => {
                 self.shared.set_hotkey_mode(mode);
@@ -659,8 +678,9 @@ impl Engine {
             .options
             .escape_cancels
             .unwrap_or(self.config.hotkeys.escape_cancels);
-        self.shared
-            .set_escape_cancels(configured || self.router.mode != VoiceMode::Dictation || self.speaker_gate_enabled());
+        self.shared.set_escape_cancels(
+            configured || self.router.mode != VoiceMode::Dictation || self.speaker_gate_enabled(),
+        );
     }
 
     fn on_capture_edge(&mut self, capturing: bool) -> Result<()> {
@@ -675,6 +695,14 @@ impl Engine {
             self.last_profile_eval = None;
             self.evaluate_profiles(true)?;
         } else {
+            let context = capture_context(self.effective_lang.clone());
+            if let Some(history) = self.history.as_mut() {
+                if let Err(err) = history.end_capture(&context) {
+                    self.shared.emit(DictationEvent::Error {
+                        message: format!("audio history: {err:#}"),
+                    });
+                }
+            }
             // PTT release is not Speech(false): incomplete commands are
             // discarded, but already-safe live dictionary words still flush.
             if let Some(typed) = self.buffer.flush_all(
@@ -688,9 +716,8 @@ impl Engine {
             // arrive: what was said up to here is the utterance.
             if !self.utterance.is_empty() && !self.speaker_gate_enabled() {
                 let raw = self.utterance.join(" ");
-                let text = super::typing::normalize_punctuation_spacing(
-                    &self.replacement.replace(&raw),
-                );
+                let text =
+                    super::typing::normalize_punctuation_spacing(&self.replacement.replace(&raw));
                 self.commit_history(&raw, &text);
             } else {
                 self.discard_history();
@@ -936,6 +963,14 @@ impl Engine {
             app_name: app.as_ref().and_then(|a| a.name.clone()),
             secure_input: crate::frontmost::secure_input_active(),
         };
+        if history.client_vad_enabled() {
+            if let Err(err) = history.record_recognition(&ctx) {
+                self.shared.emit(DictationEvent::Error {
+                    message: format!("audio history recognition: {err:#}"),
+                });
+            }
+            return;
+        }
         match history.commit(&ctx) {
             Ok(Ok(record)) => vlog!(
                 "[audio-history] kept {} ({:.1}s)",
@@ -1044,6 +1079,18 @@ impl Engine {
         self.utterance.clear();
         self.shared.emit(DictationEvent::Utterance { text });
         Ok(())
+    }
+}
+
+fn capture_context(language: Option<String>) -> CommitContext {
+    let app = crate::frontmost::frontmost_app_identity();
+    CommitContext {
+        language,
+        app_bundle_id: app.as_ref().and_then(|app| app.bundle_id.clone()),
+        app_binary: app.as_ref().and_then(|app| app.binary.clone()),
+        app_name: app.as_ref().and_then(|app| app.name.clone()),
+        secure_input: crate::frontmost::secure_input_active(),
+        ..CommitContext::default()
     }
 }
 
@@ -1252,42 +1299,66 @@ mod tests {
 
         // Enabling a gate on the legacy WS adapter must never silently type,
         // run a control, emit an eligible utterance or fall back after cancel.
-        for mode in [crate::speaker_gate::Mode::Allowlist, crate::speaker_gate::Mode::Annotate] {
+        for mode in [
+            crate::speaker_gate::Mode::Allowlist,
+            crate::speaker_gate::Mode::Annotate,
+        ] {
             engine.config.voice_commands.speaker_policy.mode = mode;
             engine.shared.set_capturing(true);
             engine.router.mode = VoiceMode::Dictation; // Explicitly exercise live fallback.
-            engine.handle_command(DictationCommand::SetEscapeCancels(false)).unwrap();
+            engine
+                .handle_command(DictationCommand::SetEscapeCancels(false))
+                .unwrap();
             assert!(engine.shared.escape_cancels()); // Keyboard escape stays a way out.
             let before = typed.lock().unwrap().clone();
             let _ = events_rx.try_iter().collect::<Vec<_>>();
             for word in ["eaRS", "command-only", "mode"] {
-                engine.handle_message(&serde_json::json!({"type":"word","word":word})).unwrap();
+                engine
+                    .handle_message(&serde_json::json!({"type":"word","word":word}))
+                    .unwrap();
             }
-            engine.handle_message(&serde_json::json!({"type":"speech","active":false})).unwrap();
-            engine.handle_message(&serde_json::json!({"type":"speech","active":false})).unwrap();
-            engine.handle_message(&serde_json::json!({"type":"final","text":"open notes"})).unwrap();
+            engine
+                .handle_message(&serde_json::json!({"type":"speech","active":false}))
+                .unwrap();
+            engine
+                .handle_message(&serde_json::json!({"type":"speech","active":false}))
+                .unwrap();
+            engine
+                .handle_message(&serde_json::json!({"type":"final","text":"open notes"}))
+                .unwrap();
             // Physical PTT release remains independent of voice evidence.
-            engine.handle_command(DictationCommand::SetCapturing(false)).unwrap();
+            engine
+                .handle_command(DictationCommand::SetCapturing(false))
+                .unwrap();
             engine.on_capture_edge(false).unwrap();
             assert!(!engine.shared.is_capturing());
             engine.shared.set_capturing(true);
             engine.handle_command(DictationCommand::Cancel).unwrap();
             assert!(!engine.shared.is_capturing());
             assert!(engine.shared.escape_cancels());
-            engine.handle_message(&serde_json::json!({"type":"final","text":"late final"})).unwrap();
+            engine
+                .handle_message(&serde_json::json!({"type":"final","text":"late final"}))
+                .unwrap();
             assert_eq!(engine.router.mode, VoiceMode::Dictation);
             assert_eq!(*typed.lock().unwrap(), before);
             let events: Vec<_> = events_rx.try_iter().collect();
             assert!(events.iter().any(|event| matches!(event,
                 DictationEvent::VoiceDecision { raw, normalized, outcome }
                 if raw.is_empty() && normalized.is_empty() && outcome == "speaker_gate_unavailable_audio_binding")));
-            assert!(!events.iter().any(|event| matches!(event,
-                DictationEvent::Typed { .. } | DictationEvent::Utterance { .. } | DictationEvent::PromptReady { .. })));
+            assert!(!events.iter().any(|event| matches!(
+                event,
+                DictationEvent::Typed { .. }
+                    | DictationEvent::Utterance { .. }
+                    | DictationEvent::PromptReady { .. }
+            )));
         }
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    fn retention_engine(config: AppConfig, history: Option<AudioHistory>) -> (Engine, Arc<Mutex<String>>) {
+    fn retention_engine(
+        config: AppConfig,
+        history: Option<AudioHistory>,
+    ) -> (Engine, Arc<Mutex<String>>) {
         let (events_tx, _events_rx) = unbounded();
         let (commands_tx, commands_rx) = unbounded();
         let shared = Arc::new(Shared::new(&config, true, events_tx, commands_tx, true));
@@ -1326,7 +1397,11 @@ mod tests {
 
     /// Synthetic audio through the dictation message path, as the session's
     /// audio thread would feed it, without a microphone or server.
-    fn dictate(engine: &mut Engine, tap: Option<&super::super::audio_history::AudioTap>, words: &[&str]) {
+    fn dictate(
+        engine: &mut Engine,
+        tap: Option<&super::super::audio_history::AudioTap>,
+        words: &[&str],
+    ) {
         let chunk: Vec<f32> = (0..1920).map(|i| (i as f32 * 0.07).sin() * 0.2).collect();
         let feed = |n: usize| {
             if let Some(tap) = tap {
@@ -1378,9 +1453,13 @@ mod tests {
             pause_on_secure_input: false,
             ..AudioHistoryConfig::default()
         };
-        let history = AudioHistory::from_config(&config.dictation.audio_history, Some("Test Mic".into()), None)
-            .unwrap()
-            .unwrap();
+        let history = AudioHistory::from_config(
+            &config.dictation.audio_history,
+            Some("Test Mic".into()),
+            None,
+        )
+        .unwrap()
+        .unwrap();
         let tap = history.tap();
         let (mut engine, _typed) = retention_engine(config, Some(history));
         engine

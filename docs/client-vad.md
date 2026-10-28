@@ -19,11 +19,14 @@ to the next utterance. See `trx-63fk.4` and timeout work `trx-xc5e`.
 - Offline `client_vad_segments` example: prints JSONL sample spans from an explicit
   local audio file. It neither edits recordings nor creates training labels.
 
-These are NOT yet wired into live retention or the timeout. Existing live clips
-still use ASR arrival-time slicing; the clipping bug remains open. Synthetic
-probability tests prove the segmentation mechanism, not Silero recall on quiet
-human speech. The artifact smoke test proves inference, silence rejection, reset
-and invalid-frame handling, not real-world boundary quality.
+Client-VAD retention is wired into the engine capture consumer as an explicit
+opt-in below. It no longer waits for an ASR word/final to cut a clip. The original
+24 kHz capture PCM is retained; only detection is downsampled to 16 kHz. Synthetic
+marker tests exercise the production retention methods, delayed recognition,
+privacy transitions, release, export and purge. They do not prove Silero recall
+or boundary quality on quiet human speech. Native/live verification and timeout
+drain integration remain separate gates; an old installed binary is not updated
+by building this source.
 
 ## Checks and offline preview
 
@@ -48,18 +51,68 @@ Source and wrapper input contract: https://github.com/snakers4/silero-vad/tree/0
 The upstream project/model is MIT-licensed; preserve its notice when distributing
 an artifact. No model or runtime binary is included by this change.
 
-## Live integration gates
+## Enable client-owned recording boundaries
 
-Keep one microphone owner. Score a continuous, statefully resampled stream and
-bind each probability to that exact PCM frame. Reset detector, frame assembler
-and segmenter together across pause, cancel, disconnect and privacy transitions.
-Do not attach recognition output to a clip by FIFO alone: noise, missing results
-and differing endpoint policies can shift associations. Preserve original ASR
-output separately and label alignment honestly. Check privacy over the whole
-span, not only at commit time. Do not persist uncertain excluded/secure audio.
+Build with `--features client-vad` (plus the usual engine features), then configure
+explicit, local, hash-verified artifacts:
+
+```toml
+[dictation.audio_history.client_vad]
+model_path = "/path/to/silero_vad.onnx"
+model_sha256 = "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3"
+runtime_path = "/path/to/libonnxruntime.dylib"
+```
+
+A missing feature/model/runtime or wrong hash disables retention with a visible
+error, never falls back to known-clipped ASR-arrival slicing. Configuration alone
+is not proof of active recording; restart/reinitialize and verify a new record.
+Without this optional table, legacy retention remains backward-compatible.
+
+Complete clips retain configured `pre_roll_ms` (default 1000 ms, rounded up to
+32 ms frames) measured from the first accepted speech frame, 128 ms onset
+debounce, a 512 ms silence decision window, and 512 ms post-roll. Those are provisional operating points,
+not measured accuracy guarantees. A manual stop may save available PCM with
+`capture_boundary.complete=false`; cancel/disconnect discard the pending span.
+Duration overflow or an evicted PCM span fails rather than silently truncating.
+
+Acoustic clips have empty transcript fields and `capture_boundary.source` set to
+`client_silero`. Original ASR output is kept in private `recognition.jsonl`, marked
+`alignment=unassigned` and `training_eligible=false`, with session ID and capture
+sample position. Neither arrival order nor a noise detection silently creates a
+training pair. Review or independent transcription must establish a reference.
+Export includes relevant unassigned recognition events. Purging a clip also
+removes unassigned suggestions from its whole session (a deliberate conservative
+privacy rule), and purge-all removes suggestions even if no clips were produced.
+
+One engine-thread consumer orders capture, retention and transport; no detached
+receiver competes across reconnections. App identity/Secure Input is polled for
+each capture batch without reading window titles on macOS. Observed protected,
+unknown or changed contexts discard pending audio and require quiet before
+recording resumes; ASR suggestions are suppressed after such transitions, cancel or disconnect until
+a new capture session. This is sampled context observation, not proof against a
+focus change inside an OS callback or an unobserved queued-audio interval. Native
+privacy/race testing remains required; no capture/identity evidence authorizes an
+action.
+
+## Remaining qualification
 
 The idle timeout must stop sending new speech only after an ordered drain, then
 accept the pending final before rearming wake. Local silence alone is not a
 server acknowledgement. Before activation: native capture/resampling tests,
 marker-preservation tests, privacy/race tests, and an authorized live comparison.
 Do not treat these modules as speaker-gate or action-authorization evidence.
+
+## Capture quality
+
+`audio_input.rs` now keeps downmix and bandlimited resampling state for the full
+microphone stream, not each callback. Synthetic tests reproduce and prevent
+callback-dependent sample loss, split-channel failures and high-frequency aliasing.
+Native 24 kHz bypasses filtering; other supported rates have at most 128 target
+samples (under 6 ms) of lookahead/buffering at stream end. The converter is not
+reset at utterance boundaries. Equal-weight multichannel mixing is not
+speaker-layout-aware. PCM amplitude is preserved, not silently normalized.
+
+The user's active device log reports 48 kHz F32 mono; that alone says nothing about
+microphone placement, input gain or acoustic quality. Quiet recent recordings and
+zero full-scale samples are not proof of good SNR. Acoustic comparisons and live
+user acceptance remain outstanding.

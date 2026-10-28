@@ -48,6 +48,19 @@ pub fn frontmost_app() -> Option<FrontmostApp> {
     platform::frontmost_app()
 }
 
+/// Lightweight application identity for capture privacy polling. Does not read
+/// a window title or walk Accessibility on macOS.
+pub fn frontmost_app_identity() -> Option<FrontmostApp> {
+    #[cfg(target_os = "macos")]
+    {
+        platform::frontmost_app_metadata()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        platform::frontmost_app()
+    }
+}
+
 /// Whether macOS Secure Event Input is active, i.e. a password field or
 /// credential prompt has keyboard focus. Always false on other platforms.
 pub fn secure_input_active() -> bool {
@@ -103,6 +116,14 @@ mod platform {
     }
 
     pub fn frontmost_app() -> Option<FrontmostApp> {
+        app_info(true)
+    }
+
+    pub fn frontmost_app_metadata() -> Option<FrontmostApp> {
+        app_info(false)
+    }
+
+    fn app_info(include_title: bool) -> Option<FrontmostApp> {
         let workspace = NSWorkspace::sharedWorkspace();
         let app = workspace.frontmostApplication()?;
         let bundle_id = app.bundleIdentifier().map(|s| s.to_string());
@@ -112,7 +133,7 @@ mod platform {
             .and_then(|url| url.path())
             .and_then(|path| file_stem_of(&path.to_string()));
         let pid = app.processIdentifier();
-        let window_title = if pid > 0 {
+        let window_title = if include_title && pid > 0 {
             focused_window_title(pid)
         } else {
             None
