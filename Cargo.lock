@@ -2480,11 +2480,11 @@ dependencies = [
  "eaRS",
  "gpui",
  "gtk",
+ "motion-core",
+ "motion-render",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
- "oqtopus-core",
- "oqtopus-render",
  "raw-window-handle",
  "serde",
  "serde_json",
@@ -5488,6 +5488,26 @@ dependencies = [
  "rayon",
  "serde",
  "tracing",
+]
+
+[[package]]
+name = "motion-core"
+version = "0.1.0"
+dependencies = [
+ "oqtopus-core",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "motion-render"
+version = "0.1.0"
+dependencies = [
+ "motion-core",
+ "oqtopus-core",
+ "oqtopus-render",
+ "sha2 0.10.9",
 ]
 
 [[package]]

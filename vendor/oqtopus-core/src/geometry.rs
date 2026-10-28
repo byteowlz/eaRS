@@ -1,5 +1,6 @@
 //! Renderer-independent vector paths matching the reference Canvas2D player.
 use crate::{Frame, PackError};
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PathCommand {
@@ -60,6 +61,20 @@ fn paths(loops: &[Vec<i32>], poly: bool) -> Result<Vec<Vec<PathCommand>>, PackEr
             Ok(path)
         })
         .collect()
+}
+
+/// Append canonical loop counts and deltas to a geometry digest.
+/// Metadata is intentionally excluded; callers include any relevant flags.
+pub fn update_geometry_digest(hash: &mut Sha256, frame: &Frame) {
+    for loops in [&frame.body, &frame.stripe] {
+        hash.update((loops.len() as u32).to_le_bytes());
+        for points in loops {
+            hash.update((points.len() as u32).to_le_bytes());
+            for point in points {
+                hash.update(point.to_le_bytes());
+            }
+        }
+    }
 }
 
 /// Decode packed delta coordinates into closed paths in vector-canvas units.

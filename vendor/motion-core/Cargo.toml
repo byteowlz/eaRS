@@ -1,0 +1,11 @@
+[package]
+name = "motion-core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+oqtopus-core = { path = "../oqtopus-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"

@@ -907,7 +907,7 @@ impl IslandView {
             worker.set(state, animate);
         }
         if let Some(snapshot) = self.oqtopus.as_ref().and_then(|worker| worker.snapshot()) {
-            crate::oqtopus::mark(snapshot, color, bg, size).into_any_element()
+            crate::motion_mark::mark(snapshot, color, bg, size).into_any_element()
         } else {
             // Missing or unreadable packs retain a working indicator.
             parametric_mark::mark(color, size * (24.0 / 36.0), state, 0.0, false).into_any_element()

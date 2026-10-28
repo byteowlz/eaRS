@@ -1,0 +1,11 @@
+[package]
+name = "motion-render"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+motion-core = { path = "../motion-core" }
+oqtopus-core = { path = "../oqtopus-core" }
+oqtopus-render = { path = "../oqtopus-render" }
+sha2 = "0.10"

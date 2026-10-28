@@ -1,0 +1,30 @@
+{
+  "format": "byteowlz.motion",
+  "version": 1,
+  "id": "ears-bars",
+  "source": {
+    "kind": "bars-wave",
+    "view_box": [826.0, 826.0],
+    "padding": 26.0,
+    "rotation_degrees": 45.0,
+    "travel_degrees": -45.0,
+    "detune": 0.03,
+    "bars": [
+      {"center": [248.45, 248.45], "width": 44.28, "length": 255.99, "gain": 0.48},
+      {"center": [303.30, 303.30], "width": 44.28, "length": 460.51, "gain": 0.70},
+      {"center": [358.15, 358.15], "width": 44.28, "length": 533.54, "gain": 0.78},
+      {"center": [413.00, 413.00], "width": 44.28, "length": 701.88, "gain": 0.73},
+      {"center": [467.85, 467.85], "width": 44.28, "length": 533.54, "gain": 0.72},
+      {"center": [522.70, 522.70], "width": 44.28, "length": 460.51, "gain": 0.49},
+      {"center": [577.55, 577.55], "width": 44.28, "length": 255.99, "gain": 0.46}
+    ],
+    "states": [
+      {"id":"ready", "amplitude":0.10, "period":4.0, "stagger":0.10, "dwell":0.45, "speed":1.0, "direction":1.0, "mirror":false, "wave":"eased-triangle"},
+      {"id":"listening", "amplitude":0.20, "period":3.0, "stagger":0.08, "dwell":0.40, "speed":1.0, "direction":1.0, "mirror":false, "wave":"eased-triangle"},
+      {"id":"speech", "amplitude":0.62, "period":0.9, "stagger":0.29, "dwell":0.35, "speed":1.2, "direction":1.0, "mirror":false, "wave":"sine"},
+      {"id":"processing", "amplitude":0.28, "period":1.8, "stagger":0.20, "dwell":0.40, "speed":1.0, "direction":-1.0, "mirror":false, "wave":"eased-triangle"},
+      {"id":"done", "amplitude":0.23, "period":2.4, "stagger":0.10, "dwell":0.30, "speed":1.0, "direction":1.0, "mirror":true, "wave":"eased-triangle"},
+      {"id":"attention", "amplitude":0.12, "period":2.4, "stagger":0.05, "dwell":0.35, "speed":1.0, "direction":1.0, "mirror":true, "wave":"sine"}
+    ]
+  }
+}

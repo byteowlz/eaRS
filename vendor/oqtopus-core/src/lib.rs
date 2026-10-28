@@ -6,7 +6,7 @@ mod player;
 mod sampler;
 pub use breath::{breathing_frame, BreathParams};
 use flate2::{Decompress, FlushDecompress, Status};
-pub use geometry::{decode_frame, FramePaths, PathCommand};
+pub use geometry::{decode_frame, update_geometry_digest, FramePaths, PathCommand};
 pub use player::{BreathMode, Mode, Player, PlayerSample, PlayerState, RestMode};
 pub use sampler::{ClipSampler, Layer, Sample};
 use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};

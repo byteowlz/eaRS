@@ -95,8 +95,14 @@ XDG defaults). An explicit eaRS scheme takes precedence. Missing or invalid
 colours fall back to the active eaRS theme, and low-contrast colours are replaced
 with readable black or white. Changes are checked once per second.
 
-Oqtopus reads a local pack from `$XDG_DATA_HOME/ears/oqtopus.oqp` (default
-`~/.local/share/ears/oqtopus.oqp`), or `EARS_OQTOPUS_PACK` when set. Run
+The procedural Ears mark and Oqtopus use the same shared motion player and
+vector renderer; Ears' geometry is bundled as a procedural manifest. Oqtopus
+reads a separately supplied shared motion package from
+`$XDG_DATA_HOME/ears/oqtopus.motion` (default `~/.local/share/ears/oqtopus.motion`),
+or `EARS_OQTOPUS_PACK` when set. An existing `oqtopus.oqp` in the same directory
+is accepted when no `.motion` file exists; legacy packs receive eaRS's default
+state mapping. For a `.motion` package, the manifest must provide the `ready`,
+`listening`, `processing`, `done`, and `attention` states. Run
 `ears-ui --oqtopus-check` to validate it without starting dictation. Missing or
 invalid packs fall back to the ears indicator. Listening and the time-based
 completion mark use neutral idle motion; finalizing and error request thinking

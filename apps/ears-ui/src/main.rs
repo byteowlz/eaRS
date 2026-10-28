@@ -7,6 +7,7 @@ mod app;
 mod config;
 mod ears_mark;
 mod indicator_theme;
+mod motion_mark;
 mod oqtopus;
 mod overlay;
 mod parametric_mark;

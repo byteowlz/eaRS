@@ -1,0 +1,16 @@
+{
+  "format": "byteowlz.motion",
+  "version": 1,
+  "id": "oqtopus",
+  "source": {
+    "kind": "vector-pack",
+    "states": [
+      {"id":"ready", "action":{"operation":"idle"}},
+      {"id":"listening", "action":{"operation":"idle"}},
+      {"id":"speech", "action":{"operation":"idle"}},
+      {"id":"processing", "action":{"operation":"hold","clip":"thinking"}, "optional":true},
+      {"id":"done", "action":{"operation":"idle"}},
+      {"id":"attention", "action":{"operation":"play","clip":"surprised"}, "optional":true}
+    ]
+  }
+}

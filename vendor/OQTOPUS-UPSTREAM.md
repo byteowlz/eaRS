@@ -1,8 +1,9 @@
-# Oqtopus shared runtime snapshot
+# Shared motion runtime snapshot
 
-`oqtopus-core` and `oqtopus-render` are a source snapshot of the shared
-`oqto-animation` repository at commit `5a98651`. They contain code only, not
-animation packs or artwork. They are vendored so eaRS builds from a standalone
-checkout before the shared runtime is published as a versioned dependency.
-Make runtime changes upstream first, then refresh both directories from the
-same upstream revision and run both projects' tests.
+`motion-core`, `motion-render`, `oqtopus-core` and `oqtopus-render` are a
+source snapshot of `oqto-animation` commit `ee45429`. The bundled manifests
+specify procedural Ears geometry and eaRS's provisional Oqtopus state mapping;
+no Oqtopus animation pack or artwork is included. The snapshot keeps eaRS
+buildable standalone while the shared runtime remains unpublished. Change the
+runtime upstream first, refresh all four directories together, and run both
+projects' tests.

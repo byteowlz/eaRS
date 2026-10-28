@@ -70,7 +70,10 @@ fn flatten_quad(
     flatten_quad(a, ac, mid, points, depth + 1);
     flatten_quad(mid, cb, b, points, depth + 1);
 }
-fn loops_to_area(loops: &[Vec<PathCommand>]) -> Result<MultiPolygon<f64>, RenderError> {
+fn loops_to_area(
+    loops: &[Vec<PathCommand>],
+    union: bool,
+) -> Result<MultiPolygon<f64>, RenderError> {
     let mut area = MultiPolygon(vec![]);
     for commands in loops {
         let mut points = Vec::new();
@@ -113,19 +116,35 @@ fn loops_to_area(loops: &[Vec<PathCommand>]) -> Result<MultiPolygon<f64>, Render
             points.push(points[0]);
         }
         let poly = MultiPolygon(vec![Polygon::new(LineString(points), vec![])]);
-        area = area.xor(&poly);
+        area = if union {
+            area.union(&poly)
+        } else {
+            area.xor(&poly)
+        };
     }
     Ok(area)
 }
 /// Prepare vector geometry once per source frame, without choosing colors.
 pub fn prepare_frame(paths: &FramePaths) -> Result<PreparedFrame, RenderError> {
-    let body = loops_to_area(&paths.body)?;
-    let stripe = body.intersection(&loops_to_area(&paths.stripe)?);
+    let body = loops_to_area(&paths.body, false)?;
+    let stripe = body.intersection(&loops_to_area(&paths.stripe, false)?);
     let body_only = body.difference(&stripe);
     Ok(PreparedFrame {
         body,
         body_only,
         stripe,
+    })
+}
+/// Prepare same-colored procedural shapes as a union, avoiding overlap holes.
+pub fn prepare_solid_union(paths: &FramePaths) -> Result<PreparedFrame, RenderError> {
+    if !paths.stripe.is_empty() {
+        return Err(error("solid union does not support stripe paths"));
+    }
+    let body = loops_to_area(&paths.body, true)?;
+    Ok(PreparedFrame {
+        body: body.clone(),
+        body_only: body,
+        stripe: MultiPolygon(vec![]),
     })
 }
 fn triangulate(area: &MultiPolygon<f64>) -> Result<Vec<[f32; 2]>, RenderError> {
