@@ -202,7 +202,15 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("ears-motion-{}-{nonce}.oqp", std::process::id()))
+        // Wall-clock granularity is not a uniqueness guarantee across tests.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::env::temp_dir().join(format!("ears-motion-{}-{nonce}-{serial}.oqp", std::process::id()))
+    }
+    #[test]
+    fn temp_paths_are_unique_within_the_process() {
+        let mut paths = std::collections::HashSet::new();
+        for _ in 0..1000 { assert!(paths.insert(temp_path())); }
     }
     fn write_fixture(path: &Path) {
         std::fs::OpenOptions::new()
