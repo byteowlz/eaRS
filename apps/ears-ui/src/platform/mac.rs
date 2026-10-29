@@ -1,6 +1,10 @@
 //! macOS shim: everything goes through public AppKit API (objc2), no private
 //! symbols. See docs/DYNAMIC_ISLAND_SPIKE.md for the reasoning.
 
+#[path = "mac_input.rs"]
+mod input;
+pub use input::set_overlay_input_shape;
+
 use super::Notch;
 use gpui::Window;
 use objc2::MainThreadMarker;
@@ -147,9 +151,14 @@ pub fn request_redraw(window: &Window) {
     }
 }
 
+/// Configure a NEW popup. Never explicitly set false: AppKit then captures
+/// the entire rectangle instead of honoring transparent pixels. To return
+/// from full click-through to alpha-based input, OverlayManager recreates it.
 pub fn set_click_through(window: &Window, on: bool) {
-    if let Some(ns) = ns_window(window) {
-        ns.setIgnoresMouseEvents(on);
+    if on {
+        if let Some(ns) = ns_window(window) {
+            ns.setIgnoresMouseEvents(true);
+        }
     }
 }
 
@@ -205,5 +214,9 @@ pub fn prepare_overlay_panel(window: &Window) {
         mask.remove(NSWindowStyleMask::Titled | NSWindowStyleMask::FullSizeContentView);
         ns.setStyleMask(mask);
         ns.setHasShadow(false);
+        // GPUI uses alpha 0.0001 to stabilize native shadows. We disable that
+        // shadow, and must use true zero-alpha for WindowServer hit testing.
+        ns.setOpaque(false);
+        ns.setBackgroundColor(Some(&NSColor::clearColor()));
     }
 }

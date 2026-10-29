@@ -454,6 +454,8 @@ Buffers flush every few seconds, after enough events, on disconnect, and on shut
 capture-VAD silence, then rearms wake detection only after owned final results
 have drained. It requires matching client/server support, is independent of
 recording retention, and never cuts a held push-to-talk key. Default: off.
+Tune `speech_threshold` (default `0.5`) in config.toml or Settings → Dictation →
+Auto-pause; higher rejects more noise but may miss quiet speech.
 See [configuration, protocol and qualification limits](docs/auto-pause.md).
 
 ## Audio history (opt-in)

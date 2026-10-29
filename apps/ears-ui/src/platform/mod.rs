@@ -12,6 +12,20 @@ pub use mac::*;
 #[cfg(not(target_os = "macos"))]
 pub use other::*;
 
+/// Exact painted notch silhouette in logical pixels; shadows are excluded.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OverlayInputShape {
+    pub width: f32,
+    pub height: f32,
+    pub radius: f32,
+    pub throat: f32,
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn set_overlay_input_shape(_window: &gpui::Window, _shape: OverlayInputShape) -> bool {
+    true
+}
+
 /// Geometry of a camera notch in logical pixels (macOS laptops).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Notch {

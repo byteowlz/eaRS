@@ -87,6 +87,13 @@ struct AutoPauseSession {
     word_overflow: bool,
 }
 impl AutoPauseSession {
+    fn set_speech_threshold(&mut self, threshold: f32) -> Result<()> {
+        super::auto_pause::validate_speech_threshold(threshold)?;
+        if let Some(auto) = &mut self.runtime {
+            auto.control.set_speech_threshold(threshold)?;
+        }
+        Ok(())
+    }
     fn draining(&self) -> bool {
         self.runtime
             .as_ref()
@@ -928,6 +935,16 @@ impl Engine {
             }
             DictationCommand::SetHotkeyMode(mode) => {
                 self.shared.set_hotkey_mode(mode);
+            }
+            DictationCommand::SetAutoPauseSpeechThreshold(threshold) => {
+                if let Err(error) = self.auto_pause.set_speech_threshold(threshold) {
+                    self.shared.emit(DictationEvent::Error {
+                        message: error.to_string(),
+                    });
+                }
+                // A sensitivity edit is not a capture edge: preserve the owned
+                // Final/ACK barrier, buffered PCM, generation and held-key state.
+                return Ok(Flow::Continue);
             }
             DictationCommand::Reload => {
                 self.registry.reload();

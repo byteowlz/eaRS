@@ -28,7 +28,7 @@ use runtime::Runtime;
 
 fn print_help() {
     println!(
-        "ears-ui {}\n\nUsage: ears-ui [--settings] [--no-overlay] [--oqtopus-check] [--preview-synthetic|--preview-synthetic-expanded|--preview-placement|--preview-click|--preview-settings|--preview-floating|--preview-oqtopus|--preview-oqtopus-reduced|--preview-parametric|--preview-parametric-reduced|--preview-parametric-override] [--help]\n\n  --settings           open the settings window at launch\n  --no-overlay         start with the floating island disabled\n  --preview-synthetic  display a synthetic notch fixture without starting dictation\n  --preview-synthetic-expanded  show the expanded synthetic fixture\n  --preview-placement  show a synthetic fixture at the actual screen anchor\n  --preview-click     show a clickable placement fixture without dictation\n  --preview-settings   show settings with synthetic state, without dictation\n  --preview-floating   show a synthetic bottom-anchored floating pill\n  --oqtopus-check     validate the configured local vector pack without dictation\n  --preview-oqtopus   show the local Oqtopus pack without dictation\n  --preview-oqtopus-reduced   show its static reduced-motion rest frame\n  --preview-parametric-override  animate a synthetic icon despite reduced motion\n  --preview-parametric  show animated parametric bars in a synthetic notch\n  --preview-parametric-reduced  show the same fixture with reduced motion\n  --version            print the version\n\nConfig: {}",
+        "ears-ui {}\n\nUsage: ears-ui [--settings] [--no-overlay] [--oqtopus-check] [--preview-synthetic|--preview-synthetic-expanded|--preview-placement|--preview-click|--preview-settings|--preview-floating|--preview-oqtopus|--preview-oqtopus-reduced|--preview-parametric|--preview-parametric-reduced|--preview-parametric-override] [--help]\n\n  --settings           open the settings window at launch\n  --no-overlay         start with the floating island disabled\n  --preview-synthetic  display a synthetic notch fixture without starting dictation\n  --preview-synthetic-expanded  show the expanded synthetic fixture\n  --preview-placement  show a synthetic fixture at the actual screen anchor\n  --preview-click     show a clickable placement fixture without dictation\n  --preview-hit-test  show a centered clickable synthetic notch for native input tests\n  --preview-settings   show settings with synthetic state, without dictation\n  --preview-floating   show a synthetic bottom-anchored floating pill\n  --oqtopus-check     validate the configured local vector pack without dictation\n  --preview-oqtopus   show the local Oqtopus pack without dictation\n  --preview-oqtopus-reduced   show its static reduced-motion rest frame\n  --preview-parametric-override  animate a synthetic icon despite reduced motion\n  --preview-parametric  show animated parametric bars in a synthetic notch\n  --preview-parametric-reduced  show the same fixture with reduced motion\n  --version            print the version\n\nConfig: {}",
         env!("CARGO_PKG_VERSION"),
         UiConfig::path().display()
     );
@@ -78,6 +78,7 @@ fn preview_synthetic(options: PreviewOptions) {
     Application::new().run(move |cx| {
         platform::set_accessory_policy();
         let mut fixture = AppModel::new(AppConfig::default(), ui);
+        fixture.configuration_is_preview = true;
         fixture.state = DictationState::Listening;
         fixture.connection = ConnectionState::Connected;
         fixture.speech_active = true;
@@ -101,7 +102,11 @@ fn preview_synthetic(options: PreviewOptions) {
 fn preview_settings() {
     Application::new().run(|cx| {
         platform::set_accessory_policy();
-        let model = cx.new(|_| AppModel::new(AppConfig::default(), UiConfig::default()));
+        let model = cx.new(|_| {
+            let mut model = AppModel::new(AppConfig::default(), UiConfig::default());
+            model.configuration_is_preview = true;
+            model
+        });
         cx.set_global(AppHandle(model.clone()));
         cx.set_global(Runtime::new(model));
         runtime::apply_theme(cx, None);
@@ -122,12 +127,15 @@ fn maybe_preview(args: &[String]) -> bool {
     let animated = motion_override || args.iter().any(|a| a == "--preview-parametric");
     let reduced = motion_override || args.iter().any(|a| a == "--preview-parametric-reduced");
     let floating = args.iter().any(|a| a == "--preview-floating");
-    let clickable = args.iter().any(|a| a == "--preview-click");
-    let placement = clickable || args.iter().any(|a| a == "--preview-placement");
+    let anchored_click = args.iter().any(|a| a == "--preview-click");
+    let hit_test = args.iter().any(|a| a == "--preview-hit-test");
+    let clickable = anchored_click || hit_test;
+    let placement = anchored_click || args.iter().any(|a| a == "--preview-placement");
     if oqtopus
         || floating
         || placement
         || expanded
+        || hit_test
         || animated
         || reduced
         || args.iter().any(|a| a == "--preview-synthetic")

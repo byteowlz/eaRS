@@ -56,6 +56,8 @@ pub struct UiError {
 
 pub struct AppModel {
     pub core: AppConfig,
+    /// Synthetic previews must never persist core configuration.
+    pub configuration_is_preview: bool,
     pub ui: UiConfig,
     pub engine: Option<DictationHandle>,
     pub engine_stopped: bool,
@@ -98,6 +100,7 @@ impl AppModel {
             insertion_mode: ui.dictation.insertion_mode,
             hotkey_mode,
             core,
+            configuration_is_preview: false,
             ui,
             engine: None,
             engine_stopped: false,

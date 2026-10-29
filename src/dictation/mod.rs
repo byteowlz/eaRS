@@ -226,6 +226,8 @@ pub enum DictationCommand {
     SetHotkeyMode(crate::config::DictationHotkeyMode),
     /// Switch whether Escape cancels pending words (applied immediately).
     SetEscapeCancels(bool),
+    /// Adjust auto-pause speech classification without restarting capture/drain.
+    SetAutoPauseSpeechThreshold(f32),
     /// Re-read dictionaries and profiles from disk immediately.
     Reload,
     /// Stop the engine.

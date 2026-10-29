@@ -129,6 +129,7 @@
           "properties": {
             "idle_ms": {"type": "integer", "default": 0, "anyOf": [{"const": 0}, {"minimum": 500, "maximum": 3600000}], "description": "Zero disables; otherwise capture silence before starting finalization"},
             "drain_timeout_ms": {"type": "integer", "default": 10000, "minimum": 100, "maximum": 60000, "description": "Maximum client finalization wait; timeout is failure, never success. Server also bounds completion."},
+            "speech_threshold": {"type": "number", "default": 0.5, "exclusiveMinimum": 0, "exclusiveMaximum": 1, "description": "Minimum Silero speech probability for auto-pause only. Higher rejects more noise but may miss quiet speech; independent of recording and server VAD."},
             "vad": {"$ref": "#/properties/dictation/properties/audio_history/properties/client_vad"}
           },
           "additionalProperties": false

@@ -381,6 +381,11 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    /// The same path used by the headless engine and Settings.
+    pub fn path() -> Result<PathBuf> {
+        get_config_path()
+    }
+
     pub fn load() -> Result<Self> {
         let config_path = get_config_path()?;
 

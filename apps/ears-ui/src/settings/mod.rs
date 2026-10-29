@@ -1,7 +1,9 @@
 //! The settings window: dictation, overlay, dictionaries and context
 //! profiles. All edits write through [`AppModel`] (persisted to `ui.toml` or
-//! `profiles.toml`) so the headless engine and the tray see the same state
+//! `profiles.toml`; auto-pause sensitivity writes `config.toml`) so the engine and tray share state
 //! immediately.
+
+mod auto_pause;
 
 use crate::app::AppModel;
 use crate::config::ContentMotion;
@@ -20,6 +22,7 @@ use crate::ui::label;
 use crate::ui::row;
 use crate::ui::section;
 use crate::ui::segmented;
+use crate::ui::slider::{ProbabilitySlider, SliderCommit};
 use crate::ui::text_input::{TextInput, TextInputEvent, init};
 use crate::ui::toggle;
 use ears::config::DictationHotkeyMode;
@@ -54,6 +57,25 @@ use gpui::px;
 const INPUT_W: f32 = 300.0;
 const NUM_W: f32 = 110.0;
 const LANGUAGES: [&str; 6] = ["en", "de", "fr", "es", "it", "ja"];
+
+fn cycle_settings_focus(event: &gpui::KeyDownEvent, window: &mut Window, cx: &mut App) {
+    let plain = gpui::Modifiers::default();
+    let shifted = gpui::Modifiers {
+        shift: true,
+        ..plain
+    };
+    if event.keystroke.key != "tab"
+        || (event.keystroke.modifiers != plain && event.keystroke.modifiers != shifted)
+    {
+        return;
+    }
+    if event.keystroke.modifiers.shift {
+        window.focus_prev();
+    } else {
+        window.focus_next();
+    }
+    cx.stop_propagation();
+}
 
 fn overlay_choice<T: Copy + PartialEq + 'static>(
     id: &'static str,
@@ -133,6 +155,8 @@ pub struct SettingsView {
     linger: Entity<TextInput>,
     opacity: Entity<TextInput>,
     radius: Entity<TextInput>,
+    speech_threshold: Entity<ProbabilitySlider>,
+    auto_pause_error: Option<String>,
     draft: Option<ProfileDraft>,
 }
 
@@ -186,6 +210,13 @@ impl SettingsView {
         let linger = input(cx, "900", &format!("{}", overlay.linger_ms), true);
         let opacity = input(cx, "0.96", &format!("{:.2}", overlay.opacity), true);
         let radius_input = input(cx, "8", &format!("{}", radius), true);
+
+        let threshold = model.read(cx).core.dictation.auto_pause.speech_threshold;
+        let speech_threshold = cx.new(|cx| ProbabilitySlider::new(threshold, cx));
+        cx.subscribe(&speech_threshold, |this, _, event: &SliderCommit, cx| {
+            this.commit_speech_threshold(event.0, cx);
+        })
+        .detach();
 
         // Re-render when the engine pushes events (connection badge, profile).
         cx.observe(&model, |_, _, cx| cx.notify()).detach();
@@ -255,11 +286,46 @@ impl SettingsView {
             linger,
             opacity,
             radius: radius_input,
+            speech_threshold,
+            auto_pause_error: None,
             draft: None,
         }
     }
 
     // ---- actions ---------------------------------------------------------
+
+    fn commit_speech_threshold(&mut self, threshold: f32, cx: &mut Context<Self>) {
+        let preview = self.model.read(cx).configuration_is_preview;
+        let result = if preview {
+            Ok(())
+        } else {
+            ears::config::AppConfig::path()
+                .and_then(|path| auto_pause::persist_threshold(&path, threshold))
+        };
+        match result {
+            Ok(()) => {
+                self.auto_pause_error = None;
+                self.model.update(cx, |m, cx| {
+                    m.core.dictation.auto_pause.speech_threshold = threshold;
+                    m.send(DictationCommand::SetAutoPauseSpeechThreshold(threshold));
+                    cx.notify();
+                });
+            }
+            Err(error) => {
+                self.auto_pause_error = Some(format!("Not saved or applied: {error:#}"));
+                let previous = self
+                    .model
+                    .read(cx)
+                    .core
+                    .dictation
+                    .auto_pause
+                    .speech_threshold;
+                self.speech_threshold
+                    .update(cx, |slider, cx| slider.set_value(previous, cx));
+            }
+        }
+        cx.notify();
+    }
 
     fn apply_server(&mut self, cx: &mut Context<Self>) {
         let value = self.server.read(cx).text().trim().to_string();
@@ -451,6 +517,7 @@ impl SettingsView {
             .text_color(r.foreground)
             .font_family(theme.font_sans.clone())
             .track_focus(&self.focus_handle)
+            .on_key_down(cycle_settings_focus)
             .child(
                 div()
                     .id("settings-scroll")
@@ -688,8 +755,31 @@ impl SettingsView {
             }),
             theme,
         ));
-        pane = pane.child(behaviour);
-        pane.into_any_element()
+        pane.child(behaviour)
+            .child(self.auto_pause_section(theme, cx))
+            .into_any_element()
+    }
+
+    fn auto_pause_section(&self, theme: &Theme, cx: &Context<Self>) -> Div {
+        let idle_ms = self.model.read(cx).core.dictation.auto_pause.idle_ms;
+        let status = if idle_ms == 0 {
+            "Auto-pause is disabled (idle_ms = 0 in config.toml).".to_string()
+        } else {
+            format!("Pause after {idle_ms} ms of scored silence.")
+        };
+        let mut auto_pause = section("Auto-pause", theme)
+            .child(hint(status, theme))
+            .child(row(
+                "Speech threshold",
+                Some("Higher rejects more noise but may miss quiet speech. Saved to config.toml without restarting.".into()),
+                self.speech_threshold.clone(),
+                theme,
+            ));
+        if let Some(error) = &self.auto_pause_error {
+            auto_pause =
+                auto_pause.child(div().text_color(theme.roles.danger).child(error.clone()));
+        }
+        auto_pause
     }
 
     fn overlay_pane(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {

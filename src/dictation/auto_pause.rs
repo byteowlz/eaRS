@@ -14,6 +14,9 @@ pub struct AutoPauseConfig {
     /// Zero disables automatic pause. Counts scored capture audio, not ASR gaps.
     pub idle_ms: u32,
     pub drain_timeout_ms: u32,
+    /// Minimum Silero probability counted as speech; higher rejects more noise.
+    #[serde(deserialize_with = "deserialize_speech_threshold")]
+    pub speech_threshold: f32,
     /// Optional independent detector configuration. Falls back to the explicit
     /// audio-history detector config, even when recording retention is disabled.
     pub vad: Option<ClientVadConfig>,
@@ -24,6 +27,7 @@ impl Default for AutoPauseConfig {
         Self {
             idle_ms: 0,
             drain_timeout_ms: 10_000,
+            speech_threshold: 0.5,
             vad: None,
         }
     }
@@ -39,8 +43,25 @@ impl AutoPauseConfig {
             (100..=60_000).contains(&self.drain_timeout_ms),
             "auto-pause drain_timeout_ms must be 100..=60000"
         );
-        Ok(())
+        validate_speech_threshold(self.speech_threshold)
     }
+}
+
+/// Shared validation for configuration, live commands and Settings.
+pub fn validate_speech_threshold(threshold: f32) -> Result<()> {
+    ensure!(
+        threshold.is_finite() && threshold > 0.0 && threshold < 1.0,
+        "auto-pause speech_threshold must be finite and greater than 0 and less than 1"
+    );
+    Ok(())
+}
+
+fn deserialize_speech_threshold<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<f32, D::Error> {
+    let threshold = f32::deserialize(deserializer)?;
+    validate_speech_threshold(threshold).map_err(serde::de::Error::custom)?;
+    Ok(threshold)
 }
 
 struct Drain {
@@ -60,6 +81,7 @@ pub(crate) enum Completion {
 
 pub(crate) struct IdlePause {
     idle_samples: u64,
+    speech_threshold: f32,
     drain_timeout: Duration,
     clock: u64,
     last_voice: u64,
@@ -77,6 +99,7 @@ impl IdlePause {
         );
         Ok(Self {
             idle_samples: u64::from(config.idle_ms) * 16,
+            speech_threshold: config.speech_threshold,
             drain_timeout: Duration::from_millis(u64::from(config.drain_timeout_ms)),
             clock: 0,
             last_voice: 0,
@@ -84,6 +107,11 @@ impl IdlePause {
             next_request: 1,
             drain: None,
         })
+    }
+    pub fn set_speech_threshold(&mut self, threshold: f32) -> Result<()> {
+        validate_speech_threshold(threshold)?;
+        self.speech_threshold = threshold;
+        Ok(())
     }
     pub fn start(&mut self, generation: u64) {
         self.clock = 0;
@@ -105,7 +133,7 @@ impl IdlePause {
             .clock
             .checked_add(512)
             .ok_or_else(|| anyhow::anyhow!("auto-pause sample clock overflow"))?;
-        if probability >= 0.5 {
+        if probability >= self.speech_threshold {
             self.last_voice = self.clock;
             if let Some(drain) = &mut self.drain {
                 drain.resume = true;
@@ -261,16 +289,20 @@ impl AutoPause {
 }
 
 #[cfg(test)]
+#[path = "auto_pause_threshold_tests.rs"]
+mod threshold_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
-    fn gate() -> IdlePause {
+    pub(super) fn gate() -> IdlePause {
         IdlePause::new(&AutoPauseConfig {
             idle_ms: 3000,
             ..Default::default()
         })
         .unwrap()
     }
-    fn silent(gate: &mut IdlePause, frames: usize) {
+    pub(super) fn silent(gate: &mut IdlePause, frames: usize) {
         for _ in 0..frames {
             gate.observe(0.0).unwrap();
         }

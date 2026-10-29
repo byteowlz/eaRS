@@ -8,6 +8,7 @@ session length and does not interrupt an actively held push-to-talk/hybrid key.
 [dictation.auto_pause]
 idle_ms = 3000              # 0 disables; otherwise 500..=3600000
 drain_timeout_ms = 10000    # failure bound, not a successful finalization
+speech_threshold = 0.5    # finite, strictly between 0 and 1
 ```
 
 The detector uses `[dictation.auto_pause.vad]` when supplied, otherwise the explicit
@@ -17,6 +18,28 @@ missing feature/artifact, wrong hash or detector error never becomes a guessed
 silence decision. There are no implicit downloads, remote inference or speaker
 identification. The detector has independent recurrent/frame state so recording
 privacy resets cannot silently change the idle controller.
+
+### Speech threshold in background noise
+
+Settings → Dictation → Auto-pause exposes a speech-probability slider (0.01–0.99,
+0.01 steps; default 0.50). Raise it gradually, for example to 0.65–0.75, if noise
+keeps renewing the silence interval. These are trial values, not calibrated noise
+presets: higher values can also miss quiet speech and genuine resumption during
+finalization. A threshold does not separate background speakers from the owner.
+
+Click/drag or focus the slider and use arrows, Home or End. Tab/Shift-Tab move
+focus through Settings. A release or keyboard step saves only this field in the
+engine's `config.toml`, preserving other values/comments and intentional dotfile
+symlinks via atomic replacement. A save failure is shown inline and does not
+apply the edit. Synthetic previews never save core settings. The live command
+updates classification without rotating capture, changing its generation,
+resetting the detector or cancelling an outstanding Final/ACK drain. It does not
+enable auto-pause or provide missing detector/model support. Manual file edits
+are loaded when the engine starts again.
+
+This threshold is **only for capture inactivity and resumed-speech detection**.
+Recording onset/offset settings, wake thresholds and the server's RMS endpoint
+are unchanged. It does not itself fix the delayed-word endpoint issue.
 
 Build matching components (the dependency alias is `ears`, not the package name):
 
@@ -50,7 +73,7 @@ an installed or live-qualified deployment.
   output, never erases/retypes committed words or guesses across revisions.
   A mismatch is a visible failure. Original recognition remains unassigned to
   acoustic training clips, as described in `client-vad.md`.
-- Cancel, mode/config changes and capture-generation changes fence old callbacks
+- Cancel, mode/stream configuration changes and capture-generation changes fence old callbacks
   and discard uncertain pending commands. Rapid pause/resume rotates the stream
   rather than letting an old ACK pause a new capture. A normal manual stop also
   rotates an auto-pause-enabled stream; it is not a promise of graceful finalization.

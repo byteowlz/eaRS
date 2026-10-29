@@ -26,6 +26,12 @@ ui-test:
 ui-preview-test:
     apps/ears-ui/scripts/check-parametric-preview.sh
 
+# macOS native pointer routing; build first, use an unlocked desktop with existing event permission
+ui-input-test binary="target/debug/ears-ui":
+    swift scripts/probe_overlay_hit_test.swift "{{binary}}"
+    swift scripts/probe_overlay_hit_test.swift "{{binary}}" --click-through
+    swift scripts/probe_overlay_hit_test.swift "{{binary}}" --expanded
+
 # === Code Quality ===
 
 # Format code

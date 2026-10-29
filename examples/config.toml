@@ -104,6 +104,7 @@ stop_message = "Dictation disabled"
 [dictation.auto_pause]
 idle_ms = 0                 # trial: 3000; 0 disables
 drain_timeout_ms = 10000    # failure bound, not a substitute for a final/ACK
+speech_threshold = 0.5    # 0 < value < 1; higher rejects more noise (may miss quiet speech)
 # Detector metadata defaults to audio_history.client_vad when configured,
 # including when retention is disabled. Or supply independent explicit paths:
 # [dictation.auto_pause.vad]

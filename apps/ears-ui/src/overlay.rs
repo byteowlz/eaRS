@@ -90,10 +90,9 @@ const THROAT: f32 = 12.0;
 pub struct OverlayManager {
     window: Option<(WindowHandle<IslandView>, u32)>,
     hide_at: Option<Instant>,
-    applied_click_through: Option<bool>,
     /// Placement config the open window was built with; a change re-opens
-    /// the window on the next tick (drag offsets included).
-    applied_placement: Option<String>,
+    /// the window on the next tick (drag offsets and input mode included).
+    applied_placement: Option<WindowConfiguration>,
 }
 
 impl Global for OverlayManager {}
@@ -104,7 +103,6 @@ impl OverlayManager {
             cx.set_global(OverlayManager {
                 window: None,
                 hide_at: None,
-                applied_click_through: None,
                 applied_placement: None,
             });
         }
@@ -169,31 +167,27 @@ pub fn sync(cx: &mut App) {
             OverlayManager::get(cx).window = None;
             return;
         }
-        let (applied, placement) = {
-            let manager = OverlayManager::get(cx);
-            (
-                manager.applied_click_through,
-                Some(placement_signature(&overlay)),
-            )
-        };
-        if applied != Some(overlay.click_through) {
-            let _ = handle.update(cx, |_, window, _| {
-                platform::set_click_through(window, overlay.click_through);
-            });
-            OverlayManager::get(cx).applied_click_through = Some(overlay.click_through);
-        }
-        if OverlayManager::get(cx).applied_placement.as_deref() != placement.as_deref() {
+        // AppKit cannot restore alpha-based input after ignoresMouseEvents
+        // has been explicitly set. Recreate the popup when input mode changes.
+        let signature = window_configuration_signature(&overlay);
+        if OverlayManager::get(cx).applied_placement.as_ref() != Some(&signature) {
             close(cx);
             open(cx, &overlay, model.clone());
         }
     }
 }
 
-/// Everything that determines where the island window sits.
-fn placement_signature(overlay: &OverlayConfig) -> String {
-    format!(
-        "{:?}|{:.1}|{}|{:.1}|{:.1}",
-        overlay.anchor, overlay.margin, overlay.island_mode, overlay.offset_x, overlay.offset_y
+/// Placement and native input mode both require a fresh popup.
+type WindowConfiguration = (OverlayAnchor, f32, bool, f32, f32, bool);
+
+fn window_configuration_signature(overlay: &OverlayConfig) -> WindowConfiguration {
+    (
+        overlay.anchor,
+        overlay.margin,
+        overlay.island_mode,
+        overlay.offset_x,
+        overlay.offset_y,
+        overlay.click_through,
     )
 }
 
@@ -201,7 +195,6 @@ fn close(cx: &mut App) {
     let manager = OverlayManager::get(cx);
     let window = manager.window.take();
     manager.hide_at = None;
-    manager.applied_click_through = None;
     manager.applied_placement = None;
     if let Some((handle, _)) = window {
         let _ = handle.update(cx, |_, window, _| window.remove_window());
@@ -241,6 +234,17 @@ fn window_origin_y(height: f32, menu_height: f32, overlay: &OverlayConfig, islan
 #[cfg(test)]
 mod placement_tests {
     use super::*;
+
+    #[test]
+    fn input_mode_changes_require_fresh_native_windows_in_both_directions() {
+        let mut config = OverlayConfig::default();
+        config.click_through = false;
+        let interactive = window_configuration_signature(&config);
+        config.click_through = true;
+        assert_ne!(window_configuration_signature(&config), interactive);
+        config.click_through = false;
+        assert_eq!(window_configuration_signature(&config), interactive);
+    }
 
     #[test]
     fn top_anchors_account_for_platform_window_coordinates() {
@@ -323,8 +327,7 @@ pub(crate) fn open(cx: &mut App, overlay: &OverlayConfig, model: Entity<AppModel
         Ok(handle) => {
             let manager = OverlayManager::get(cx);
             manager.window = Some((handle, display_id));
-            manager.applied_click_through = Some(click_through);
-            manager.applied_placement = Some(placement_signature(overlay));
+            manager.applied_placement = Some(window_configuration_signature(overlay));
         }
         Err(err) => eprintln!("ears-ui: cannot open overlay: {err:#}"),
     }
@@ -358,9 +361,10 @@ pub fn open_preview(cx: &mut App, model: Entity<AppModel>) {
         app_id: Some("dev.byteowlz.ears-ui.synthetic-preview".into()),
         ..Default::default()
     };
+    let click_through = model.read(cx).ui.overlay.click_through;
     if let Err(error) = cx.open_window(options, |window, cx| {
         platform::prepare_overlay_panel(window);
-        platform::set_click_through(window, true);
+        platform::set_click_through(window, click_through);
         cx.new(|cx| {
             IslandView::new(
                 model,
@@ -734,6 +738,7 @@ pub struct IslandView {
     parametric_started: Instant,
     oqtopus: Option<crate::oqtopus::Worker>,
     oqtopus_attempted: bool,
+    input_shape: Option<platform::OverlayInputShape>,
 }
 
 /// Small easing with overshoot for the island's springy feel.
@@ -882,11 +887,27 @@ impl IslandView {
             parametric_started: Instant::now(),
             oqtopus: None,
             oqtopus_attempted: false,
+            input_shape: None,
         }
     }
 
     fn island(&self) -> bool {
         self.notch.is_some()
+    }
+
+    fn sync_input_shape(&mut self, window: &Window, width: f32, height: f32) {
+        if !self.island() {
+            return;
+        }
+        let shape = platform::OverlayInputShape {
+            width,
+            height,
+            radius: self.notch.map_or(PILL_H, |n| n.height) * 0.35,
+            throat: throat_extent(width, height),
+        };
+        if self.input_shape != Some(shape) && platform::set_overlay_input_shape(window, shape) {
+            self.input_shape = Some(shape);
+        }
     }
 
     fn oqtopus_indicator(
@@ -1169,6 +1190,7 @@ impl Render for IslandView {
         let animate = overlay.motion_enabled(reduce_motion);
         let ((w, h), reveal, detail_reveal) =
             self.update_motion(target, &mut content, &overlay, animate);
+        self.sync_input_shape(window, w, h);
         let display_text = if island && dormant && reveal > 0.0 {
             self.tail(window, &content.text, max_text_w, content.text_color)
         } else {

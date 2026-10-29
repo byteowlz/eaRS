@@ -4,6 +4,7 @@
 //! dial and every gap from the spacing unit, so swapping the scheme or
 //! turning the dial re-skins the whole UI.
 
+pub mod slider;
 pub mod text_input;
 
 use crate::theme::Theme;

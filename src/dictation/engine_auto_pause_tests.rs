@@ -57,7 +57,7 @@ fn auto_pause_engine() -> (Engine, Arc<Mutex<String>>) {
         super::super::auto_pause::AutoPauseConfig {
             idle_ms: 500,
             drain_timeout_ms: 1000,
-            vad: None,
+            ..Default::default()
         },
     );
     auto.start(engine.shared.capture_generation());
@@ -257,7 +257,7 @@ async fn auto_pause_replays_speech_that_resumes_during_drain_exactly_once() {
         super::super::auto_pause::AutoPauseConfig {
             idle_ms: 500,
             drain_timeout_ms: 1000,
-            vad: None,
+            ..Default::default()
         },
     );
     auto.start(engine.shared.capture_generation());
@@ -513,6 +513,49 @@ async fn auto_pause_missing_ack_times_out_without_dispatching_buffered_commands(
     assert!(!engine.shared.is_capturing());
     assert!(typed.lock().unwrap().is_empty());
     assert!(engine.utterance.is_empty() && engine.auto_pause.frozen.is_empty());
+}
+
+#[test]
+fn auto_pause_threshold_command_preserves_owned_drain_and_buffered_pcm() {
+    let (mut engine, typed) = auto_pause_engine();
+    let generation = engine.shared.capture_generation();
+    let auto = engine.auto_pause.runtime.as_mut().unwrap();
+    for _ in 0..16 {
+        auto.control.observe(0.0).unwrap();
+    }
+    let id = auto.control.begin(generation, Instant::now()).unwrap();
+    engine.auto_pause.freeze(vec![0.25; 960]).unwrap();
+    for threshold in [0.75, f32::NAN] {
+        assert_eq!(
+            engine
+                .handle_command(DictationCommand::SetAutoPauseSpeechThreshold(threshold))
+                .unwrap(),
+            Flow::Continue
+        );
+        assert!(engine.auto_pause.draining());
+        assert_eq!(engine.shared.capture_generation(), generation);
+        assert!(engine.shared.is_capturing());
+        assert_eq!(engine.auto_pause.frozen.front().unwrap(), &vec![0.25; 960]);
+    }
+    // 0.6 no longer requests resumption; the invalid edit did not replace 0.75.
+    engine
+        .auto_pause
+        .runtime
+        .as_mut()
+        .unwrap()
+        .control
+        .observe(0.6)
+        .unwrap();
+    engine
+        .handle_session_message(&serde_json::json!({"type":"final", "text":""}))
+        .unwrap();
+    assert_eq!(
+        engine
+            .handle_session_message(&serde_json::json!({"type":"drained", "request_id":id}))
+            .unwrap(),
+        Some(Flow::DrainedPause)
+    );
+    assert!(typed.lock().unwrap().is_empty());
 }
 
 #[test]
