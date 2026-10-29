@@ -98,14 +98,36 @@ impl SpeakerVerdict {
     }
 }
 
-/// Minimal view of the command's JSON: `score` is the only required field.
+/// Minimal view of the command's JSON.
+///
+/// This accepts the shape `voqx identify --json` prints (`voice_id`, `score`, `status`) as well as a
+/// plain `{"score": …}` from any other tool. Three things decide the verdict, in this order:
+///
+/// 1. a non-confident `status` (`tentative`, `unknown`, `insufficient_audio`, `incompatible_model`,
+///    provider errors) is `Unknown`, because an uncertain or abstaining model must not filter;
+/// 2. when an `identity` is configured and the response names a different `voice_id`, that is
+///    `Other` - a high score against somebody *else* enrolled is the opposite of the owner;
+/// 3. otherwise the score against `threshold` decides.
 #[derive(Debug, Deserialize)]
 struct Response {
+    #[serde(default)]
     score: Option<f32>,
+    #[serde(default)]
+    score_sample: Option<f32>,
+    #[serde(default)]
+    voice_id: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
     #[serde(default)]
     label: Option<String>,
     #[serde(default)]
     message: Option<String>,
+}
+
+impl Response {
+    fn number(&self) -> Option<f32> {
+        self.score.or(self.score_sample)
+    }
 }
 
 /// Run the speaker command on one WAV file. Never returns an error: every failure is `Unknown`.
@@ -165,15 +187,30 @@ pub fn check(config: &SpeakerConfig, wav: &Path, pcm_ms: u32) -> SpeakerVerdict 
         Some(parsed) => parsed,
         None => return SpeakerVerdict::Unknown { reason: "speaker command printed no JSON object".into() },
     };
-    // A command may answer with a label instead of a number (e.g. an abstaining identity model).
-    let score = match parsed.score {
+    // A command may answer with a status instead of a number (e.g. an abstaining identity model).
+    if let Some(status) = parsed.status.as_deref() {
+        if !matches!(status, "confident") {
+            return SpeakerVerdict::Unknown { reason: format!("speaker status {status}") };
+        }
+    }
+    if let Some(label) = parsed.label.as_deref() {
+        if matches!(label, "insufficient_audio" | "incompatible_model" | "provider_error" | "timeout") {
+            return SpeakerVerdict::Unknown { reason: format!("speaker label {label}") };
+        }
+    }
+    let score = match parsed.number() {
         Some(score) if score.is_finite() => score,
         Some(_) => return SpeakerVerdict::Unknown { reason: "speaker score was not finite".into() },
-        None => match parsed.label.as_deref() {
-            Some("insufficient_audio") => return SpeakerVerdict::Unknown { reason: "the model reported insufficient audio".into() },
-            _ => return SpeakerVerdict::Unknown { reason: parsed.message.unwrap_or_else(|| "no score in speaker output".into()) },
-        },
+        None => return SpeakerVerdict::Unknown { reason: parsed.message.clone().unwrap_or_else(|| "no score in speaker output".into()) },
     };
+    // A high score against a different enrolled person is not the owner.
+    if !config.identity.is_empty() {
+        if let Some(voice_id) = parsed.voice_id.as_deref() {
+            if voice_id != config.identity {
+                return SpeakerVerdict::Other { score };
+            }
+        }
+    }
     if score >= config.threshold() {
         SpeakerVerdict::Owner { score }
     } else {
@@ -348,6 +385,29 @@ mod tests {
         let recorded = std::fs::read_to_string(&recorder).unwrap();
         assert!(recorded.starts_with("vox-tommy "), "identity must come before the audio path: {recorded}");
         assert!(recorded.trim().ends_with(".wav"));
+    }
+
+    #[test]
+    fn voqx_json_shape_is_understood() {
+        let dir = tmpdir("voqx");
+        let wav = write_wav(&dir, &[0.0; 16_000], 16_000).unwrap();
+        // the shape `voqx identify --json` actually prints
+        let confident = r#"{"voice_id":"vox-tommy","display_name":"Tommy","engine":"speakrs-wespeaker","score":0.88,"score_sample":0.88,"score_centroid":0.63,"status":"confident"}"#;
+        let other_person = r#"{"voice_id":"vox-roman","display_name":"Roman","engine":"speakrs-wespeaker","score":0.91,"score_sample":0.91,"status":"confident"}"#;
+        let tentative = r#"{"voice_id":"vox-tommy","score":0.77,"status":"tentative"}"#;
+        let insufficient = r#"{"voice_id":null,"score":null,"status":"insufficient_audio"}"#;
+        let config = fake(&dir, &format!("echo '{confident}'"));
+        assert_eq!(check(&config, &wav, 5000), SpeakerVerdict::Owner { score: 0.88 });
+        // another enrolled person scoring high must not count as the owner
+        let config = fake(&dir, &format!("echo '{other_person}'"));
+        assert_eq!(check(&config, &wav, 5000), SpeakerVerdict::Other { score: 0.91 });
+        // uncertainty never becomes a confident "other" that could filter
+        let config = fake(&dir, &format!("echo '{tentative}'"));
+        assert!(matches!(check(&config, &wav, 5000), SpeakerVerdict::Unknown { .. }));
+        let config = fake(&dir, &format!("echo '{insufficient}'"));
+        let verdict = check(&config, &wav, 5000);
+        assert!(matches!(verdict, SpeakerVerdict::Unknown { .. }), "got {verdict:?}");
+        assert!(!verdict.filters(SpeakerMode::Filter));
     }
 
     #[test]

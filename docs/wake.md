@@ -57,7 +57,13 @@ timeout_ms = 4000
 ```
 
 The command receives the WAV path as its last argument (identity before it when set) and
-prints one JSON object with a `score`, optionally `label`/`message`. The audio it is given is
+prints one JSON object. The reference command is `voqx identify --json`, whose shape is
+understood directly (`voice_id`, `score`/`score_sample`, `status`); any other tool can answer
+with a plain `{"score": 0.7}` or a `label`. Three things decide the verdict, in order: a
+non-confident `status` (`tentative`, `insufficient_audio`, `incompatible_model`, provider
+errors) is *unknown*; a `voice_id` that is not the configured identity is *other* even when its
+score is high; otherwise `score` against `threshold` decides. The gate is a process, not a
+link: eaRS needs no voqx build to compile, and any command that speaks this contract works. The audio it is given is
 the pre-roll plus what follows the wake, up to about 12 s, kept under
 `$XDG_STATE_HOME/ears/wake-speaker/` so a logged verdict can be inspected. The log gains lines
 like `{"type":"speaker","verdict":"owner","speaker_score":0.71,"audio_ms":3120,...}`.
