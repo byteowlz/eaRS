@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:byteowlz:command-trace:v1",
+  "title": "Private Command Decision Trace v1",
+  "description": "Local append-only event interchange. A record is evidence, never action authorization or a reviewed training label.",
+  "type": "object",
+  "required": ["schema", "record_id", "at", "kind", "privacy", "training_eligible"],
+  "properties": {
+    "schema": {"const": "byteowlz.command-trace/v1"},
+    "record_id": {"type": "string", "format": "uuid"},
+    "at": {"type": "string", "format": "date-time"},
+    "kind": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,63}$"},
+    "decision_id": {"type": "string", "maxLength": 256},
+    "utterance_id": {"type": "string", "maxLength": 256},
+    "privacy": {
+      "type": "object", "required": ["source", "reason"],
+      "properties": {
+        "source": {"enum": ["synthetic", "owner_private", "suppressed"]},
+        "reason": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "training_eligible": {"const": false},
+    "payload": {"type": "object"}
+  },
+  "allOf": [{
+    "if": {"properties": {"kind": {"const": "suppressed"}}},
+    "then": {
+      "not": {"anyOf": [{"required": ["payload"]}, {"required": ["decision_id"]}, {"required": ["utterance_id"]}]},
+      "properties": {"privacy": {"properties": {"source": {"const": "suppressed"}}}}
+    },
+    "else": {
+      "required": ["payload"],
+      "properties": {"privacy": {"properties": {"source": {"enum": ["synthetic", "owner_private"]}, "reason": {"type": "null"}}}}
+    }
+  }],
+  "additionalProperties": false
+}

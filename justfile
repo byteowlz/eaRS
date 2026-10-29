@@ -705,6 +705,10 @@ test-auto-pause:
     cargo test --locked --lib --features client-vad,moonshine,parakeet-rs
     cargo test --locked -p ears-ui --features ears/client-vad,ears/moonshine,ears/parakeet-rs
 
+# Private decision-trace envelope, privacy admission and exact request bytes.
+test-command-traces:
+    bun test scripts/command_trace.test.ts
+
 # === Maintenance ===
 
 # Clean build artifacts
