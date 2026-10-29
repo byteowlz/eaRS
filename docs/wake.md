@@ -40,6 +40,40 @@ phrase. They need no detector: the transcript decides, at the end of the utteran
 (about half a second after you stop speaking). A bare "stopp" is deliberately not
 supported; it would stop dictation whenever the word is dictated.
 
+## After a wake: the speaker check (Layer 2, annotation only)
+
+A wake can additionally ask a speaker command whether the voice belongs to an enrolled
+person. It is off unless `[dictation.wake.speaker]` sets `command`, and it **annotates**: the
+verdict is written to the wake log and stderr, and nothing about the dictation changes.
+
+```toml
+[dictation.wake.speaker]
+command = ["voqx", "identify", "--json", "--mode", "cpu"]
+identity = "vox-tommy"
+threshold = 0.6      # score at or above this counts as the enrolled speaker
+mode = "annotate"    # annotate (default) | filter
+min_ms = 3000        # shorter audio is not judged: the verdict is unknown
+timeout_ms = 4000
+```
+
+The command receives the WAV path as its last argument (identity before it when set) and
+prints one JSON object with a `score`, optionally `label`/`message`. The audio it is given is
+the pre-roll plus what follows the wake, up to about 12 s, kept under
+`$XDG_STATE_HOME/ears/wake-speaker/` so a logged verdict can be inspected. The log gains lines
+like `{"type":"speaker","verdict":"owner","speaker_score":0.71,"audio_ms":3120,...}`.
+
+Why annotation first, and why `min_ms` is 3 s: measured on the owner's own takes, a
+whole-clip embedding separates the owner from unrelated voices only once there are about four
+to six seconds of audio (median score 0.32 at 0.5 s, 0.45 at 3 s, 0.69 at 6 s), and an enrol-
+ment with one wrong sample gave every voice a high score. At wake length the model is not
+accurate enough to drop a wake, so `filter` is parsed but **not wired**: it records the
+verdict and logs that filtering is not implemented. Every failure - no command, a crash, a
+timeout, junk output, too little audio - resolves to `unknown`, which never filters.
+
+A speaker verdict is evidence, never identity or permission to act
+(`docs/adr/0001-detection-is-evidence.md`), and enrolment of other people - children in
+particular - is a decision for the owner, not a default.
+
 ## Wake log
 
 With `log = true` (default when wake is enabled) every detection and near miss is appended

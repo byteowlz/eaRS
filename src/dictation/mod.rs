@@ -26,6 +26,7 @@ mod recording_vad;
 pub mod typing;
 pub mod voice_commands;
 pub mod wake;
+pub mod wake_speaker;
 
 use crate::config::AppConfig;
 use crate::config::DictationNotificationConfig;

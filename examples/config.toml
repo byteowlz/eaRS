@@ -153,6 +153,16 @@ preroll_ms = 1500           # audio before the detection sent after a wake (firs
 stop_phrases = ["oqto stopp", "okto stopp", "otto stopp", "oqto stop", "okto stop", "octo stop"]
 log = true                  # detections and near misses (no audio), $XDG_STATE_HOME/ears/wake-log.jsonl
 # log_path = ""
+# Layer 2, optional: after a wake, ask a speaker command whether the voice is the enrolled owner.
+# Annotation only (mode = "annotate"): the verdict is logged, nothing about dictation changes.
+# [dictation.wake.speaker]
+# command = ["voqx", "identify", "--json", "--mode", "cpu"]
+# identity = "vox-tommy"
+# threshold = 0.6
+# mode = "annotate"          # annotate | filter (filter is parsed but not wired yet)
+# min_ms = 3000              # shorter audio is not judged; the verdict is unknown
+# timeout_ms = 4000
+
 [dictation.wake.actions]
 hey_oqto = "start_dictation"
 # oqto = "ignore"           # recognised, deliberately unused

@@ -50,6 +50,9 @@ pub struct WakeConfig {
     /// Whole utterances that pause capture without typing (e.g. "oqto stopp"). Works
     /// with or without a detector; matched after punctuation is removed.
     pub stop_phrases: Vec<String>,
+    /// Optional Layer 2 speaker check after a wake: is this the enrolled owner?
+    /// Annotation-first (`mode = "annotate"`); see `wake_speaker`.
+    pub speaker: super::wake_speaker::SpeakerConfig,
     /// Write every detection and near miss (no audio) to a local JSONL log.
     pub log: bool,
     /// Log path; empty = $XDG_STATE_HOME/ears/wake-log.jsonl.
@@ -70,6 +73,7 @@ impl Default for WakeConfig {
             .map(String::from)
             .to_vec(),
             stop_phrases: Vec::new(),
+            speaker: super::wake_speaker::SpeakerConfig::default(),
             log: true,
             log_path: String::new(),
         }
@@ -354,6 +358,28 @@ impl WakeLog {
         Self(options.open(&path).ok())
     }
 
+    fn write_speaker(
+        &mut self,
+        verdict: &super::wake_speaker::SpeakerVerdict,
+        audio_ms: u32,
+        audio: &std::path::Path,
+    ) {
+        if self.0.is_none() {
+            return;
+        }
+        let line = serde_json::json!({
+            "at": time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
+            "type": "speaker",
+            "verdict": verdict.label(),
+            "speaker_score": verdict.score(),
+            "audio_ms": audio_ms,
+            "audio": audio.display().to_string(),
+        });
+        if let Some(file) = self.0.as_mut() {
+            let _ = writeln!(file, "{line}");
+        }
+    }
+
     fn write(&mut self, kind: &str, d: &Detection, outcome: &str) {
         let line = serde_json::json!({
             "at": time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
@@ -363,6 +389,63 @@ impl WakeLog {
             let _ = writeln!(file, "{line}");
         }
     }
+}
+
+/// Judge one wake's speaker on a helper thread so capture never waits on the model.
+///
+/// Annotation only: the verdict goes to the wake log and stderr, and nothing about the dictation
+/// changes. `filter` is deliberately not wired yet - dropping a wake retroactively needs the
+/// transcription path to discard a result it may already have produced, which is a separate change.
+fn spawn_speaker_check(
+    config: &super::wake_speaker::SpeakerConfig,
+    log_config: &WakeConfig,
+    shared: &std::sync::Arc<super::Shared>,
+    samples: Vec<f32>,
+) {
+    let config = config.clone();
+    let log_config = log_config.clone();
+    let shared = shared.clone();
+    let result = std::thread::Builder::new()
+        .name("ears-wake-speaker".into())
+        .spawn(move || {
+            let dir = speaker_audio_dir();
+            let wav = match super::wake_speaker::write_wav(&dir, &samples, CAPTURE_RATE as u32) {
+                Ok(path) => path,
+                Err(error) => {
+                    eprintln!("wake speaker: could not write audio: {error}");
+                    return;
+                }
+            };
+            let ms = ((samples.len() as u64 * 1000) / CAPTURE_RATE as u64) as u32;
+            let verdict = super::wake_speaker::check(&config, &wav, ms);
+            eprintln!(
+                "wake speaker: {} score {:?} over {}ms (mode {:?})",
+                verdict.label(),
+                verdict.score(),
+                ms,
+                config.mode
+            );
+            if config.mode == super::wake_speaker::SpeakerMode::Filter {
+                eprintln!("wake speaker: filter mode is not wired yet; verdict recorded only");
+            }
+            let mut log = WakeLog::open(&log_config);
+            log.write_speaker(&verdict, ms, &wav);
+            let _ = shared;
+        });
+    if let Err(error) = result {
+        eprintln!("wake speaker: could not start check thread: {error}");
+    }
+}
+
+/// Where a speaker verdict's audio is kept: beside the wake log, so a logged verdict can be
+/// inspected later. Kept out of git and out of any release by construction (state directory).
+fn speaker_audio_dir() -> std::path::PathBuf {
+    std::env::var_os("XDG_STATE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|h| h.join(".local/state")))
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("ears")
+        .join("wake-speaker")
 }
 
 /// Pre-roll position requested by a wake: detector-domain (16 kHz) sample of the detection.
@@ -474,6 +557,8 @@ pub(crate) fn spawn_tee(
     }
 
     let preroll_samples = config.preroll_ms as u64 * CAPTURE_RATE as u64 / 1000;
+    let speaker_config = config.speaker.clone();
+    let speaker_log_config = config.clone();
     std::thread::Builder::new()
         .name("ears-wake-tee".into())
         .spawn(move || {
@@ -482,6 +567,11 @@ pub(crate) fn spawn_tee(
             let mut ring: std::collections::VecDeque<f32> = std::collections::VecDeque::new();
             let ring_cap = CAPTURE_RATE * 4;
             let mut fed: u64 = 0; // capture-rate samples fed to the detector since its last reset
+            let mut tap = super::wake_speaker::SpeakerTap::new(
+                speaker_config.min_ms(),
+                CAPTURE_RATE,
+                12_000,
+            );
             for chunk in capture_rx {
                 let capturing = shared.is_capturing();
                 if client.is_none() {
@@ -504,10 +594,20 @@ pub(crate) fn spawn_tee(
                                     return;
                                 }
                             }
+                            // Layer 2: judge the speaker over the pre-roll plus what follows, and
+                            // only once there is enough audio for a verdict to mean anything.
+                            if speaker_config.active() {
+                                tap.arm(&audio);
+                            }
                         }
                         ring.clear();
                     }
                     was_capturing = true;
+                    if tap.armed() {
+                        if let Some(samples) = tap.push(&chunk) {
+                            spawn_speaker_check(&speaker_config, &speaker_log_config, &shared, samples);
+                        }
+                    }
                     if engine_tx.send(chunk).is_err() {
                         break;
                     }
@@ -516,6 +616,7 @@ pub(crate) fn spawn_tee(
                 let detector = client.as_mut().unwrap();
                 let mut result = Ok(());
                 if was_capturing {
+                    tap.disarm();
                     result = detector.reset();
                     ring.clear();
                     fed = 0;
