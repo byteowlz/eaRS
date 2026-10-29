@@ -71,6 +71,8 @@ pub struct AppModel {
     /// needs a Design Studio decision.
     pub audio_history: bool,
     pub last_utterance: Option<String>,
+    /// Latest generation-owned text deliberately not inserted; private RAM only.
+    pub deferred_transcript: Option<(u64, String, bool)>,
     pub last_prompt: Option<String>,
     pub speech_active: bool,
     pub finalizing_since: Option<Instant>,
@@ -112,6 +114,7 @@ impl AppModel {
             voice_mode: "Dictation".into(),
             audio_history: false,
             last_utterance: None,
+            deferred_transcript: None,
             last_prompt: None,
             speech_active: false,
             finalizing_since: None,
@@ -180,6 +183,16 @@ impl AppModel {
 
     pub fn apply_event(&mut self, event: DictationEvent, cx: &mut Context<Self>) {
         match event {
+            // ASR completion never changes capture/wake state or extends island activity.
+            DictationEvent::Finalization { .. } => {}
+            DictationEvent::DeferredTranscript {
+                capture_generation,
+                text,
+                confirmed,
+            } => {
+                self.last_utterance = Some(text.clone());
+                self.deferred_transcript = Some((capture_generation, text, confirmed));
+            }
             DictationEvent::State(state) => {
                 let was = self.state;
                 self.state = state;

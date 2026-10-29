@@ -12,7 +12,7 @@ name = "ears-ui"
 path = "src/main.rs"
 
 [dependencies]
-ears = { path = "../..", package = "eaRS" }
+ears = { path = "../..", package = "eaRS", features = ["client-vad"] }
 motion-core = { path = "../../vendor/motion-core" }
 motion-render = { path = "../../vendor/motion-render" }
 gpui = "0.2.2"

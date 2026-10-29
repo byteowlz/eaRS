@@ -96,10 +96,12 @@ action.
 
 ## Remaining qualification
 
-The idle timeout must stop sending new speech only after an ordered drain, then
-accept the pending final before rearming wake. Local silence alone is not a
-server acknowledgement. Before activation: native capture/resampling tests,
-marker-preservation tests, privacy/race tests, and an authorized live comparison.
+The idle timeout pauses capture and rearms wake locally; old ASR finalization is
+separately owned and bounded. Ordered drain is optional stronger completion
+proof, never a prerequisite for local pause. Local silence alone is not a server
+acknowledgement. See `auto-pause.md` for legacy completion, deferred text and new
+capture ownership. Native capture/resampling, marker-preservation, privacy/race
+checks and an authorized live comparison remain deployment qualification gates.
 Do not treat these modules as speaker-gate or action-authorization evidence.
 
 ## Capture quality

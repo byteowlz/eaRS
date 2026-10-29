@@ -451,9 +451,10 @@ Buffers flush every few seconds, after enough events, on disconnect, and on shut
 ## Automatic pause (opt-in)
 
 `[dictation.auto_pause] idle_ms = 3000` requests a pause after three seconds of
-capture-VAD silence, then rearms wake detection only after owned final results
-have drained. It requires matching client/server support, is independent of
-recording retention, and never cuts a held push-to-talk key. Default: off.
+capture-VAD silence and rearms wake locally, independently of ASR support or
+connection. Pending transcription finishes separately; legacy/unconfirmed tails
+are reported truthfully, not treated as timer success. Recording retention is
+independent, and a held push-to-talk key is never cut. Default: off.
 Tune `speech_threshold` (default `0.5`) in config.toml or Settings → Dictation →
 Auto-pause; higher rejects more noise but may miss quiet speech.
 See [configuration, protocol and qualification limits](docs/auto-pause.md).

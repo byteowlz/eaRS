@@ -35,7 +35,7 @@ fn opus_drain_flush_delivers_a_marker_in_a_partial_encoder_frame() {
     );
 }
 
-fn auto_pause_engine() -> (Engine, Arc<Mutex<String>>) {
+pub(super) fn auto_pause_engine() -> (Engine, Arc<Mutex<String>>) {
     struct SyntheticScorer;
     impl super::super::client_vad::SpeechScorer for SyntheticScorer {
         fn reset(&mut self) {}
@@ -61,9 +61,84 @@ fn auto_pause_engine() -> (Engine, Arc<Mutex<String>>) {
         },
     );
     auto.start(engine.shared.capture_generation());
+    engine.base_insertion_mode = InsertionMode::InsertAtCursor;
+    engine.inserter = Inserter::fixture(Box::new(super::super::typing::tests::RecordingKeyboard {
+        typed: typed.clone(),
+    }));
+    engine.target_reader = || {
+        Some(crate::frontmost::FrontmostApp {
+            pid: Some(123),
+            window_title: Some("synthetic target".into()),
+            ..Default::default()
+        })
+    };
     engine.auto_pause.runtime = Some(auto);
     engine.auto_pause.capture_generation = Some(engine.shared.capture_generation());
     (engine, typed)
+}
+
+pub(super) fn make_idle_due(engine: &mut Engine) {
+    for _ in 0..16 {
+        engine
+            .auto_pause
+            .runtime
+            .as_mut()
+            .unwrap()
+            .control
+            .observe(0.0)
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn local_pause_precedes_legacy_server_tail_without_drain_capability() {
+    let (mut engine, typed) = auto_pause_engine();
+    let shared = engine.shared.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+        ws.send(Message::text(r#"{"type":"capabilities","features":[]}"#))
+            .await
+            .unwrap();
+        let mut bytes = 0;
+        while bytes < 16 * 1920 * 4 {
+            match ws.next().await.unwrap().unwrap() {
+                Message::Binary(data) => bytes += data.len(),
+                Message::Text(text) => assert_ne!(
+                    serde_json::from_str::<Value>(&text).unwrap()["type"],
+                    "drain"
+                ),
+                _ => {}
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            !shared.is_capturing(),
+            "local silence must pause before any server final/ACK"
+        );
+        assert_eq!(shared.state(), DictationState::Suspended);
+        ws.send(Message::text(r#"{"type":"word","word":"trailing"}"#))
+            .await
+            .unwrap();
+        ws.send(Message::text(r#"{"type":"final","text":"trailing word"}"#))
+            .await
+            .unwrap();
+        ws.close(None).await.unwrap();
+    });
+    let (tx, rx) = unbounded();
+    for _ in 0..16 {
+        tx.send(vec![0.0; 1920]).unwrap();
+    }
+    let (ws, _) = connect_async(format!("ws://{address}")).await.unwrap();
+    let flow = tokio::time::timeout(Duration::from_secs(3), engine.session(ws, rx))
+        .await
+        .unwrap()
+        .unwrap();
+    server.await.unwrap();
+    assert_eq!(flow, Flow::DrainedPause);
+    assert_eq!(&*typed.lock().unwrap(), "trailing word ");
 }
 
 #[tokio::test]
@@ -192,7 +267,7 @@ async fn auto_pause_hybrid_hold_defers_until_physical_release() {
 }
 
 #[tokio::test]
-async fn auto_pause_unsupported_server_leaves_manual_capture_active() {
+async fn auto_pause_unsupported_server_pauses_locally_and_reports_unconfirmed_tail() {
     let (mut engine, _) = auto_pause_engine();
     let (events_tx, events_rx) = unbounded();
     let (commands_tx, _) = unbounded();
@@ -211,13 +286,29 @@ async fn auto_pause_unsupported_server_leaves_manual_capture_active() {
         ws.send(Message::text(r#"{"type":"capabilities","features":[]}"#))
             .await
             .unwrap();
+        let mut pending = false;
         tokio::time::timeout(Duration::from_secs(2), async {
             loop {
-                if events_rx.try_iter().any(|event| matches!(event, DictationEvent::Error { message } if message.contains("dictation-drain/1"))) { break; }
+                for event in events_rx.try_iter() {
+                    if let DictationEvent::Finalization { state, .. } = event {
+                        match state {
+                            FinalizationState::Pending => pending = true,
+                            FinalizationState::Confirmed => {
+                                panic!("legacy server cannot confirm an owned drain")
+                            }
+                            FinalizationState::Unconfirmed => {
+                                assert!(pending);
+                                return;
+                            }
+                        }
+                    }
+                }
                 tokio::task::yield_now().await;
             }
-        }).await.unwrap();
-        ws.close(None).await.unwrap();
+        })
+        .await
+        .unwrap();
+        let _ = ws.close(None).await;
     });
     let (audio_tx, audio_rx) = unbounded();
     for _ in 0..16 {
@@ -229,9 +320,9 @@ async fn auto_pause_unsupported_server_leaves_manual_capture_active() {
         .unwrap()
         .unwrap();
     server.await.unwrap();
-    assert_eq!(flow, Flow::Reconnect);
-    assert!(engine.shared.is_capturing());
-    assert!(engine.auto_pause.warned);
+    assert_eq!(flow, Flow::DrainedPause);
+    assert!(!engine.shared.is_capturing());
+    assert!(!engine.auto_pause.draining());
 }
 
 #[tokio::test]
@@ -268,6 +359,7 @@ async fn auto_pause_replays_speech_that_resumes_during_drain_exactly_once() {
     }
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
+    let shared = engine.shared.clone();
     let server = tokio::spawn(async move {
         let mut previous_id = 0;
         for phase in 0..2 {
@@ -296,19 +388,22 @@ async fn auto_pause_replays_speech_that_resumes_during_drain_exactly_once() {
                         assert!(id > previous_id);
                         previous_id = id;
                         if phase == 0 {
+                            assert!(!shared.is_capturing());
+                            shared.mark_wake_started();
+                            assert!(shared.set_capturing(true));
                             for _ in 0..3 {
                                 audio_tx.send(vec![0.3; 1920]).unwrap();
                             }
-                            tokio::time::timeout(Duration::from_secs(1), async {
-                                while !observed.load(Ordering::SeqCst) {
-                                    tokio::task::yield_now().await;
-                                }
-                            })
+                            tokio::time::sleep(READ_TIMEOUT * 3).await;
+                            assert!(
+                                !observed.load(Ordering::SeqCst),
+                                "new PCM cannot be scored under the old capture owner"
+                            );
+                            ws.send(Message::text(
+                                r#"{"type":"final","text":"old tail","words":[]}"#,
+                            ))
                             .await
                             .unwrap();
-                            ws.send(Message::text(r#"{"type":"final","text":"","words":[]}"#))
-                                .await
-                                .unwrap();
                         } else {
                             assert_eq!(bytes.len(), (3 + 16) * 1920 * 4);
                             assert!(
@@ -359,7 +454,7 @@ async fn auto_pause_replays_speech_that_resumes_during_drain_exactly_once() {
         Flow::DrainedPause
     );
     server.await.unwrap();
-    assert_eq!(&*typed.lock().unwrap(), "resumed ");
+    assert_eq!(&*typed.lock().unwrap(), "resumed "); // Old tail is deferred, never inserted into this new generation.
 }
 
 #[test]
@@ -507,7 +602,7 @@ async fn auto_pause_missing_ack_times_out_without_dispatching_buffered_commands(
             .await
             .unwrap()
             .unwrap(),
-        Flow::Restart
+        Flow::DrainedPause
     );
     server.await.unwrap();
     assert!(!engine.shared.is_capturing());
@@ -562,16 +657,7 @@ fn auto_pause_threshold_command_preserves_owned_drain_and_buffered_pcm() {
 fn auto_pause_writer_failure_never_becomes_a_successful_cut() {
     for disconnected in [false, true] {
         let (mut engine, typed) = auto_pause_engine();
-        for _ in 0..16 {
-            engine
-                .auto_pause
-                .runtime
-                .as_mut()
-                .unwrap()
-                .control
-                .observe(0.0)
-                .unwrap();
-        }
+        make_idle_due(&mut engine);
         engine.auto_pause.supported = true;
         if disconnected {
             let (tx, rx) = mpsc::unbounded_channel();
@@ -580,10 +666,8 @@ fn auto_pause_writer_failure_never_becomes_a_successful_cut() {
         }
         let (_tx, rx) = unbounded();
         assert_eq!(
-            engine
-                .begin_idle_drain(&rx, &mut None, Instant::now())
-                .unwrap(),
-            Some(Flow::Restart)
+            engine.begin_idle_drain(&rx, &mut None).unwrap(),
+            Some(Flow::DrainedPause)
         );
         assert!(!engine.shared.is_capturing());
         assert!(!engine.auto_pause.draining());

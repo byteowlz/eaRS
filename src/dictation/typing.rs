@@ -433,6 +433,16 @@ impl VirtualKeyboard for SharedClipboardKeyboard {
 }
 
 impl Inserter {
+    /// A synthetic cursor target, including across capture/session resets.
+    #[cfg(all(test, feature = "client-vad"))]
+    pub(crate) fn fixture(keyboard: Box<dyn VirtualKeyboard>) -> Self {
+        Self {
+            mode: InsertionMode::InsertAtCursor,
+            keyboard,
+            clipboard: None,
+        }
+    }
+
     pub fn new(mode: InsertionMode) -> Result<Self> {
         let mut inserter = Self {
             mode,

@@ -153,11 +153,31 @@ pub struct BackendInfo {
     pub latency_ms: Option<u64>,
 }
 
+/// Completion of the old transcription stream is independent of local capture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FinalizationState {
+    Pending,
+    Confirmed,
+    Unconfirmed,
+}
+
 /// Everything a front end can observe.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DictationEvent {
     /// Capture state changed.
     State(DictationState),
+    /// Scalar status only; never implies that paused capture has resumed.
+    Finalization {
+        capture_generation: u64,
+        state: FinalizationState,
+    },
+    /// Received old-stream text retained for review, never dispatched into a newer
+    /// capture/target. Private in-memory evidence, not training or action authority.
+    DeferredTranscript {
+        capture_generation: u64,
+        text: String,
+        confirmed: bool,
+    },
     /// Connection state changed. `message` carries the error for failures.
     Connection {
         state: ConnectionState,
@@ -300,6 +320,7 @@ pub(crate) use vlog;
 pub(crate) struct Shared {
     capturing: Mutex<bool>,
     capture_generation: std::sync::atomic::AtomicU64,
+    cancel_epoch: std::sync::atomic::AtomicU64,
     ptt_held: AtomicBool,
     state: Mutex<DictationState>,
     hotkey_mode: Mutex<crate::config::DictationHotkeyMode>,
@@ -328,6 +349,7 @@ impl Shared {
         Self {
             capturing: Mutex::new(capturing),
             capture_generation: std::sync::atomic::AtomicU64::new(0),
+            cancel_epoch: std::sync::atomic::AtomicU64::new(0),
             ptt_held: AtomicBool::new(false),
             state: Mutex::new(DictationState::Inactive),
             hotkey_mode: Mutex::new(config.hotkeys.mode),
@@ -370,6 +392,7 @@ impl Shared {
         self.ptt_held.load(Ordering::SeqCst)
     }
     pub(crate) fn set_ptt_held(&self, held: bool) {
+        let _capture = self.capturing.lock().unwrap();
         self.ptt_held.store(held, Ordering::SeqCst);
     }
 
@@ -399,6 +422,9 @@ impl Shared {
     }
 
     pub(crate) fn command(&self, command: DictationCommand) {
+        if matches!(&command, DictationCommand::Cancel) {
+            self.cancel_epoch.fetch_add(1, Ordering::SeqCst);
+        }
         let _ = self.commands.send(command);
     }
 
@@ -422,6 +448,24 @@ impl Shared {
         true
     }
 
+    /// Pause only the generation whose local silence deadline expired. Serialize
+    /// the hold/generation check with capture mutation so a newer wake is not cut.
+    pub(crate) fn pause_capture_if_current(&self, generation: u64) -> Option<u64> {
+        let mut guard = self.capturing.lock().unwrap();
+        if !*guard || self.capture_generation() != generation || self.ptt_held() {
+            return None;
+        }
+        *guard = false;
+        let paused_generation = self.capture_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.wake_started.store(false, Ordering::SeqCst);
+        let changed = self.transition_state(DictationState::Suspended);
+        drop(guard);
+        if changed {
+            self.notify_state(DictationState::Suspended);
+        }
+        Some(paused_generation)
+    }
+
     /// Flip capture. Returns the new value.
     pub(crate) fn toggle(&self) -> bool {
         let mut guard = self.capturing.lock().unwrap();
@@ -440,13 +484,22 @@ impl Shared {
     /// Apply a state transition with its side effects (notification, hooks,
     /// event). No-op when the state is unchanged.
     pub(crate) fn set_state(&self, new_state: DictationState) {
+        if self.transition_state(new_state) {
+            self.notify_state(new_state);
+        }
+    }
+
+    fn transition_state(&self, new_state: DictationState) -> bool {
         let mut guard = self.state.lock().unwrap();
         if *guard == new_state {
-            return;
+            return false;
         }
         *guard = new_state;
-        drop(guard);
         self.emit(DictationEvent::State(new_state));
+        true
+    }
+
+    fn notify_state(&self, new_state: DictationState) {
         send_toggle_notification(
             new_state,
             &self.notifications,
