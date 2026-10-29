@@ -33,6 +33,12 @@ class FillerTests(unittest.TestCase):
         self.assertEqual(clean(""), ("", []))
         self.assertEqual(clean("Ähm hm"), ("", ["Ähm", "hm"]))
 
+    def test_repetitions_are_content_and_survive_cleaning(self):
+        # Repeats carry meaning (emphasis, repair, relative clauses) and are never folded.
+        for text in ("ein, ein neuer Versuch", "das ist sehr, sehr gut",
+                     "was, was ich in Anspruch nehmen würde", "jede jede Nanosekunde"):
+            self.assertEqual(clean(text), (text, []))
+
     def test_ordinary_text_is_byte_identical(self):
         text = "Die Spracherkennung läuft direkt auf deinem Gerät — ohne Cloud."
         self.assertEqual(clean(text), (text, []))
