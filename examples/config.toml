@@ -157,7 +157,7 @@ log = true                  # detections and near misses (no audio), $XDG_STATE_
 # Annotation only (mode = "annotate"): the verdict is logged, nothing about dictation changes.
 # [dictation.wake.speaker]
 # command = ["voqx", "identify", "--json", "--mode", "cpu"]
-# identity = "vox-tommy"
+# identity = "vox-owner"    # local expected voice_id; not a command argument
 # threshold = 0.6
 # mode = "annotate"          # annotate | filter (filter is parsed but not wired yet)
 # min_ms = 3000              # shorter audio is not judged; the verdict is unknown

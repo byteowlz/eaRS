@@ -49,36 +49,68 @@ verdict is written to the wake log and stderr, and nothing about the dictation c
 ```toml
 [dictation.wake.speaker]
 command = ["voqx", "identify", "--json", "--mode", "cpu"]
-identity = "vox-tommy"
-threshold = 0.6      # score at or above this counts as the enrolled speaker
+identity = "vox-owner" # expected voice_id; checked locally, never passed to the command
+threshold = 0.6      # uncalibrated example, not a recommended filtering threshold
 mode = "annotate"    # annotate (default) | filter
 min_ms = 3000        # shorter audio is not judged: the verdict is unknown
 timeout_ms = 4000
 ```
 
-The command receives the WAV path as its last argument (identity before it when set) and
-prints one JSON object. The reference command is `voqx identify --json`, whose shape is
-understood directly (`voice_id`, `score`/`score_sample`, `status`); any other tool can answer
-with a plain `{"score": 0.7}` or a `label`. Three things decide the verdict, in order: a
-non-confident `status` (`tentative`, `insufficient_audio`, `incompatible_model`, provider
-errors) is *unknown*; a `voice_id` that is not the configured identity is *other* even when its
-score is high; otherwise `score` against `threshold` decides. The gate is a process, not a
-link: eaRS needs no voqx build to compile, and any command that speaks this contract works. The audio it is given is
+Only the WAV path is appended to the configured command arguments. `identity` is a local
+comparison target, **not** an extra positional argument to `voqx identify`. The command
+must emit exactly one JSON object; compact and pretty-printed multiline JSON both work.
+Diagnostics belong on stderr, not before/after the JSON. Custom tools needing a target
+argument must put it explicitly in `command`; the adapter does not invent one.
+
+For a configured identity, `voice_id`, `status = "confident"`, and a finite score meeting
+the consumer threshold are required. Matching IDs produce *owner*, a different confident
+ID produces *other*. Missing IDs/status, tentative/insufficient/incompatible results, and
+scores below the consumer threshold produce *unknown*—low similarity is not proof of a
+different speaker. A custom score-only verifier is supported only with no configured
+identity; it must define its own target. These labels remain uncalibrated evidence.
+
+Stdout and stderr are drained concurrently, each limited to 64 KiB. The deadline covers
+process exit and both streams; failures kill/reap the direct child and yield *unknown*.
+Raw stderr is not copied into evidence. Trusted wrapper commands must manage their own
+subprocesses. Run checks on a blocking worker, never the audio or insertion thread.
+
+For voqx's opt-in masked profiles, add `"--preprocessing", "valid-v1"` to the command and
+enroll the matching profile explicitly first; there is no automatic registry migration.
+
+The adapter invokes a command, so a separately installed voqx binary (or compatible tool)
+is required at runtime; no voqx daemon is needed. The audio it is given is
 the pre-roll plus what follows the wake, up to about 12 s, kept under
 `$XDG_STATE_HOME/ears/wake-speaker/` so a logged verdict can be inspected. The log gains lines
 like `{"type":"speaker","verdict":"owner","speaker_score":0.71,"audio_ms":3120,...}`.
+Snapshot privacy/retention still needs the shared audio-history controls (`trx-hava`);
+keep collection disabled for normal use until that follow-up is addressed.
 
-Why annotation first, and why `min_ms` is 3 s: measured on the owner's own takes, a
-whole-clip embedding separates the owner from unrelated voices only once there are about four
-to six seconds of audio (median score 0.32 at 0.5 s, 0.45 at 3 s, 0.69 at 6 s), and an enrol-
-ment with one wrong sample gave every voice a high score. At wake length the model is not
-accurate enough to drop a wake, so `filter` is parsed but **not wired**: it records the
-verdict and logs that filtering is not implemented. Every failure - no command, a crash, a
-timeout, junk output, too little audio - resolves to `unknown`, which never filters.
+`min_ms = 3000` is the existing conservative buffer default, not measured speech duration
+or a fundamental model limit. Earlier duration claims confounded leading silence, padding
+and unconfirmed speaker labels. No real-speaker operating point has been qualified here.
+`filter` is parsed but **not wired**: it records the verdict and logs that filtering is not
+implemented. Every failure resolves to *unknown*, never a filtering decision.
 
-A speaker verdict is evidence, never identity or permission to act
-(`docs/adr/0001-detection-is-evidence.md`), and enrolment of other people - children in
-particular - is a decision for the owner, not a default.
+Live words are typed as they arrive. A future filter must hold text **before insertion**;
+it cannot safely discard text retroactively. Annotation does not delay or alter insertion.
+Unknown reasons in the JSONL log are bounded adapter diagnostics, not raw provider text.
+
+Speaker evidence is not authentication or permission to act. Enrollment of other people
+requires its own appropriate consent; it is not a default.
+
+### Verification
+
+`cargo test --lib wake_speaker` covers the argument boundary, multiline JSON, identity and
+status checks, concurrent pipe draining, output limits and timeout behavior. With the
+updated voqx binary and cached weights available, run the real CLI contract test:
+
+```sh
+VOQX_BINARY=/path/to/voqx cargo test --test wake_speaker_voqx -- --ignored
+```
+
+That test creates a generated-signal fixture and isolated registry, exercises enrollment
+and identification through the actual CLI, and verifies that queries do not mutate the
+registry. It does not use a personal registry or claim microphone/speaker accuracy.
 
 ## Wake log
 

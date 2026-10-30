@@ -10,6 +10,7 @@ All notable changes to eaRS are documented in this file.
 
 ### Fixes
 
+- **wake speaker annotation**: invoke the documented voqx command with only the WAV positional argument, keep the expected identity local, and parse complete multiline JSON. Named matches require a confident status and matching identity; missing evidence or low confidence stays unknown. Bound both output streams and the full call deadline without blocking capture/insertion; errors are logged without raw provider text. Filtering remains unimplemented. Includes an opt-in actual-CLI contract test using an isolated generated-signal registry.
 - **ui**: activate the app before opening Settings from the notch to avoid a macOS GPUI focus-callback deadlock.
 - **ui**: add outward notch throats and move the indicator toward the outer wing; remove macOS popup chrome from floating overlays and keep long settings hints from clipping controls. Reduced Motion is still honored by default, with an explicit per-app animation override.
 - **ui**: attach the macOS notch panel to the screen edge and keep its active width stable as partial transcripts change. A synthetic `--preview-placement` fixture exercises the real screen anchor without starting dictation.

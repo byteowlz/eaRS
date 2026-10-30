@@ -9,8 +9,8 @@
 //! A detection is evidence that a phrase was probably spoken. The only action it can
 //! take here is what the toggle hotkey can already do: start capture.
 
-use anyhow::{Context, Result, anyhow, bail};
-use crossbeam_channel::{Receiver, Sender, unbounded};
+use anyhow::{anyhow, bail, Context, Result};
+use crossbeam_channel::{unbounded, Receiver, Sender};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -372,6 +372,10 @@ impl WakeLog {
             "type": "speaker",
             "verdict": verdict.label(),
             "speaker_score": verdict.score(),
+            "reason": match verdict {
+                super::wake_speaker::SpeakerVerdict::Unknown { reason } => Some(reason.as_str()),
+                _ => None,
+            },
             "audio_ms": audio_ms,
             "audio": audio.display().to_string(),
         });
@@ -394,17 +398,15 @@ impl WakeLog {
 /// Judge one wake's speaker on a helper thread so capture never waits on the model.
 ///
 /// Annotation only: the verdict goes to the wake log and stderr, and nothing about the dictation
-/// changes. `filter` is deliberately not wired yet - dropping a wake retroactively needs the
-/// transcription path to discard a result it may already have produced, which is a separate change.
+/// changes. Filtering would need to hold text before insertion; already typed text cannot be
+/// safely discarded retroactively. This helper has no access to capture or insertion state.
 fn spawn_speaker_check(
     config: &super::wake_speaker::SpeakerConfig,
     log_config: &WakeConfig,
-    shared: &std::sync::Arc<super::Shared>,
     samples: Vec<f32>,
 ) {
     let config = config.clone();
     let log_config = log_config.clone();
-    let shared = shared.clone();
     let result = std::thread::Builder::new()
         .name("ears-wake-speaker".into())
         .spawn(move || {
@@ -430,7 +432,6 @@ fn spawn_speaker_check(
             }
             let mut log = WakeLog::open(&log_config);
             log.write_speaker(&verdict, ms, &wav);
-            let _ = shared;
         });
     if let Err(error) = result {
         eprintln!("wake speaker: could not start check thread: {error}");
@@ -567,11 +568,8 @@ pub(crate) fn spawn_tee(
             let mut ring: std::collections::VecDeque<f32> = std::collections::VecDeque::new();
             let ring_cap = CAPTURE_RATE * 4;
             let mut fed: u64 = 0; // capture-rate samples fed to the detector since its last reset
-            let mut tap = super::wake_speaker::SpeakerTap::new(
-                speaker_config.min_ms(),
-                CAPTURE_RATE,
-                12_000,
-            );
+            let mut tap =
+                super::wake_speaker::SpeakerTap::new(speaker_config.min_ms(), CAPTURE_RATE, 12_000);
             for chunk in capture_rx {
                 let capturing = shared.is_capturing();
                 if client.is_none() {
@@ -603,10 +601,8 @@ pub(crate) fn spawn_tee(
                         ring.clear();
                     }
                     was_capturing = true;
-                    if tap.armed() {
-                        if let Some(samples) = tap.push(&chunk) {
-                            spawn_speaker_check(&speaker_config, &speaker_log_config, &shared, samples);
-                        }
+                    if let Some(samples) = tap.push(&chunk) {
+                        spawn_speaker_check(&speaker_config, &speaker_log_config, samples);
                     }
                     if engine_tx.send(chunk).is_err() {
                         break;
