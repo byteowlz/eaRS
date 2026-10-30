@@ -175,6 +175,38 @@ pub fn mouse_screen_position() -> Option<(f32, f32)> {
     Some((p.x as f32, p.y as f32))
 }
 
+pub fn passive_previews_supported() -> bool {
+    true
+}
+
+/// One snapshot in display-local, top-left logical coordinates. Not a caret lookup.
+pub fn cursor_on_display(display: u32) -> Option<(f32, f32)> {
+    let screen = screen_for(display)?;
+    let frame = screen.frame();
+    let p = NSEvent::mouseLocation();
+    Some((
+        (p.x - frame.origin.x) as f32,
+        (frame.origin.y + frame.size.height - p.y) as f32,
+    ))
+}
+
+pub fn position_preview(window: &Window, display: u32, x: f32, y: f32) -> bool {
+    position_from_top(window, display, Some(x), y)
+}
+
+fn position_from_top(window: &Window, display: u32, x: Option<f32>, top: f32) -> bool {
+    let (Some(screen), Some(ns)) = (screen_for(display), ns_window(window)) else {
+        return false;
+    };
+    let screen = screen.frame();
+    let frame = ns.frame();
+    ns.setFrameOrigin(NSPoint::new(
+        x.map_or(frame.origin.x, |x| screen.origin.x + f64::from(x)),
+        screen.origin.y + screen.size.height - frame.size.height - f64::from(top),
+    ));
+    true
+}
+
 /// Window frame origin in AppKit screen coordinates.
 pub fn window_origin(window: &Window) -> Option<(f32, f32)> {
     let ns = ns_window(window)?;
@@ -196,14 +228,7 @@ pub fn start_native_drag(_window: &Window) -> bool {
 
 /// Position an already borderless attached island at the true screen edge.
 pub fn pin_to_screen_top(window: &Window, display: u32, offset: f32) {
-    if let (Some(screen), Some(ns)) = (screen_for(display), ns_window(window)) {
-        let frame = screen.frame();
-        let current = ns.frame();
-        ns.setFrameOrigin(NSPoint::new(
-            current.origin.x,
-            frame.origin.y + frame.size.height - current.size.height - f64::from(offset),
-        ));
-    }
+    position_from_top(window, display, None, offset);
 }
 
 /// GPUI's transparent popup retains titled chrome; it must not outline the

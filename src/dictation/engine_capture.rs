@@ -2,6 +2,24 @@
 use super::*;
 
 impl Engine {
+    /// Serialize the scalar snapshot with physical hold and capture transitions.
+    /// This observer never advances the detector or changes capture/drain policy.
+    pub(super) fn emit_auto_pause_progress(&mut self, generation: u64) {
+        let capturing = self.shared.capturing.lock().unwrap();
+        if !*capturing || self.shared.capture_generation() != generation {
+            return;
+        }
+        if let Some(progress) = self
+            .auto_pause
+            .runtime
+            .as_mut()
+            .and_then(|auto| auto.control.progress(generation, self.shared.ptt_held()))
+        {
+            self.shared
+                .emit(DictationEvent::AutoPauseProgress(progress));
+        }
+    }
+
     /// Connecting/retry work must service local capture too. Offline audio is
     /// never replayed into a later target; only the independent VAD clock runs.
     pub(super) fn service_disconnected_capture(
@@ -49,6 +67,7 @@ impl Engine {
                     message: format!("auto-pause disabled: {err:#}"),
                 });
             }
+            self.emit_auto_pause_progress(generation);
         }
         if capturing
             && audio_rx.is_empty()
@@ -138,8 +157,14 @@ impl Engine {
         Ok(None)
     }
 
+    /// Own retention, activity scoring and its scalar progress as one observation.
     /// A replay has already passed these observers; it must not advance either clock twice.
-    fn observe_capture(&mut self, chunk: &[f32], context: &CommitContext) -> Option<Flow> {
+    fn observe_capture(
+        &mut self,
+        chunk: &[f32],
+        context: &CommitContext,
+        generation: u64,
+    ) -> Option<Flow> {
         let retention_error = self
             .history
             .as_mut()
@@ -171,6 +196,7 @@ impl Engine {
                 message: format!("auto-pause disabled: {err:#}"),
             });
         }
+        self.emit_auto_pause_progress(generation);
         None
     }
 
@@ -220,7 +246,7 @@ impl Engine {
                 continue;
             }
             if !observed {
-                if let Some(flow) = self.observe_capture(&chunk, &context) {
+                if let Some(flow) = self.observe_capture(&chunk, &context, generation) {
                     return Ok(Some(flow));
                 }
             }

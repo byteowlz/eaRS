@@ -68,6 +68,45 @@ pub enum IndicatorStyle {
     Oqtopus,
 }
 
+/// Additional presentation options; Current preserves the incumbent pill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptStyle {
+    #[default]
+    Current,
+    Word,
+    Meter,
+    Hidden,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PreviewPlacement {
+    #[default]
+    Inline,
+    Subtitle,
+    Cursor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OverlayFont {
+    #[default]
+    System,
+    DepartureMono,
+    JetbrainsMono,
+}
+
+impl OverlayFont {
+    pub fn family(self) -> &'static str {
+        match self {
+            Self::System => crate::theme::FONT_SANS,
+            Self::DepartureMono => "Departure Mono",
+            Self::JetbrainsMono => "JetBrains Mono",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OverlayConfig {
@@ -91,6 +130,15 @@ pub struct OverlayConfig {
     pub show_details: bool,
     /// Optional standing-wave or parametric ears mark; dot remains the default.
     pub indicator: IndicatorStyle,
+    /// Current text flow remains the default. Word is a fixed-width black option.
+    pub transcript: TranscriptStyle,
+    /// Optional passive full-text preview, independent of top-indicator content.
+    pub preview: PreviewPlacement,
+    pub font: OverlayFont,
+    pub word_width: f32,
+    pub word_size: f32,
+    /// Visual only; actual capture-VAD progress is required to fade.
+    pub word_fade: bool,
     /// Let clicks pass through the island (disables drag + click-to-open).
     pub click_through: bool,
     /// Keep a tiny dot visible while dictation is paused.
@@ -122,6 +170,12 @@ impl Default for OverlayConfig {
             content_motion: ContentMotion::GrowFade,
             show_details: false,
             indicator: IndicatorStyle::Dot,
+            transcript: TranscriptStyle::Current,
+            preview: PreviewPlacement::Inline,
+            font: OverlayFont::System,
+            word_width: 300.0,
+            word_size: 18.0,
+            word_fade: true,
             click_through: false,
             dormant_dot: false,
             island_mode: false,
@@ -183,6 +237,10 @@ pub struct TrayConfig {
 }
 
 #[cfg(test)]
+#[path = "config_presentation_tests.rs"]
+mod presentation_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -202,6 +260,9 @@ mod tests {
         let config: UiConfig = toml::from_str("[overlay]\nenabled = true\n").unwrap();
         assert!(!config.overlay.animate_with_reduced_motion);
         assert_eq!(config.overlay.indicator, IndicatorStyle::Dot);
+        assert_eq!(config.overlay.transcript, TranscriptStyle::Current);
+        assert_eq!(config.overlay.preview, PreviewPlacement::Inline);
+        assert_eq!(config.overlay.font, OverlayFont::System);
         assert!(!config.overlay.show_details);
         assert_eq!(config.overlay.shape_motion, ShapeMotion::Spring);
         assert_eq!(config.overlay.content_motion, ContentMotion::GrowFade);
@@ -261,6 +322,16 @@ impl UiConfig {
     }
 
     fn sanitize(&mut self) {
+        self.overlay.word_width = if self.overlay.word_width.is_finite() {
+            self.overlay.word_width.clamp(220.0, 440.0)
+        } else {
+            300.0
+        };
+        self.overlay.word_size = if self.overlay.word_size.is_finite() {
+            self.overlay.word_size.clamp(12.0, 24.0)
+        } else {
+            18.0
+        };
         self.overlay.opacity = self.overlay.opacity.clamp(0.2, 1.0);
         self.overlay.margin = self.overlay.margin.clamp(0.0, 400.0);
         self.overlay.linger_ms = self.overlay.linger_ms.min(60_000);

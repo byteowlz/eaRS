@@ -210,6 +210,7 @@ pub fn pump_events(cx: &mut App) {
 
 /// Resolve the theme for the current appearance and install it globally.
 pub fn apply_theme(cx: &mut App, appearance: Option<WindowAppearance>) {
+    crate::presentation::register_fonts(cx);
     let appearance = match appearance {
         Some(a) => {
             cx.update_global::<Runtime, _>(|rt, _| rt.appearance = a);
@@ -346,6 +347,7 @@ pub fn tick(cx: &mut App) {
     });
     tray::pump(cx);
     overlay::sync(cx);
+    crate::transcript_preview::sync(cx);
 }
 
 /// Spawn the tick loop. Runs fast while the island is active, slow otherwise.

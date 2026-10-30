@@ -8,6 +8,21 @@ use std::time::{Duration, Instant};
 
 pub const DRAIN_CAPABILITY: &str = crate::DICTATION_DRAIN_CAPABILITY;
 
+/// Observed local capture-clock state, never a prediction of future silence.
+/// Only emitted while an enabled detector has scored audio in this generation.
+/// Consumers must discard stale generations and values older than 500 ms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AutoPauseProgress {
+    pub capture_generation: u64,
+    pub quiet_ms: u32,
+    pub idle_ms: u32,
+    /// Actual physical push-to-talk hold at emission, not configured hotkey mode.
+    pub held: bool,
+    /// Producer snapshot time for freshness only; never advances the silence clock.
+    /// Consumers must preserve this across delivery rather than timestamp receipt.
+    pub scored_at: Instant,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct AutoPauseConfig {
@@ -85,6 +100,7 @@ pub(crate) struct IdlePause {
     drain_timeout: Duration,
     clock: u64,
     last_voice: u64,
+    progress_clock: Option<u64>,
     generation: Option<u64>,
     next_request: u64,
     drain: Option<Drain>,
@@ -103,6 +119,7 @@ impl IdlePause {
             drain_timeout: Duration::from_millis(u64::from(config.drain_timeout_ms)),
             clock: 0,
             last_voice: 0,
+            progress_clock: None,
             generation: None,
             next_request: 1,
             drain: None,
@@ -116,6 +133,7 @@ impl IdlePause {
     pub fn start(&mut self, generation: u64) {
         self.clock = 0;
         self.last_voice = 0;
+        self.progress_clock = None;
         self.generation = Some(generation);
         self.drain = None;
     }
@@ -140,6 +158,28 @@ impl IdlePause {
             }
         }
         Ok(())
+    }
+    /// At most one snapshot per 100 ms of newly scored 16 kHz audio.
+    /// A 512-sample observation normally makes this a 128 ms cadence; no catch-up
+    /// events, implicit zero or wall-clock advancement when scoring stalls.
+    pub fn progress(&mut self, generation: u64, held: bool) -> Option<AutoPauseProgress> {
+        if !self.active(generation)
+            || self.clock == 0
+            || self
+                .progress_clock
+                .is_some_and(|last| self.clock.saturating_sub(last) < 1600)
+        {
+            return None;
+        }
+        self.progress_clock = Some(self.clock);
+        Some(AutoPauseProgress {
+            capture_generation: generation,
+            quiet_ms: u32::try_from(self.clock.saturating_sub(self.last_voice) / 16)
+                .unwrap_or(u32::MAX),
+            idle_ms: (self.idle_samples / 16) as u32,
+            held,
+            scored_at: Instant::now(),
+        })
     }
     pub fn due(&self, generation: u64) -> bool {
         self.generation == Some(generation)
@@ -291,6 +331,10 @@ impl AutoPause {
 #[cfg(test)]
 #[path = "auto_pause_threshold_tests.rs"]
 mod threshold_tests;
+
+#[cfg(test)]
+#[path = "auto_pause_progress_tests.rs"]
+mod progress_tests;
 
 #[cfg(test)]
 mod tests {

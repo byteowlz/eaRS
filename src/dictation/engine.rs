@@ -1513,6 +1513,10 @@ mod auto_pause_tests;
 #[path = "engine_local_pause_tests.rs"]
 mod local_pause_tests;
 
+#[cfg(all(test, feature = "client-vad"))]
+#[path = "engine_auto_pause_progress_tests.rs"]
+mod auto_pause_progress_tests;
+
 #[cfg(test)]
 mod tests {
     use super::super::typing::LiveWordBuffer;

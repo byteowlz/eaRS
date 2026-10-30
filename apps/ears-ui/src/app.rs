@@ -75,6 +75,8 @@ pub struct AppModel {
     pub deferred_transcript: Option<(u64, String, bool)>,
     pub last_prompt: Option<String>,
     pub speech_active: bool,
+    /// Latest actual scored capture-clock sample; never extrapolated by wall time.
+    pub idle_progress: Option<ears::dictation::AutoPauseProgress>,
     pub finalizing_since: Option<Instant>,
     pub error: Option<UiError>,
     pub profile: Option<String>,
@@ -117,6 +119,7 @@ impl AppModel {
             deferred_transcript: None,
             last_prompt: None,
             speech_active: false,
+            idle_progress: None,
             finalizing_since: None,
             error: None,
             profile: None,
@@ -131,6 +134,32 @@ impl AppModel {
 
     pub fn is_capturing(&self) -> bool {
         self.state == DictationState::Listening
+    }
+
+    pub fn capture_generation(&self) -> Option<u64> {
+        self.engine
+            .as_ref()
+            .map(|engine| engine.capture_generation())
+            .or_else(|| self.configuration_is_preview.then_some(0))
+    }
+
+    pub fn word_opacity(&self) -> f32 {
+        let Some(progress) = self.idle_progress else {
+            return 1.0;
+        };
+        if !self.is_capturing() || self.capture_generation() != Some(progress.capture_generation) {
+            return 1.0;
+        }
+        let Some(age) = Instant::now().checked_duration_since(progress.scored_at) else {
+            return 1.0;
+        };
+        crate::presentation::quiet_opacity(
+            progress.quiet_ms,
+            progress.idle_ms,
+            progress.held,
+            age,
+            self.ui.overlay.word_fade && self.ui.overlay.motion_enabled(self.reduce_motion),
+        )
     }
 
     pub fn engine_running(&self) -> bool {
@@ -183,6 +212,15 @@ impl AppModel {
 
     pub fn apply_event(&mut self, event: DictationEvent, cx: &mut Context<Self>) {
         match event {
+            DictationEvent::AutoPauseProgress(progress) => {
+                if self.is_capturing()
+                    && self.engine.as_ref().is_some_and(|engine| {
+                        engine.capture_generation() == progress.capture_generation
+                    })
+                {
+                    self.idle_progress = Some(progress);
+                }
+            }
             // ASR completion never changes capture/wake state or extends island activity.
             DictationEvent::Finalization { .. } => {}
             DictationEvent::DeferredTranscript {
@@ -196,6 +234,7 @@ impl AppModel {
             DictationEvent::State(state) => {
                 let was = self.state;
                 self.state = state;
+                self.idle_progress = None;
                 if state == DictationState::Listening {
                     self.partial.clear();
                     self.speech_active = false;
@@ -261,6 +300,7 @@ impl AppModel {
                 self.touch();
             }
             DictationEvent::Cancelled => {
+                self.idle_progress = None;
                 self.partial.clear();
                 self.speech_active = false;
                 self.finalizing_since = None;
@@ -323,7 +363,12 @@ impl AppModel {
     /// timeout) expire even without new events. Returns true if the phase
     /// might have changed.
     pub fn tick(&mut self, cx: &mut Context<Self>) -> bool {
-        let mut changed = false;
+        let generation = self.capture_generation();
+        let mut changed = crate::presentation::expire_progress(
+            &mut self.idle_progress,
+            generation,
+            Instant::now(),
+        );
         if let Some(since) = self.finalizing_since {
             if since.elapsed() >= Duration::from_millis(FINALIZE_MS) {
                 self.finalizing_since = None;

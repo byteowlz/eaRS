@@ -1,6 +1,6 @@
 // Native, synthetic-only routing proof. Never starts capture, hotkeys or an ASR session.
 // Run on an unlocked macOS desktop with existing event-posting permission:
-// swift scripts/probe_overlay_hit_test.swift /absolute/path/to/ears-ui [--click-through|--expanded]
+// swift scripts/probe_overlay_hit_test.swift /absolute/path/to/ears-ui [--click-through|--expanded|--word|--floating]
 import AppKit
 import CoreGraphics
 
@@ -12,10 +12,14 @@ let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 let clickThrough = CommandLine.arguments.contains("--click-through")
 let expanded = CommandLine.arguments.contains("--expanded")
+let word = CommandLine.arguments.contains("--word")
+let floating = CommandLine.arguments.contains("--floating")
 let child = Process()
 child.executableURL = URL(fileURLWithPath: CommandLine.arguments[1])
 child.arguments = [clickThrough ? "--preview-synthetic" : "--preview-hit-test"]
 if expanded { child.arguments!.append("--preview-synthetic-expanded") }
+if word { child.arguments!.append("--preview-word") }
+if floating { child.arguments!.append("--preview-floating") }
 let sandbox = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
 try FileManager.default.createDirectory(at: sandbox, withIntermediateDirectories: true)
 var environment = ProcessInfo.processInfo.environment
@@ -79,17 +83,18 @@ DispatchQueue.main.asyncAfter(deadline:.now()+1.2) {
     window.level = .floating // Must stay BELOW the popup even after receiving a click.
     window.orderFrontRegardless(); underlay = window
     // Empty margin, below the black silhouette, and just outside its bottom curve.
-    let outside: [(CGFloat,CGFloat)] = expanded ? [(10,85),(320,85),(40.5,67.5)] : [(10,50),(320,50),(40.5,31.5)]
+    let outside: [(CGFloat,CGFloat)] = floating && word ? [(10,80),(320,60),(170.5,62.5)] : (expanded ? [(10,85),(320,85),(40.5,67.5)] : [(10,50),(320,50),(40.5,31.5)])
+    let inside: (CGFloat,CGFloat) = floating && word ? (320,80) : (100,16)
     for (i,p) in outside.enumerated() {
         DispatchQueue.main.asyncAfter(deadline:.now()+0.25+Double(i)*0.2) { click(rect,p.0,p.1) }
     }
-    DispatchQueue.main.asyncAfter(deadline:.now()+0.95) { click(rect,100,16) }
+    DispatchQueue.main.asyncAfter(deadline:.now()+0.95) { click(rect,inside.0,inside.1) }
     DispatchQueue.main.asyncAfter(deadline:.now()+1.4) {
         let expected = clickThrough ? 4 : 3
         guard received.count == expected else {
             finish(4,"FAIL: underlay received \(received.count) clicks, expected \(expected)")
         }
-        let expectedPoints = outside + (clickThrough ? [(100,16)] : [])
+        let expectedPoints = outside + (clickThrough ? [inside] : [])
         for (actual, expectedPoint) in zip(received, expectedPoints) {
             if abs(actual.x-expectedPoint.0) > 1 || abs(actual.y-(rect.height-expectedPoint.1)) > 1 {
                 finish(7,"FAIL: underlay received a click at an unexpected coordinate")

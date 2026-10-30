@@ -14,6 +14,7 @@
 
 pub mod audio_history;
 pub mod auto_pause;
+pub use auto_pause::AutoPauseProgress;
 pub mod capture_segments;
 #[cfg(feature = "client-vad")]
 pub mod client_vad;
@@ -167,6 +168,8 @@ pub enum FinalizationState {
 pub enum DictationEvent {
     /// Capture state changed.
     State(DictationState),
+    /// Bounded scored-capture progress; no audio, text or server activity inference.
+    AutoPauseProgress(AutoPauseProgress),
     /// Scalar status only; never implies that paused capture has resumed.
     Finalization {
         capture_generation: u64,
@@ -620,6 +623,12 @@ impl DictationHandle {
 
     pub fn is_capturing(&self) -> bool {
         self.shared.is_capturing()
+    }
+
+    /// Current capture ownership token, including stop/restart transitions.
+    /// Compare progress events against this value before rendering them.
+    pub fn capture_generation(&self) -> u64 {
+        self.shared.capture_generation()
     }
 
     pub fn state(&self) -> DictationState {

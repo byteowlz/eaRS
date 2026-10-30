@@ -22,6 +22,11 @@ check:
 ui-test:
     cargo test -p ears-ui --locked
 
+# Headless font/CLI contract checks; no engine, event loop or native windows
+ui-presentation-check:
+    cargo build --locked -p ears-ui
+    bash scripts/check_overlay_presentation.sh target/debug/ears-ui
+
 # macOS synthetic native animation and reduced-motion regression
 ui-preview-test:
     apps/ears-ui/scripts/check-parametric-preview.sh
@@ -31,6 +36,9 @@ ui-input-test binary="target/debug/ears-ui":
     swift scripts/probe_overlay_hit_test.swift "{{binary}}"
     swift scripts/probe_overlay_hit_test.swift "{{binary}}" --click-through
     swift scripts/probe_overlay_hit_test.swift "{{binary}}" --expanded
+    swift scripts/probe_overlay_hit_test.swift "{{binary}}" --word
+    swift scripts/probe_overlay_hit_test.swift "{{binary}}" --word --floating
+    swift scripts/probe_overlay_hit_test.swift "{{binary}}" --word --floating --click-through
 
 # === Code Quality ===
 

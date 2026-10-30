@@ -37,6 +37,16 @@ pub fn set_click_through(_window: &Window, _on: bool) {}
 
 pub fn set_window_alpha(_window: &Window, _alpha: f32) {}
 
+pub fn passive_previews_supported() -> bool {
+    false
+}
+pub fn cursor_on_display(_display: u32) -> Option<(f32, f32)> {
+    None
+}
+pub fn position_preview(_window: &Window, _display: u32, _x: f32, _y: f32) -> bool {
+    false
+}
+
 pub fn mouse_screen_position() -> Option<(f32, f32)> {
     None
 }

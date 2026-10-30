@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "eaRS UI configuration (ui.toml)",
+  "type": "object",
+  "properties": {
+    "overlay": {
+      "type": "object",
+      "properties": {
+        "transcript": {"type":"string","enum":["current","word","meter","hidden"],"default":"current"},
+        "preview": {"type":"string","enum":["inline","subtitle","cursor"],"default":"inline"},
+        "font": {"type":"string","enum":["system","departure_mono","jetbrains_mono"],"default":"system"},
+        "word_width": {"type":"number","minimum":220,"maximum":440,"default":300},
+        "word_size": {"type":"number","minimum":12,"maximum":24,"default":18},
+        "word_fade": {"type":"boolean","default":true}
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

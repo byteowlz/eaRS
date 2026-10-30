@@ -12,13 +12,15 @@ pub use mac::*;
 #[cfg(not(target_os = "macos"))]
 pub use other::*;
 
-/// Exact painted notch silhouette in logical pixels; shadows are excluded.
+/// Exact painted silhouette in logical pixels; shadows are excluded.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OverlayInputShape {
     pub width: f32,
     pub height: f32,
     pub radius: f32,
     pub throat: f32,
+    pub top: f32,
+    pub top_radius: f32,
 }
 
 #[cfg(not(target_os = "macos"))]

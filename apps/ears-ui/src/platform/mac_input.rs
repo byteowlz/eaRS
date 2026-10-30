@@ -10,7 +10,32 @@ use objc2_quartz_core::{CAShapeLayer, CATransaction};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::ptr::null;
 
+fn floating_silhouette(shape: OverlayInputShape, bounds: NSSize) -> CFRetained<CGMutablePath> {
+    let path = CGMutablePath::new();
+    let rect = objc2_foundation::NSRect::new(
+        objc2_foundation::NSPoint::new(
+            (bounds.width - f64::from(shape.width)) / 2.0,
+            bounds.height - f64::from(shape.top + shape.height),
+        ),
+        NSSize::new(f64::from(shape.width), f64::from(shape.height)),
+    );
+    // SAFETY: finite painted geometry, owned path, identity transform.
+    unsafe {
+        CGMutablePath::add_rounded_rect(
+            Some(&path),
+            null(),
+            rect,
+            f64::from(shape.top_radius),
+            f64::from(shape.radius),
+        );
+    }
+    path
+}
+
 fn silhouette(shape: OverlayInputShape, bounds: NSSize) -> CFRetained<CGMutablePath> {
+    if shape.top_radius > 0.0 {
+        return floating_silhouette(shape, bounds);
+    }
     let path = CGMutablePath::new();
     let l = (bounds.width - f64::from(shape.width)) / 2.0;
     let r = l + f64::from(shape.width);
@@ -18,7 +43,7 @@ fn silhouette(shape: OverlayInputShape, bounds: NSSize) -> CFRetained<CGMutableP
     let radius = f64::from(shape.radius).min(h / 2.0).min((r - l) / 2.0);
     let t = f64::from(shape.throat);
     // Core Animation mask paths use unflipped layer coordinates.
-    let y = |top: f64| bounds.height - top;
+    let y = |top: f64| bounds.height - f64::from(shape.top) - top;
     let k = radius * 0.5522847498307936;
     // SAFETY: the path is owned, all transforms are explicitly null (identity),
     // and the caller supplies finite painted geometry on the main thread.
@@ -102,6 +127,29 @@ mod tests {
     use objc2_core_graphics::CGPath;
     use objc2_foundation::NSPoint;
     #[test]
+    fn floating_word_mask_has_full_rounded_ends_and_clear_top_gap() {
+        for top in [12.0, 62.0] {
+            let shape = OverlayInputShape {
+                width: 300.0,
+                height: 36.0,
+                radius: 18.0,
+                throat: 0.0,
+                top,
+                top_radius: 18.0,
+            };
+            let path = silhouette(shape, NSSize::new(640.0, 110.0));
+            let inside = |x, y| unsafe {
+                CGPath::contains_point(Some(&path), null(), NSPoint::new(x, 110.0 - y), false)
+            };
+            assert!(inside(320.0, f64::from(top) + 18.0));
+            assert!(!inside(320.0, f64::from(top) - 1.0));
+            assert!(!inside(170.5, f64::from(top) + 0.5));
+            assert!(!inside(170.5, f64::from(top) + 35.5));
+            assert!(inside(171.0, f64::from(top) + 18.0));
+        }
+    }
+
+    #[test]
     fn native_mask_matches_body_lower_corners_throats_and_resize() {
         for (width, height) in [(185.0, 32.0), (300.0, 32.0), (560.0, 32.0), (560.0, 68.0)] {
             let shape = OverlayInputShape {
@@ -109,6 +157,8 @@ mod tests {
                 height,
                 radius: 11.2,
                 throat: 12.0,
+                top: 0.0,
+                top_radius: 0.0,
             };
             let path = silhouette(shape, NSSize::new(640.0, 110.0));
             let inside = |x, y| {

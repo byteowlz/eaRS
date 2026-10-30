@@ -4,6 +4,7 @@
 //! immediately.
 
 mod auto_pause;
+mod transcription;
 
 use crate::app::AppModel;
 use crate::config::ContentMotion;
@@ -793,7 +794,11 @@ impl SettingsView {
             "macOS only; ignored elsewhere."
         };
 
-        let mut pane = div().flex().flex_col().gap(theme.space(5.0));
+        let mut pane = div()
+            .flex()
+            .flex_col()
+            .gap(theme.space(5.0))
+            .child(self.transcription_section(theme, cx));
 
         pane = pane.child(
             section("Island", theme)
