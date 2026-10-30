@@ -26,6 +26,7 @@ mod mac_hotkeys;
 mod recording_vad;
 pub mod typing;
 pub mod voice_commands;
+pub mod voqx_discovery;
 pub mod wake;
 pub mod wake_speaker;
 
@@ -45,10 +46,10 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::str::FromStr;
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 

@@ -1,3 +1,5 @@
+mod speaker_probe_cli;
+
 use anyhow::{Context, Result, anyhow};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use crossbeam_channel::unbounded;
@@ -96,6 +98,15 @@ enum DictationCommand {
     Start(DictationStartArgs),
     Stop,
     Status,
+    /// Detect a compatible voqx executable without loading models, recording or changing settings.
+    SpeakerProbe {
+        /// Explicit voqx executable override; a broken override does not fall back.
+        #[arg(long, value_name = "PATH")]
+        voqx: Option<std::path::PathBuf>,
+        /// Print a structured discovery result, including unavailable states.
+        #[arg(long)]
+        json: bool,
+    },
     #[command(about = "Run dictation in foreground with debug output")]
     Debug(DictationStartArgs),
     /// Inspect, export or delete retained dictation audio
@@ -412,7 +423,7 @@ async fn main() -> Result<()> {
             return Ok(());
         }
         Some(Commands::Dictation(dictation_cmd)) => {
-            handle_dictation_command(dictation_cmd)?;
+            handle_dictation_command(dictation_cmd).await?;
             return Ok(());
         }
         Some(Commands::Dictionary(dictionary_cmd)) => {
@@ -444,11 +455,14 @@ async fn handle_server_command(command: ServerCommand) -> Result<()> {
     }
 }
 
-fn handle_dictation_command(command: DictationCommand) -> Result<()> {
+async fn handle_dictation_command(command: DictationCommand) -> Result<()> {
     match command {
         DictationCommand::Start(args) => start_dictation(&args),
         DictationCommand::Stop => stop_dictation(),
         DictationCommand::Status => check_dictation_status(),
+        DictationCommand::SpeakerProbe { voqx, json } => {
+            speaker_probe_cli::run(voqx.as_deref(), json).await
+        }
         DictationCommand::Debug(args) => run_dictation_foreground(&args),
         DictationCommand::History(command) => handle_history_command(command),
     }

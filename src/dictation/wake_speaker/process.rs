@@ -19,7 +19,7 @@ pub(super) fn run(command: &[String], wav: &Path, timeout: Duration) -> Result<V
         .enable_time()
         .build()
         .map_err(|_| "could not initialize speaker command I/O")?;
-    runtime.block_on(execute(command, wav, timeout))
+    runtime.block_on(execute(command, Some(wav), timeout))
 }
 
 async fn read_bounded(mut reader: impl AsyncRead + Unpin, limit: usize) -> Result<Vec<u8>, String> {
@@ -35,11 +35,18 @@ async fn read_bounded(mut reader: impl AsyncRead + Unpin, limit: usize) -> Resul
     Ok(bytes)
 }
 
-async fn execute(command: &[String], wav: &Path, timeout: Duration) -> Result<Vec<u8>, String> {
+pub(crate) async fn execute(
+    command: &[String],
+    wav: Option<&Path>,
+    timeout: Duration,
+) -> Result<Vec<u8>, String> {
     let (program, args) = command.split_first().ok_or("empty speaker command")?;
-    let mut child = tokio::process::Command::new(program)
-        .args(args)
-        .arg(wav)
+    let mut process = tokio::process::Command::new(program);
+    process.args(args);
+    if let Some(wav) = wav {
+        process.arg(wav);
+    }
+    let mut child = process
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

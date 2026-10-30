@@ -40,6 +40,27 @@ phrase. They need no detector: the transcript decides, at the end of the utteran
 (about half a second after you stop speaking). A bare "stopp" is deliberately not
 supported; it would stop dictation whenever the word is dictated.
 
+## Speaker-tool discovery (read-only)
+
+```sh
+ears dictation speaker-probe --json
+ears dictation speaker-probe --voqx /path/to/voqx --json
+```
+
+The shared discovery operation looks beside the eaRS executable, along PATH, then
+in supported per-user installation locations (including Cargo/local bin and macOS
+Homebrew prefixes). An explicit override takes precedence and never silently falls
+back. It invokes only `voqx capabilities --json`, with bounded output and a two-second
+deadline; it does not load eaRS settings, rewrite the configured speaker command,
+record, enroll, download models or start a service.
+
+Results distinguish missing/nonexecutable files, probe failure, unsupported capabilities
+and `compatible_executable`. Failures still emit structured JSON and exit nonzero. Older
+builds without the capability command may report `probe_failed`, not an empty voice list.
+`model_state` and `registry_state` remain `not_checked`; executable compatibility is not
+model/profile readiness or calibrated filtering. The CLI/API is the nonvisual foundation
+for the planned eaRS reference-setup flow (`trx-pbfx`); no settings UI is added here.
+
 ## After a wake: the speaker check (Layer 2, annotation only)
 
 A wake can additionally ask a speaker command whether the voice belongs to an enrolled

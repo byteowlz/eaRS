@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 mod boundary_tests;
 mod process;
+pub(crate) use process::execute as execute_command;
 
 /// What the gate is allowed to do with its verdict.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
