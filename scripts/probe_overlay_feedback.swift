@@ -48,16 +48,22 @@ func rect(_ width:Double)->CGRect? {
         if let bounds=info[kCGWindowBounds as String] as? [String:Any],let r=CGRect(dictionaryRepresentation:bounds as CFDictionary),abs(r.width-width)<2 {return r}
     };return nil
 }
-func move(_ p:CGPoint) {CGEvent(mouseEventSource:nil,mouseType:.mouseMoved,mouseCursorPosition:p,mouseButton:.left)!.post(tap:.cghidEventTap)}
+var ownedPointer:CGPoint?
+func move(_ p:CGPoint) {ownedPointer=p;CGEvent(mouseEventSource:nil,mouseType:.mouseMoved,mouseCursorPosition:p,mouseButton:.left)!.post(tap:.cghidEventTap)}
+func pointerMatches(_ p:CGPoint)->Bool {guard let actual=CGEvent(source:nil)?.location else{return false};return abs(actual.x-p.x)<2 && abs(actual.y-p.y)<2}
+func requirePointer(_ p:CGPoint) {if !pointerMatches(p){finish(2,"BLOCKED: pointer changed during fixture; do not fight live desktop input")}}
 func click(_ p:CGPoint) {
+    ownedPointer=p
     for type in [CGEventType.mouseMoved,.leftMouseDown,.leftMouseUp] { CGEvent(mouseEventSource:nil,mouseType:type,mouseCursorPosition:p,mouseButton:.left)!.post(tap:.cghidEventTap) }
 }
-func key(_ code:CGKeyCode) {for down in [true,false] { CGEvent(keyboardEventSource:nil,virtualKey:code,keyDown:down)!.post(tap:.cghidEventTap) }}
+func key(_ code:CGKeyCode) {guard NSWorkspace.shared.frontmostApplication?.processIdentifier==child.processIdentifier else{finish(2,"BLOCKED: desktop focus changed during fixture")};for down in [true,false] { CGEvent(keyboardEventSource:nil,virtualKey:code,keyDown:down)!.post(tap:.cghidEventTap) }}
 func finish(_ code:Int32,_ message:String)->Never {
     let sizes=windows().compactMap { $0[kCGWindowBounds as String] }
+    let restoreFocus=NSWorkspace.shared.frontmostApplication?.processIdentifier==child.processIdentifier
+    let restorePointer=ownedPointer.map(pointerMatches) ?? false
     if child.isRunning {child.terminate();child.waitUntilExit()}
-    move(originalPointer)
-    if let pid=originalFront {NSRunningApplication(processIdentifier:pid)?.activate(options:[.activateIgnoringOtherApps])}
+    if restorePointer {move(originalPointer)}
+    if restoreFocus,let pid=originalFront {NSRunningApplication(processIdentifier:pid)?.activate(options:[.activateIgnoringOtherApps])}
     try? FileManager.default.removeItem(at:sandbox)
     print(message)
     if code != 0 {print("owned window sizes: \(sizes)");lock.lock();let errors=String(data:output,encoding:.utf8) ?? "";lock.unlock();for line in errors.components(separatedBy:"\n") where !line.hasPrefix("ears-preview-layout: ") && !line.isEmpty {print(line)};for item in reports().suffix(12) {if let data=try? JSONSerialization.data(withJSONObject:item,options:[.sortedKeys]),let text=String(data:data,encoding:.utf8){print(text)}}}
@@ -100,12 +106,14 @@ try child.run()
 DispatchQueue.main.asyncAfter(deadline:.now()+1.5) {
     if ["settings","minimum","light"].contains(mode){verifySettings();return}
     if mode.hasPrefix("pointer") {
+        requirePointer(first)
         guard let before=rect(370) else {finish(11,"FAIL: pointer preview missing")}
         let other=displays.prefix(Int(count)).first { $0 != CGMainDisplayID() }
         let destination=mode=="pointer-cross-display" ? CGDisplayBounds(other!):screen
         let target=mode=="pointer-cross-display" ? CGPoint(x:destination.midX,y:destination.midY):second
         move(target)
         DispatchQueue.main.asyncAfter(deadline:.now()+0.6) {
+            requirePointer(target)
             guard let after=rect(370) else {finish(12,"FAIL: native pointer preview disappeared")}
             if mode=="pointer-cross-display" {
                 guard destination.contains(after.origin),after.maxX<=destination.maxX+1,after.maxY<=destination.maxY+1 else {finish(12,"FAIL: popup did not change displays")}

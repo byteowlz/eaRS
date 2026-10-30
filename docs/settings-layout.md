@@ -28,7 +28,9 @@ Disclosure and WAI Tabs. Those do not mandate full-window tabs universally. Equa
 widths are the owner's accepted bounded alternative for these four categories.
 
 Verification uses synthetic native Settings at default, minimum and light-mode
-sizes, measured prepaint bounds and real click/keyboard input. These are not native
+sizes, measured prepaint bounds and real click/keyboard input. The native probe
+aborts if concurrent desktop input or focus changes interfere; it does not force
+cursor/focus restoration over new input. These are not native
 accessibility certification or pixel captures. Full per-frame VAD diagnostics,
 pause-duration editing and new speaker-setup pages remain separate tracked work;
 this change does not invent their controls or claim that broader study completed.
