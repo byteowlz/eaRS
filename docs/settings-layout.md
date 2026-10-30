@@ -25,7 +25,8 @@ unselected six-page/sidebar study. The four existing destinations remain intact.
 Research: Design Studio `artifacts/ears/settings-layout-r1/research.md` cites Apple
 HIG Settings, Tab views, Segmented controls and Layout; NN/g Tabs/Progressive
 Disclosure and WAI Tabs. Those do not mandate full-window tabs universally. Equal
-widths are the owner's accepted bounded alternative for these four categories.
+widths are a bounded refinement of the incumbent four-tab route, not selection of
+the exploratory six-page/sidebar study or final visual acceptance.
 
 Verification uses synthetic native Settings at default, minimum and light-mode
 sizes, measured prepaint bounds and real click/keyboard input. The native probe

@@ -108,7 +108,7 @@ underlays, temporary XDG paths, an owned bounded child and pointer restoration.
 
 `--preview-layout-report` emits deduplicated numeric layout evidence only in
 synthetic fixtures: no text, identity or production state. The extended
-`scripts/probe_overlay_feedback.swift` checks actual native centered glyph bounds,
+`scripts/probe_overlay_feedback.swift` checks actual native centered text-layout bounds,
 resolved appearance, compact state, pointer displacement and Settings tab/action
 geometry plus keyboard navigation. It does not capture pixels or request screen
 recording permission. `--preview-settings-minimum` and `--preview-settings-light`
