@@ -68,7 +68,16 @@ pub enum IndicatorStyle {
     Oqtopus,
 }
 
-/// Additional presentation options; Current preserves the incumbent pill.
+/// Floating appearance is independent of transcript content and hardware geometry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OverlayAppearance {
+    #[default]
+    Classic,
+    Black,
+}
+
+/// Additional presentation options; Current preserves the incumbent phrase flow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TranscriptStyle {
@@ -132,6 +141,7 @@ pub struct OverlayConfig {
     pub indicator: IndicatorStyle,
     /// Current text flow remains the default. Word is a fixed-width black option.
     pub transcript: TranscriptStyle,
+    pub appearance: OverlayAppearance,
     /// Optional passive full-text preview, independent of top-indicator content.
     pub preview: PreviewPlacement,
     pub font: OverlayFont,
@@ -151,6 +161,10 @@ pub struct OverlayConfig {
 }
 
 impl OverlayConfig {
+    pub fn black_surface(&self, hardware_notch: bool, compact: bool) -> bool {
+        hardware_notch || (self.appearance == OverlayAppearance::Black && !compact)
+    }
+
     pub fn motion_enabled(&self, reduce_motion: bool) -> bool {
         self.animation && (!reduce_motion || self.animate_with_reduced_motion)
     }
@@ -171,6 +185,7 @@ impl Default for OverlayConfig {
             show_details: false,
             indicator: IndicatorStyle::Dot,
             transcript: TranscriptStyle::Current,
+            appearance: OverlayAppearance::Classic,
             preview: PreviewPlacement::Inline,
             font: OverlayFont::System,
             word_width: 300.0,

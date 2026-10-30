@@ -1,20 +1,24 @@
 //! Additive display controls; these never change capture or insertion settings.
 use super::*;
-use crate::config::{OverlayFont, PreviewPlacement, TranscriptStyle};
+use crate::config::{OverlayAppearance, OverlayFont, PreviewPlacement, TranscriptStyle};
 
 impl SettingsView {
     pub(super) fn transcription_section(&self, theme: &Theme, cx: &Context<Self>) -> Div {
         let overlay = &self.model.read(cx).ui.overlay;
         let entity = cx.entity();
         let mut section=section("Transcript presentation",theme)
-            .child(overlay_choice("transcript-style","Top text","Current preserves the existing pill. Word adds a fixed-width black alternative.",vec![(TranscriptStyle::Current,"Current".into()),(TranscriptStyle::Word,"Word".into()),(TranscriptStyle::Meter,"Ears only".into()),(TranscriptStyle::Hidden,"Hidden".into())],overlay.transcript,entity.clone(),theme,|o,v|o.transcript=v))
-            .child(overlay_choice("preview-placement","Full-text preview","Passive provisional text, never an insertion target. Near pointer anchors once per capture, not at the caret.",vec![(PreviewPlacement::Inline,"Inline only".into()),(PreviewPlacement::Subtitle,"Subtitles".into()),(PreviewPlacement::Cursor,"Near pointer".into())],overlay.preview,entity.clone(),theme,|o,v|o.preview=v))
+            .child(overlay_choice("pill-appearance","Pill appearance","Independent of text. Compact floating pills stay Classic; hardware notches stay black.",vec![(OverlayAppearance::Classic,"Classic".into()),(OverlayAppearance::Black,"Black".into())],overlay.appearance,entity.clone(),theme,|o,v|o.appearance=v))
+            .child(overlay_choice("transcript-style","Top text","Choose phrase, centered word, indicator only, or hide the top pill.",vec![(TranscriptStyle::Current,"Phrase".into()),(TranscriptStyle::Word,"Word".into()),(TranscriptStyle::Meter,"Ears only".into()),(TranscriptStyle::Hidden,"Hidden".into())],overlay.transcript,entity.clone(),theme,|o,v|o.transcript=v))
+            .child(overlay_choice("preview-placement","Full-text preview","Passive provisional text, never an insertion target. Near pointer follows the mouse; it is not an insertion target or caret lookup.",vec![(PreviewPlacement::Inline,"Inline only".into()),(PreviewPlacement::Subtitle,"Subtitles".into()),(PreviewPlacement::Cursor,"Near pointer".into())],overlay.preview,entity.clone(),theme,|o,v|o.preview=v))
             .child(overlay_choice("overlay-font","Typeface","Bundled fonts; no download. Applies only to overlay text.",vec![(OverlayFont::System,"System".into()),(OverlayFont::DepartureMono,"Departure".into()),(OverlayFont::JetbrainsMono,"JetBrains".into())],overlay.font,entity.clone(),theme,|o,v|o.font=v));
+        if overlay.preview != PreviewPlacement::Inline {
+            section = section.child(hint(self.model.read(cx).preview_status.label(), theme));
+        }
         if !crate::platform::passive_previews_supported() {
             section=section.child(hint("Passive preview windows are unavailable on this platform; inline text remains available.",theme));
         }
         if overlay.transcript == TranscriptStyle::Word {
-            let mut widths = vec![260.0, 300.0, 360.0, 420.0];
+            let mut widths = vec![220.0, 260.0, 300.0, 360.0, 420.0];
             if !widths.contains(&overlay.word_width) {
                 widths.push(overlay.word_width);
             }

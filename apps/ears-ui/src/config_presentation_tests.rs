@@ -2,6 +2,47 @@
 use super::*;
 
 #[test]
+fn surfaces_remain_independent_in_every_content_and_compact_state() {
+    for transcript in [
+        TranscriptStyle::Current,
+        TranscriptStyle::Word,
+        TranscriptStyle::Meter,
+        TranscriptStyle::Hidden,
+    ] {
+        let mut ui = UiConfig::default();
+        ui.overlay.transcript = transcript;
+        assert!(!ui.overlay.black_surface(false, false));
+        assert!(!ui.overlay.black_surface(false, true));
+        assert!(ui.overlay.black_surface(true, true));
+        ui.overlay.appearance = OverlayAppearance::Black;
+        assert!(ui.overlay.black_surface(false, false));
+        assert!(!ui.overlay.black_surface(false, true));
+        assert!(ui.overlay.black_surface(true, false));
+    }
+    let ui: UiConfig =
+        toml::from_str("[overlay]\ntranscript='word'\nword_width=260.0\nword_size=14.0\n").unwrap();
+    assert_eq!(ui.overlay.appearance, OverlayAppearance::Classic);
+    assert_eq!(ui.overlay.word_width, 260.0);
+    assert_eq!(ui.overlay.word_size, 14.0);
+}
+
+#[test]
+fn appearance_is_an_independent_persisted_choice() {
+    for content in ["current", "word", "meter", "hidden"] {
+        let ui: UiConfig = toml::from_str(&format!(
+            "[overlay]\ntranscript='{content}'\nappearance='black'\n"
+        ))
+        .unwrap();
+        let json = serde_json::to_value(ui.overlay).unwrap();
+        assert_eq!(
+            json.get("appearance").and_then(|v| v.as_str()),
+            Some("black")
+        );
+        assert_eq!(json["transcript"], content);
+    }
+}
+
+#[test]
 fn presentation_matrix_and_schema_agree_without_changing_legacy_defaults() {
     let schema: serde_json::Value =
         serde_json::from_str(include_str!("../../../examples/ui.schema.json")).unwrap();

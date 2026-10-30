@@ -6,6 +6,7 @@
     "overlay": {
       "type": "object",
       "properties": {
+        "appearance": {"type":"string","enum":["classic","black"],"default":"classic"},
         "transcript": {"type":"string","enum":["current","word","meter","hidden"],"default":"current"},
         "preview": {"type":"string","enum":["inline","subtitle","cursor"],"default":"inline"},
         "font": {"type":"string","enum":["system","departure_mono","jetbrains_mono"],"default":"system"},

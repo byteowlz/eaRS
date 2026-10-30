@@ -8,6 +8,8 @@ const OPTIONS: &[&str] = &[
     "--settings",
     "--no-overlay",
     "--preview-settings",
+    "--preview-settings-minimum",
+    "--preview-settings-light",
     "--preview-synthetic-expanded",
     "--preview-oqtopus-reduced",
     "--preview-oqtopus",
@@ -20,6 +22,9 @@ const OPTIONS: &[&str] = &[
     "--preview-placement",
     "--preview-synthetic",
     "--preview-word",
+    "--preview-black",
+    "--preview-compact",
+    "--preview-layout-report",
     "--preview-subtitle",
     "--preview-cursor",
     "--preview-departure",
@@ -85,6 +90,7 @@ pub struct PresentationArgs {
     pub transcript: TranscriptStyle,
     pub preview: PreviewPlacement,
     pub font: OverlayFont,
+    pub appearance: crate::config::OverlayAppearance,
     pub animated: bool,
 }
 impl PresentationArgs {
@@ -105,6 +111,11 @@ impl PresentationArgs {
         Self {
             transcript,
             preview,
+            appearance: selected(
+                args,
+                &[("--preview-black", crate::config::OverlayAppearance::Black)],
+                crate::config::OverlayAppearance::Classic,
+            ),
             font: selected(
                 args,
                 &[

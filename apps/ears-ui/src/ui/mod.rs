@@ -28,7 +28,6 @@ use gpui::px;
 pub const FONT_SM: f32 = 12.0;
 pub const FONT_MD: f32 = 13.0;
 pub const FONT_LG: f32 = 15.0;
-pub const FONT_XL: f32 = 18.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ButtonKind {
@@ -200,6 +199,7 @@ pub fn row(
         .flex_col()
         .flex_1()
         .min_w_0()
+        .pt(px(4.0))
         .gap(px(2.0))
         .child(
             div()
@@ -217,10 +217,10 @@ pub fn row(
     }
     div()
         .flex()
-        .items_center()
+        .items_start()
         .justify_between()
         .gap(theme.space(4.0))
-        .py(theme.space(2.0))
+        .py(theme.space(1.5))
         .child(text)
         .child(div().flex_shrink_0().child(control))
 }

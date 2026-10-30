@@ -26,6 +26,12 @@ pub fn register_fonts(cx: &mut App) -> bool {
     registered
 }
 
+/// Balanced logo reservation puts the word at the capsule's geometric center.
+pub fn word_band(width: f32, inset: f32) -> (f32, f32) {
+    let left = inset.clamp(0.0, width.max(0.0) / 2.0);
+    (left, (width - 2.0 * left).max(0.0))
+}
+
 pub fn latest_word(text: &str) -> &str {
     text.split_whitespace().last().unwrap_or("")
 }
@@ -240,6 +246,10 @@ pub fn preview_rect(
         align_bottom,
     })
 }
+
+#[cfg(test)]
+#[path = "presentation_feedback_tests.rs"]
+mod feedback_tests;
 
 #[cfg(test)]
 mod tests {

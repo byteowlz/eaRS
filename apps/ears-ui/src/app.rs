@@ -75,6 +75,8 @@ pub struct AppModel {
     pub deferred_transcript: Option<(u64, String, bool)>,
     pub last_prompt: Option<String>,
     pub speech_active: bool,
+    pub preview_status: crate::transcript_preview::PreviewStatus,
+    pub(crate) settings_tab: crate::settings::Tab,
     /// Latest actual scored capture-clock sample; never extrapolated by wall time.
     pub idle_progress: Option<ears::dictation::AutoPauseProgress>,
     pub finalizing_since: Option<Instant>,
@@ -119,6 +121,8 @@ impl AppModel {
             deferred_transcript: None,
             last_prompt: None,
             speech_active: false,
+            preview_status: crate::transcript_preview::PreviewStatus::Inactive,
+            settings_tab: crate::settings::Tab::Dictation,
             idle_progress: None,
             finalizing_since: None,
             error: None,

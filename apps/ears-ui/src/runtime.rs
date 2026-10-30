@@ -357,7 +357,7 @@ pub fn spawn_tick_loop(cx: &mut App) {
             let active = cx
                 .update(|cx| {
                     tick(cx);
-                    overlay::is_active(cx)
+                    overlay::is_active(cx) || crate::transcript_preview::is_active(cx)
                 })
                 .unwrap_or(false);
             let delay = if active { 33 } else { 120 };

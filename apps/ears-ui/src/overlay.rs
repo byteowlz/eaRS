@@ -179,7 +179,16 @@ pub fn sync(cx: &mut App) {
 }
 
 /// Placement and native input mode both require a fresh popup.
-type WindowConfiguration = (OverlayAnchor, f32, bool, f32, f32, bool, TranscriptStyle);
+type WindowConfiguration = (
+    OverlayAnchor,
+    f32,
+    bool,
+    f32,
+    f32,
+    bool,
+    TranscriptStyle,
+    crate::config::OverlayAppearance,
+);
 
 fn window_configuration_signature(overlay: &OverlayConfig) -> WindowConfiguration {
     (
@@ -190,6 +199,7 @@ fn window_configuration_signature(overlay: &OverlayConfig) -> WindowConfiguratio
         overlay.offset_y,
         overlay.click_through,
         overlay.transcript,
+        overlay.appearance,
     )
 }
 
@@ -906,7 +916,10 @@ impl IslandView {
         dimensions: (f32, f32),
         overlay: &OverlayConfig,
     ) {
-        if !self.island() && overlay.transcript == TranscriptStyle::Current {
+        if !self.island()
+            && overlay.transcript == TranscriptStyle::Current
+            && overlay.appearance == crate::config::OverlayAppearance::Classic
+        {
             return;
         }
         let (width, height) = dimensions;
@@ -1064,8 +1077,9 @@ impl Render for IslandView {
         // Colours: the regular pill is a `surface` card; the island is the
         // notch's own black (a fixed identity effect, not a role).
         let word_style = overlay.transcript == TranscriptStyle::Word;
-        let black_style = overlay.transcript != TranscriptStyle::Current;
-        let (bg, fg, muted) = if island || black_style {
+        let compact = phase == Phase::Dormant || (word_style && phase == Phase::Armed && !island);
+        let black_style = overlay.black_surface(island, compact);
+        let (bg, fg, muted) = if black_style {
             (
                 gpui::black(),
                 Theme::alpha(gpui::white(), 0.92),
@@ -1150,7 +1164,7 @@ impl Render for IslandView {
         };
 
         // Geometry ------------------------------------------------------------
-        let dormant = matches!(content.phase, Phase::Dormant);
+        let dormant = compact;
         let indicator_width = match overlay.indicator {
             IndicatorStyle::Oqtopus => 36.0,
             IndicatorStyle::Ears | IndicatorStyle::ParametricEars => 24.0,
@@ -1158,15 +1172,10 @@ impl Render for IslandView {
         };
         let max_text_w = match self.notch {
             Some(n) => ((PILL_MAX_W - n.width) / 2.0 - 2.0 * PAD_X).max(0.0),
-            None => {
-                (if word_style {
-                    overlay.word_width
-                } else {
-                    PILL_MAX_W
-                }) - 2.0 * PAD_X
-                    - indicator_width
-                    - GAP
+            None if word_style => {
+                presentation::word_band(overlay.word_width, PAD_X + indicator_width + GAP).1
             }
+            None => PILL_MAX_W - 2.0 * PAD_X - indicator_width - GAP,
         };
         let caption_size = if word_style {
             presentation::word_font_size(
@@ -1399,6 +1408,11 @@ impl Render for IslandView {
 
         let detail_text = format!("{} · {}", voice_mode, content.text);
         let label = div()
+            .on_children_prepainted(crate::preview_proof::bounds(
+                self.model.read(cx).configuration_is_preview,
+                "overlay-text",
+                0,
+            ))
             .whitespace_nowrap()
             .overflow_hidden()
             .when(content.hint, |d| d.text_color(muted))
@@ -1467,6 +1481,35 @@ impl Render for IslandView {
                         .child(SharedString::from(detail_text)),
                 );
             }
+        } else if word_style && !dormant {
+            let (left, width) = presentation::word_band(w, PAD_X + indicator_width + GAP);
+            // Absolute offsets start inside the classic 1px border, not its outer edge.
+            let left = left - if black_style { 0.0 } else { 1.0 };
+            pill = pill
+                .relative()
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(PAD_X))
+                        .top_0()
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .child(indicator),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(left))
+                        .w(px(width))
+                        .top_0()
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .overflow_hidden()
+                        .child(label),
+                );
         } else {
             let mut inner = div().flex().items_center().gap(px(GAP)).child(indicator);
             if !dormant && overlay.transcript != TranscriptStyle::Meter {
@@ -1581,6 +1624,11 @@ impl Render for IslandView {
         }
 
         let mut root = div()
+            .on_children_prepainted(crate::preview_proof::bounds(
+                self.model.read(cx).configuration_is_preview,
+                "overlay-body",
+                u32::from(black_style),
+            ))
             .size_full()
             .relative()
             .flex()

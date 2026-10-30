@@ -4,6 +4,7 @@
 //! immediately.
 
 mod auto_pause;
+mod navigation;
 mod transcription;
 
 use crate::app::AppModel;
@@ -103,7 +104,7 @@ fn overlay_choice<T: Copy + PartialEq + 'static>(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Tab {
+pub(crate) enum Tab {
     Dictation,
     Overlay,
     Dictionaries,
@@ -145,6 +146,10 @@ struct ProfileDraft {
 pub struct SettingsView {
     model: Entity<AppModel>,
     focus_handle: FocusHandle,
+    navigation_focus: FocusHandle,
+    pane_scroll: [gpui::ScrollHandle; 4],
+    dictionary_error: Option<SharedString>,
+    dict_add_focus: FocusHandle,
     tab: Tab,
     server: Entity<TextInput>,
     language: Option<String>,
@@ -188,6 +193,10 @@ fn split_csv(text: &str) -> Vec<String> {
         .collect()
 }
 
+fn can_add_entry(replacement: &str, phrases: &str) -> bool {
+    !replacement.trim().is_empty() && !split_csv(phrases).is_empty()
+}
+
 fn join_csv(items: &[String]) -> String {
     items.join(", ")
 }
@@ -221,6 +230,10 @@ impl SettingsView {
 
         // Re-render when the engine pushes events (connection badge, profile).
         cx.observe(&model, |_, _, cx| cx.notify()).detach();
+
+        cx.observe(&dict_replacement, |_, _, cx| cx.notify())
+            .detach();
+        cx.observe(&dict_phrases, |_, _, cx| cx.notify()).detach();
 
         // Live dictionary test box.
         cx.subscribe(&test_input, |this, _, _: &TextInputEvent, cx| {
@@ -273,10 +286,15 @@ impl SettingsView {
         })
         .detach();
 
+        let tab = model.read(cx).settings_tab;
         Self {
             model,
             focus_handle: cx.focus_handle(),
-            tab: Tab::Dictation,
+            navigation_focus: cx.focus_handle(),
+            pane_scroll: std::array::from_fn(|_| gpui::ScrollHandle::new()),
+            dictionary_error: None,
+            dict_add_focus: cx.focus_handle(),
+            tab,
             server,
             language,
             test_input,
@@ -437,19 +455,26 @@ impl SettingsView {
         if replacement.is_empty() || phrases.is_empty() {
             return;
         }
-        self.model.update(cx, |m, _| {
-            if let Some(path) = dictionary_paths(&m.core.replacement).first().cloned() {
-                match ReplacementDictionary::load_or_create(&path) {
-                    Ok(mut dictionary) => {
-                        dictionary.add_entry(replacement, phrases);
-                        if let Err(err) = dictionary.save(&path) {
-                            eprintln!("ears-ui: cannot save dictionary: {err:#}");
-                        }
-                    }
-                    Err(err) => eprintln!("ears-ui: cannot load dictionary: {err:#}"),
-                }
-            }
+        if self.model.read(cx).configuration_is_preview {
+            self.dictionary_error = Some("Preview only: no dictionary was written.".into());
+            cx.notify();
+            return;
+        }
+        let result = self.model.update(cx, |m, _| -> anyhow::Result<()> {
+            let path = dictionary_paths(&m.core.replacement)
+                .first()
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("No dictionary configured"))?;
+            let mut dictionary = ReplacementDictionary::load_or_create(&path)?;
+            dictionary.add_entry(replacement, phrases);
+            dictionary.save(&path)
         });
+        if let Err(error) = result {
+            self.dictionary_error = Some(format!("Could not save entry: {error}").into());
+            cx.notify();
+            return;
+        }
+        self.dictionary_error = None;
         self.model.update(cx, |m, cx| m.reload(cx));
         self.dict_replacement.update(cx, |f, cx| f.set_text("", cx));
         self.dict_phrases.update(cx, |f, cx| f.set_text("", cx));
@@ -476,29 +501,11 @@ impl SettingsView {
 
     // ---- panes -----------------------------------------------------------
 
-    fn view(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.global::<Theme>().clone();
         let r = &theme.roles;
 
-        let tab_bar = segmented(
-            "settings-tab",
-            Tab::ALL
-                .into_iter()
-                .map(|tab| (tab, SharedString::from(tab.label())))
-                .collect(),
-            self.tab,
-            &theme,
-            {
-                let entity = cx.entity();
-                move |tab: Tab, _, cx| {
-                    entity.update(cx, |this, cx| {
-                        this.tab = tab;
-                        cx.notify();
-                    });
-                }
-            },
-        );
-
+        let tab_bar = self.navigation(&theme, window, cx);
         let pane = match self.tab {
             Tab::Dictation => self.dictation_pane(&theme, cx),
             Tab::Overlay => self.overlay_pane(&theme, cx),
@@ -506,10 +513,12 @@ impl SettingsView {
             Tab::Profiles => self.profiles_pane(&theme, cx),
         };
 
-        let footer = "Dictation runs headless in ears-dictation / the tray engine; \
-                      these settings edit the same config files the CLI uses.";
-
         div()
+            .on_children_prepainted(crate::preview_proof::bounds(
+                self.model.read(cx).configuration_is_preview,
+                "settings-root",
+                self.tab.index() as u32,
+            ))
             .id("settings-root")
             .size_full()
             .flex()
@@ -521,31 +530,22 @@ impl SettingsView {
             .on_key_down(cycle_settings_focus)
             .child(
                 div()
-                    .id("settings-scroll")
-                    .flex()
-                    .flex_col()
-                    .gap(theme.space(4.0))
-                    .p(theme.space(5.0))
-                    .flex_1()
-                    .overflow_y_scroll()
-                    .child(
-                        div()
-                            .text_size(px(crate::ui::FONT_XL))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("eaRS Settings"),
-                    )
-                    .child(tab_bar)
-                    .child(pane),
+                    .flex_shrink_0()
+                    .px(theme.space(5.0))
+                    .py(theme.space(3.0))
+                    .border_b_1()
+                    .border_color(r.border)
+                    .child(tab_bar),
             )
             .child(
                 div()
-                    .px(theme.space(5.0))
-                    .py(theme.space(2.0))
-                    .border_t_1()
-                    .border_color(r.border)
-                    .text_size(px(crate::ui::FONT_SM))
-                    .text_color(r.muted_foreground)
-                    .child(footer),
+                    .id(("settings-scroll", self.tab.index()))
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.pane_scroll[self.tab.index()])
+                    .p(theme.space(5.0))
+                    .child(div().flex().flex_col().flex_shrink_0().child(pane)),
             )
             .into_any_element()
     }
@@ -1040,6 +1040,45 @@ impl SettingsView {
         pane.into_any_element()
     }
 
+    fn dictionary_action(&self, theme: &Theme, cx: &Context<Self>) -> Div {
+        div()
+            .on_children_prepainted(crate::preview_proof::bounds(
+                self.model.read(cx).configuration_is_preview,
+                "dictionary-action",
+                0,
+            ))
+            .flex()
+            .justify_end()
+            .child(
+                button("add-entry", "Add entry", ButtonKind::Primary, theme)
+                    .track_focus(&self.dict_add_focus)
+                    .when(
+                        !can_add_entry(
+                            self.dict_replacement.read(cx).text(),
+                            self.dict_phrases.read(cx).text(),
+                        ),
+                        |d| d.opacity(0.5).cursor_default(),
+                    )
+                    .on_click({
+                        let entity = cx.entity();
+                        move |_, window, cx| {
+                            entity.update(cx, |this, cx| {
+                                this.dict_add_focus.focus(window);
+                                this.add_dictionary_entry(cx);
+                            })
+                        }
+                    })
+                    .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                        if this.dict_add_focus.is_focused(window)
+                            && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                        {
+                            this.add_dictionary_entry(cx);
+                            cx.stop_propagation();
+                        }
+                    })),
+            )
+    }
+
     fn dictionaries_pane(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let entries = self.model.read_with(cx, |m, _| {
             dictionary_paths(&m.core.replacement)
@@ -1062,7 +1101,7 @@ impl SettingsView {
                     .flex()
                     .flex_col()
                     .gap(theme.space(1.0))
-                    .w(px(INPUT_W + 160.0))
+                    .w(px(INPUT_W))
                     .child(self.test_input.clone())
                     .child(hint(self.test_output.clone(), theme)),
                 theme,
@@ -1083,14 +1122,10 @@ impl SettingsView {
                     div().w(px(INPUT_W)).child(self.dict_phrases.clone()),
                     theme,
                 ))
-                .child(
-                    button("add-entry", "Add entry", ButtonKind::Primary, theme).on_click({
-                        let entity = cx.entity();
-                        move |_, _, cx| {
-                            entity.update(cx, |this, cx| this.add_dictionary_entry(cx));
-                        }
-                    }),
-                ),
+                .child(self.dictionary_action(theme, cx))
+                .when_some(self.dictionary_error.clone(), |d, error| {
+                    d.child(div().text_color(theme.roles.danger).child(error))
+                }),
         );
 
         let mut list = section("Entries", theme);

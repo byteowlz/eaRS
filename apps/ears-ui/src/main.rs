@@ -13,6 +13,7 @@ mod overlay;
 mod parametric_mark;
 mod platform;
 mod presentation;
+mod preview_proof;
 mod runtime;
 mod settings;
 mod theme;
@@ -31,7 +32,7 @@ use runtime::Runtime;
 
 fn print_help() {
     println!(
-        "ears-ui {}\n\nUsage: ears-ui [--settings] [--no-overlay] [--oqtopus-check] [--preview-synthetic|--preview-synthetic-expanded|--preview-placement|--preview-click|--preview-settings|--preview-floating|--preview-oqtopus|--preview-oqtopus-reduced|--preview-parametric|--preview-parametric-reduced|--preview-parametric-override] [--help]\n\n  --settings           open the settings window at launch\n  --no-overlay         start with the floating island disabled\n  --preview-synthetic  display a synthetic notch fixture without starting dictation\n  --preview-synthetic-expanded  show the expanded synthetic fixture\n  --preview-placement  show a synthetic fixture at the actual screen anchor\n  --preview-click     show a clickable placement fixture without dictation\n  --preview-hit-test  show a centered clickable synthetic notch for native input tests\n  --preview-settings   show settings with synthetic state, without dictation\n  --preview-floating   show a synthetic bottom-anchored floating pill\n  --preview-word       synthetic fixed-width latest-word fixture (no dictation)\n  --preview-subtitle   add synthetic passive subtitles\n  --preview-cursor     add a synthetic pointer-anchored bubble\n  --preview-departure / --preview-jetbrains  synthetic overlay font choice\n  --overlay-config     print current overlay settings as JSON, no engine\n  --overlay-schema     print the ui.toml JSON schema, no engine\n  --oqtopus-check     validate the configured local vector pack without dictation\n  --preview-oqtopus   show the local Oqtopus pack without dictation\n  --preview-oqtopus-reduced   show its static reduced-motion rest frame\n  --preview-parametric-override  animate a synthetic icon despite reduced motion\n  --preview-parametric  show animated parametric bars in a synthetic notch\n  --preview-parametric-reduced  show the same fixture with reduced motion\n  --version            print the version\n\nConfig: {}",
+        "ears-ui {}\n\nUsage: ears-ui [--settings] [--no-overlay] [--oqtopus-check] [--preview-synthetic|--preview-synthetic-expanded|--preview-placement|--preview-click|--preview-settings|--preview-floating|--preview-oqtopus|--preview-oqtopus-reduced|--preview-parametric|--preview-parametric-reduced|--preview-parametric-override] [--help]\n\n  --settings           open the settings window at launch\n  --no-overlay         start with the floating island disabled\n  --preview-synthetic  display a synthetic notch fixture without starting dictation\n  --preview-synthetic-expanded  show the expanded synthetic fixture\n  --preview-placement  show a synthetic fixture at the actual screen anchor\n  --preview-click     show a clickable placement fixture without dictation\n  --preview-hit-test  show a centered clickable synthetic notch for native input tests\n  --preview-settings   show settings with synthetic state, without dictation\n  --preview-floating   show a synthetic bottom-anchored floating pill\n  --preview-word       synthetic fixed-width latest-word fixture (no dictation)\n  --preview-black / --preview-compact  synthetic skin/compact state\n  --preview-layout-report  synthetic numeric layout evidence, never text/pixels\n  --preview-settings-minimum / --preview-settings-light  synthetic layout variants\n  --preview-subtitle   add synthetic passive subtitles\n  --preview-cursor     add a synthetic pointer-anchored bubble\n  --preview-departure / --preview-jetbrains  synthetic overlay font choice\n  --overlay-config     print current overlay settings as JSON, no engine\n  --overlay-schema     print the ui.toml JSON schema, no engine\n  --oqtopus-check     validate the configured local vector pack without dictation\n  --preview-oqtopus   show the local Oqtopus pack without dictation\n  --preview-oqtopus-reduced   show its static reduced-motion rest frame\n  --preview-parametric-override  animate a synthetic icon despite reduced motion\n  --preview-parametric  show animated parametric bars in a synthetic notch\n  --preview-parametric-reduced  show the same fixture with reduced motion\n  --version            print the version\n\nConfig: {}",
         env!("CARGO_PKG_VERSION"),
         UiConfig::path().display()
     );
@@ -49,6 +50,8 @@ struct PreviewOptions {
     transcript: config::TranscriptStyle,
     preview: config::PreviewPlacement,
     font: config::OverlayFont,
+    appearance: config::OverlayAppearance,
+    compact: bool,
 }
 
 fn preview_ui(options: &PreviewOptions) -> UiConfig {
@@ -63,6 +66,7 @@ fn preview_ui(options: &PreviewOptions) -> UiConfig {
     ui.overlay.transcript = options.transcript;
     ui.overlay.preview = options.preview;
     ui.overlay.font = options.font;
+    ui.overlay.appearance = options.appearance;
     ui.overlay.show_details = options.expanded;
     ui.overlay.animation = options.parametric || options.oqtopus;
     ui.overlay.click_through = !options.clickable;
@@ -82,7 +86,11 @@ fn preview_synthetic(options: PreviewOptions) {
         platform::set_accessory_policy();
         let mut fixture = AppModel::new(AppConfig::default(), ui);
         fixture.configuration_is_preview = true;
-        fixture.state = DictationState::Listening;
+        fixture.state = if options.compact {
+            DictationState::Suspended
+        } else {
+            DictationState::Listening
+        };
         fixture.connection = ConnectionState::Connected;
         fixture.speech_active = true;
         fixture.partial = "Synthetic speech".into();
@@ -91,7 +99,12 @@ fn preview_synthetic(options: PreviewOptions) {
         cx.set_global(AppHandle(model.clone()));
         cx.set_global(Runtime::new(model.clone()));
         runtime::apply_theme(cx, None);
-        cx.on_window_closed(|cx| cx.quit()).detach();
+        cx.on_window_closed(|cx| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
         if options.placement || options.floating {
             let overlay_config = model.read(cx).ui.overlay.clone();
             overlay::open(cx, &overlay_config, model.clone());
@@ -127,49 +140,78 @@ fn preview_step(model: &mut AppModel, step: u32) {
         scored_at: std::time::Instant::now(),
     });
 }
+fn preview_frame(model: &gpui::Entity<AppModel>, frame: u32, cx: &mut gpui::App) {
+    if frame % 4 == 0 {
+        model.update(cx, |m, cx| {
+            preview_step(m, (frame / 4) % 55);
+            cx.notify();
+        });
+    }
+    transcript_preview::sync(cx);
+}
+
 fn animate_preview(model: gpui::Entity<AppModel>, cx: &mut gpui::App) {
     cx.spawn(async move |cx| {
-        let mut step = 0_u32;
+        let mut frame = 0_u32;
         loop {
             if cx
                 .update(|cx| {
-                    model.update(cx, |m, cx| {
-                        preview_step(m, step);
-                        cx.notify();
-                    });
-                    transcript_preview::sync(cx);
+                    preview_frame(&model, frame, cx);
                 })
                 .is_err()
             {
                 break;
             }
-            step = (step + 1) % 55;
-            gpui::Timer::after(std::time::Duration::from_millis(128)).await;
+            frame = frame.wrapping_add(1);
+            gpui::Timer::after(std::time::Duration::from_millis(33)).await;
         }
     })
     .detach();
 }
 
 /// Render settings with synthetic state and without starting dictation.
-fn preview_settings() {
-    Application::new().run(|cx| {
+fn preview_settings(args: &[String]) {
+    let minimum = args.iter().any(|arg| arg == "--preview-settings-minimum");
+    let light = args.iter().any(|arg| arg == "--preview-settings-light");
+    Application::new().run(move |cx| {
         platform::set_accessory_policy();
         let model = cx.new(|_| {
-            let mut model = AppModel::new(AppConfig::default(), UiConfig::default());
+            let mut ui = UiConfig::default();
+            if light {
+                ui.theme.scheme = "oqto-light".into();
+            }
+            let mut model = AppModel::new(AppConfig::default(), ui);
             model.configuration_is_preview = true;
             model
         });
         cx.set_global(AppHandle(model.clone()));
         cx.set_global(Runtime::new(model));
         runtime::apply_theme(cx, None);
-        cx.on_window_closed(|cx| cx.quit()).detach();
+        cx.on_window_closed(|cx| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
         runtime::open_settings(cx);
+        if minimum {
+            if let Some(handle) = cx.global::<Runtime>().settings {
+                let _ = handle.update(cx, |_, window, _| {
+                    window.resize(gpui::size(gpui::px(640.0), gpui::px(420.0)))
+                });
+            }
+        }
     });
 }
 
 fn maybe_preview(args: &[String]) -> bool {
-    if args.iter().any(|a| a == "--preview-settings") {
-        preview_settings();
+    if args.iter().any(|a| {
+        matches!(
+            a.as_str(),
+            "--preview-settings" | "--preview-settings-minimum" | "--preview-settings-light"
+        )
+    }) {
+        preview_settings(args);
         return true;
     }
     let expanded = args.iter().any(|a| a == "--preview-synthetic-expanded");
@@ -199,6 +241,8 @@ fn maybe_preview(args: &[String]) -> bool {
             transcript: presentation.transcript,
             preview: presentation.preview,
             font: presentation.font,
+            appearance: presentation.appearance,
+            compact: args.iter().any(|arg| arg == "--preview-compact"),
         });
         return true;
     }
