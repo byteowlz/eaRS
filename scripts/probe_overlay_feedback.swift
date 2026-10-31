@@ -2,7 +2,8 @@
 import AppKit
 import CoreGraphics
 
-if CommandLine.arguments.count < 3 || !CGPreflightPostEventAccess() { print("BLOCKED: candidate, mode and existing event-posting access required"); exit(2) }
+let layoutOnly=CommandLine.arguments.contains("--layout-only")
+if CommandLine.arguments.count < 3 || (!layoutOnly && !CGPreflightPostEventAccess()) { print("BLOCKED: candidate, mode and existing event-posting access required"); exit(2) }
 let mode=CommandLine.arguments[2]
 let app=NSApplication.shared
 app.setActivationPolicy(.accessory)
@@ -21,6 +22,9 @@ case "pointer", "pointer-cross-display": child.arguments! += ["--preview-word","
 case "settings": child.arguments! += ["--preview-settings"]
 case "minimum": child.arguments! += ["--preview-settings-minimum"]
 case "light": child.arguments! += ["--preview-settings-light"]
+case "wide": child.arguments! += ["--preview-settings-wide"]
+case "minimum-light": child.arguments! += ["--preview-settings-minimum","--preview-settings-light"]
+case "wide-light": child.arguments! += ["--preview-settings-wide","--preview-settings-light"]
 default: print("Unknown mode");exit(2)
 }
 var environment=ProcessInfo.processInfo.environment
@@ -66,6 +70,7 @@ func finish(_ code:Int32,_ message:String)->Never {
     if restoreFocus,let pid=originalFront {NSRunningApplication(processIdentifier:pid)?.activate(options:[.activateIgnoringOtherApps])}
     try? FileManager.default.removeItem(at:sandbox)
     print(message)
+    if code != 0 {print("fixture exit status: \(child.terminationStatus)")}
     if code != 0 {print("owned window sizes: \(sizes)");lock.lock();let errors=String(data:output,encoding:.utf8) ?? "";lock.unlock();for line in errors.components(separatedBy:"\n") where !line.hasPrefix("ears-preview-layout: ") && !line.isEmpty {print(line)};for item in reports().suffix(12) {if let data=try? JSONSerialization.data(withJSONObject:item,options:[.sortedKeys]),let text=String(data:data,encoding:.utf8){print(text)}}}
     exit(code)
 }
@@ -75,6 +80,7 @@ func verifySettings() {
     let width=tabs[0][2]
     guard tabs.allSatisfy({abs($0[2]-width)<1}),tabs.last![0]+width-tabs[0][0]>root[0][2]-60 else {finish(4,"FAIL: tabs do not share the header width")}
     guard root[1][1]>=root[0][1]+root[0][3]-1 else {finish(5,"FAIL: pane overlaps persistent header")}
+    if layoutOnly {verifyColumns();finish(0,"PASS: \(mode) shared300px control column, equal segment tracks, bounded server/action; no pointer/keyboard input")}
     let viewport=(latest("settings-root")?["viewport"] as? [Double]) ?? []
     guard viewport.count==2,let w=rect(viewport[0]) else {finish(6,"FAIL: settings native window missing")}
     let chrome=w.height-viewport[1]
@@ -95,6 +101,24 @@ func verifySettings() {
         }
     }
 }
+func verifyColumns() {
+    func column(_ report:[String:Any])->Double {((report["viewport"] as? [Double])?.first ?? 0)-320}
+    let rows=reports().filter {($0["tag"] as? String)=="settings-form-row"}
+    guard rows.count>=3 else {finish(20,"FAIL: insufficient actual native form-row geometry")}
+    for report in rows {
+        let row=rectangles(report),x=column(report)
+        guard row.count==2,abs(row[1][0]-x)<1,abs(row[1][2]-300)<1,row[0][0]+row[0][2]<=x-8 else {finish(21,"FAIL: control column is inconsistent or overlaps labels")}
+    }
+    let groups=reports().filter {($0["tag"] as? String)=="settings-segments"}
+    guard groups.count>=2 else {finish(22,"FAIL: native segmented groups missing")}
+    for report in groups {
+        let cells=rectangles(report),x=column(report)
+        guard !cells.isEmpty else {finish(23,"FAIL: empty native segmented group")}
+        let left=cells.map {$0[0]}.min()!,right=cells.map {$0[0]+$0[2]}.max()!
+        guard abs(left-x-3)<1,abs(right-x-297)<1,cells.allSatisfy({abs($0[2]-cells[0][2])<=1.01}) else {finish(23,"FAIL: segment edges or cell widths differ")}
+    }
+    guard let report=latest("server-compound"),let fields=rectangles(report).first,let action=rectangles(report).last,abs(fields[0]-column(report))<1,abs(action[0]+action[2]-column(report)-300)<1,abs(action[2]-64)<1 else {finish(24,"FAIL: compound Server/Apply exceeds common control width")}
+}
 let screen=CGDisplayBounds(CGMainDisplayID())
 let first=CGPoint(x:screen.minX+screen.width/3,y:screen.minY+screen.height/3)
 let second=CGPoint(x:first.x+140,y:first.y+90)
@@ -103,8 +127,8 @@ CGGetActiveDisplayList(16,&displays,&count)
 if mode=="pointer-cross-display" && count<2 {print("SKIP: native cross-display needs two active displays");exit(0)}
 if mode.hasPrefix("pointer") {move(first)}
 try child.run()
-DispatchQueue.main.asyncAfter(deadline:.now()+1.5) {
-    if ["settings","minimum","light"].contains(mode){verifySettings();return}
+DispatchQueue.main.asyncAfter(deadline:.now()+3.0) {
+    if ["settings","minimum","light","wide","minimum-light","wide-light"].contains(mode){verifySettings();return}
     if mode.hasPrefix("pointer") {
         requirePointer(first)
         guard let before=rect(370) else {finish(11,"FAIL: pointer preview missing")}

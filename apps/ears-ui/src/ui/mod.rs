@@ -28,6 +28,14 @@ use gpui::px;
 pub const FONT_SM: f32 = 12.0;
 pub const FONT_MD: f32 = 13.0;
 pub const FONT_LG: f32 = 15.0;
+/// Shared outer width for Settings fields and choice groups.
+pub const FORM_CONTROL_WIDTH: f32 = 300.0;
+
+fn segment_columns(count: usize, short_labels: bool) -> u16 {
+    let count = count.max(1);
+    let capacity = if short_labels { 8 } else { 3 };
+    count.div_ceil(count.div_ceil(capacity)) as u16
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ButtonKind {
@@ -111,6 +119,8 @@ pub fn toggle(
     div()
         .id(id)
         .relative()
+        .ml_auto()
+        .flex_shrink_0()
         .w(px(36.0))
         .h(px(20.0))
         .rounded_full()
@@ -139,9 +149,19 @@ pub fn segmented<T: Copy + PartialEq + 'static>(
 ) -> impl IntoElement {
     let r = &theme.roles;
     let mut container = div()
+        .on_children_prepainted(crate::preview_proof::bounds(
+            true,
+            "settings-segments",
+            options.len() as u32,
+        ))
         .id(id)
-        .flex()
-        .items_center()
+        .w_full()
+        .min_w_0()
+        .grid()
+        .grid_cols(segment_columns(
+            options.len(),
+            options.iter().all(|(_, label)| label.chars().count() <= 6),
+        ))
         .p(px(2.0))
         .gap(px(2.0))
         .rounded(theme.radius.md())
@@ -161,7 +181,11 @@ pub fn segmented<T: Copy + PartialEq + 'static>(
         container = container.child(
             div()
                 .id(index)
-                .px(theme.space(2.5))
+                .flex()
+                .items_center()
+                .justify_center()
+                .min_w_0()
+                .px(theme.space(1.0))
                 .py(px(3.0))
                 .rounded(sm)
                 .text_size(px(FONT_SM))
@@ -170,7 +194,7 @@ pub fn segmented<T: Copy + PartialEq + 'static>(
                 .when(!active, |s| s.hover(move |s| s.bg(hover)))
                 .cursor_pointer()
                 .on_click(move |_: &ClickEvent, window, cx| on_select(value, window, cx))
-                .child(label),
+                .child(div().min_w_0().text_ellipsis().child(label)),
         );
     }
     container
@@ -221,8 +245,17 @@ pub fn row(
         .justify_between()
         .gap(theme.space(4.0))
         .py(theme.space(1.5))
+        .on_children_prepainted(crate::preview_proof::bounds(true, "settings-form-row", 0))
         .child(text)
-        .child(div().flex_shrink_0().child(control))
+        .child(
+            div()
+                .w(px(FORM_CONTROL_WIDTH))
+                .min_w_0()
+                .flex_shrink_0()
+                .flex()
+                .items_start()
+                .child(control),
+        )
 }
 
 pub fn label(text: impl Into<SharedString>, theme: &Theme) -> Div {
@@ -263,3 +296,7 @@ pub fn card(theme: &Theme) -> Div {
         .border_1()
         .border_color(theme.roles.border)
 }
+
+#[cfg(test)]
+#[path = "form_layout_tests.rs"]
+mod form_layout_tests;

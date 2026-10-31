@@ -56,7 +56,7 @@ use gpui::div;
 use gpui::prelude::FluentBuilder;
 use gpui::px;
 
-const INPUT_W: f32 = 300.0;
+const INPUT_W: f32 = crate::ui::FORM_CONTROL_WIDTH;
 const NUM_W: f32 = 110.0;
 const LANGUAGES: [&str; 6] = ["en", "de", "fr", "es", "it", "ja"];
 
@@ -606,17 +606,26 @@ impl SettingsView {
             "Server",
             Some("Alias from config.toml or a ws:// URL. Applied by restarting the engine.".into()),
             div()
+                .w_full()
                 .flex()
                 .gap(theme.space(2.0))
                 .items_center()
-                .child(div().w(px(INPUT_W)).child(self.server.clone()))
+                .on_children_prepainted(crate::preview_proof::bounds(
+                    self.model.read(cx).configuration_is_preview,
+                    "server-compound",
+                    0,
+                ))
+                .child(div().flex_1().min_w_0().child(self.server.clone()))
                 .child(
-                    button("apply-server", "Apply", ButtonKind::Secondary, theme).on_click({
-                        let entity = cx.entity();
-                        move |_, _, cx| {
-                            entity.update(cx, |this, cx| this.apply_server(cx));
-                        }
-                    }),
+                    button("apply-server", "Apply", ButtonKind::Secondary, theme)
+                        .w(theme.space(16.0))
+                        .flex_shrink_0()
+                        .on_click({
+                            let entity = cx.entity();
+                            move |_, _, cx| {
+                                entity.update(cx, |this, cx| this.apply_server(cx));
+                            }
+                        }),
                 ),
             theme,
         ));

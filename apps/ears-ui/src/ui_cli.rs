@@ -10,6 +10,7 @@ const OPTIONS: &[&str] = &[
     "--preview-settings",
     "--preview-settings-minimum",
     "--preview-settings-light",
+    "--preview-settings-wide",
     "--preview-synthetic-expanded",
     "--preview-oqtopus-reduced",
     "--preview-oqtopus",
