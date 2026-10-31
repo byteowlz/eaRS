@@ -29,15 +29,22 @@ pub struct SileroVad {
     state: Vec<f32>,
 }
 
+/// Explicit install-time library check; no session/model, capture or recording.
+pub fn check_runtime(runtime: &Path) -> Result<()> {
+    ensure!(runtime.is_file(), "client ONNX Runtime library unavailable");
+    ort::init_from(runtime)
+        .context("failed to load client ONNX Runtime library")?
+        .commit();
+    Ok(())
+}
+
 impl SileroVad {
     /// Load explicit local artifacts. Initialize the shared ORT runtime before
     /// session creation so a missing library is a Result, not lazy-load panic.
     /// ORT's process-global runtime must be coordinated with any other consumer.
     pub fn load(model: &Path, runtime: &Path) -> Result<Self> {
         ensure!(model.is_file(), "client Silero model file unavailable");
-        ort::init_from(runtime)
-            .context("failed to load client ONNX Runtime library")?
-            .commit();
+        check_runtime(runtime)?;
         let session = Session::builder()?
             .with_intra_threads(1)
             .map_err(ort::Error::<()>::from)?

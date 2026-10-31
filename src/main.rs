@@ -42,6 +42,9 @@ struct Cli {
     /// Print compiled release capabilities without configuration, devices or models.
     #[arg(long, global = true)]
     build_info: bool,
+    /// Explicitly load/check a local ONNX Runtime library, without a model or microphone.
+    #[arg(long, global = true)]
+    runtime_check: Option<std::path::PathBuf>,
     #[command(subcommand)]
     command: Option<Commands>,
 
@@ -424,6 +427,22 @@ async fn main() -> Result<()> {
             serde_json::to_string_pretty(&ears::build_info::json())?
         );
         return Ok(());
+    }
+    if let Some(path) = &cli.runtime_check {
+        #[cfg(feature = "client-vad")]
+        {
+            ears::dictation::client_vad::check_runtime(path)?;
+            println!(
+                "{}",
+                serde_json::json!({"runtime_available":true,"models_loaded":false,"microphone_started":false})
+            );
+            return Ok(());
+        }
+        #[cfg(not(feature = "client-vad"))]
+        {
+            let _ = path;
+            anyhow::bail!("client-VAD is not compiled into this binary");
+        }
     }
     let Cli {
         command, client, ..
