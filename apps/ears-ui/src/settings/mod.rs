@@ -948,6 +948,7 @@ impl SettingsView {
                         (IndicatorStyle::Dot, "Dot".into()),
                         (IndicatorStyle::Ears, "Standing wave".into()),
                         (IndicatorStyle::ParametricEars, "Animated bars".into()),
+                        #[cfg(feature="experimental-overlays")]
                         (IndicatorStyle::Oqtopus, "Oqtopus".into()),
                     ],
                     overlay.indicator,

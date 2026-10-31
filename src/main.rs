@@ -39,6 +39,9 @@ use libc::{SIGINT, SIGTERM, kill};
     after_long_help = "Tip: for system-wide dictation, run `ears dictation start` and toggle it with your hotkey."
 )]
 struct Cli {
+    /// Print compiled release capabilities without configuration, devices or models.
+    #[arg(long, global = true)]
+    build_info: bool,
     #[command(subcommand)]
     command: Option<Commands>,
 
@@ -415,7 +418,16 @@ impl Default for ServerStartArgs {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let Cli { command, client } = cli;
+    if cli.build_info {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&ears::build_info::json())?
+        );
+        return Ok(());
+    }
+    let Cli {
+        command, client, ..
+    } = cli;
 
     match command {
         Some(Commands::Server(server_cmd)) => {
@@ -516,10 +528,7 @@ fn handle_history_command(command: HistoryCommand) -> Result<()> {
         }
         HistoryCommand::Export(args) => {
             if args.out.join("manifest.jsonl").exists() {
-                return Err(anyhow!(
-                    "{} already contains an export",
-                    args.out.display()
-                ));
+                return Err(anyhow!("{} already contains an export", args.out.display()));
             }
             let count = audio_history::export(&dir, &args.out)?;
             println!(
@@ -1099,7 +1108,9 @@ fn build_server_options(args: &ServerStartArgs) -> Result<server::ServerOptions>
         default_engine: args.engine,
         with_kyutai: args.with_kyutai,
         #[cfg(feature = "moonshine")]
-        moonshine_model_dir: args.moonshine_model.clone()
+        moonshine_model_dir: args
+            .moonshine_model
+            .clone()
             .or_else(|| config.moonshine.model_dir.clone())
             .map(|path| ears::replacement::expand_tilde(&path)),
         #[cfg(feature = "parakeet-rs")]

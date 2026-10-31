@@ -5,6 +5,7 @@ use crate::{
 };
 use gpui::Application;
 const OPTIONS: &[&str] = &[
+    "--build-info",
     "--settings",
     "--no-overlay",
     "--preview-settings",
@@ -44,6 +45,22 @@ pub fn handle(args: &[String]) -> bool {
     if let Some(arg) = unknown(args) {
         eprintln!("ears-ui: unknown option {arg}; use --help");
         std::process::exit(2);
+    }
+    if args.iter().any(|a| a == "--build-info") {
+        let mut info = ears::build_info::json();
+        info["ui_version"] = env!("CARGO_PKG_VERSION").into();
+        info["experimental_overlays"] = cfg!(feature = "experimental-overlays").into();
+        info["renderer"] = if cfg!(feature = "experimental-overlays") {
+            "experimental"
+        } else {
+            "accepted-e034c69f"
+        }
+        .into();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&info).expect("static build information")
+        );
+        return true;
     }
     if args.iter().any(|a| a == "--overlay-config") {
         match UiConfig::load().and_then(|ui| Ok(serde_json::to_string_pretty(&ui.overlay)?)) {

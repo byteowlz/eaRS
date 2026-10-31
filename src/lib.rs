@@ -5,6 +5,7 @@ use indicatif::ProgressBar;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+pub mod build_info;
 pub mod config;
 pub mod dictation;
 pub mod frontmost;

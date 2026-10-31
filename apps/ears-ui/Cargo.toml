@@ -11,6 +11,11 @@ publish = false
 name = "ears-ui"
 path = "src/main.rs"
 
+[features]
+default = []
+# Explicit developer opt-in; ordinary installers preserve the accepted renderer.
+experimental-overlays = []
+
 [dependencies]
 ears = { path = "../..", package = "eaRS", features = ["client-vad"] }
 motion-core = { path = "../../vendor/motion-core" }

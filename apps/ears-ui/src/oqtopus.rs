@@ -30,6 +30,9 @@ impl Drop for Worker {
 }
 impl Worker {
     pub fn start(path: PathBuf) -> Result<Self, String> {
+        if !cfg!(feature = "experimental-overlays") {
+            return Err("experimental overlay is not enabled in this build".into());
+        }
         let shared = Arc::new(Shared {
             control: Mutex::new(Control {
                 signal: MarkState::Ready,
@@ -170,7 +173,14 @@ fn run(path: &Path, shared: &Shared) -> Result<(), String> {
             .lock()
             .map_err(|_| "indicator control poisoned")?;
         player
-            .set_state(control.signal.id())
+            .set_state(match control.signal {
+                MarkState::Ready => "ready",
+                MarkState::Listening => "listening",
+                MarkState::Speech => "speech",
+                MarkState::Processing => "processing",
+                MarkState::Done => "done",
+                MarkState::Attention => "attention",
+            })
             .map_err(|e| e.to_string())?;
         let now = Instant::now();
         let elapsed = now.duration_since(last).as_secs_f64();
@@ -193,7 +203,7 @@ fn run(path: &Path, shared: &Shared) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "experimental-overlays"))]
 mod tests {
     use super::*;
     use std::io::Write;
@@ -205,12 +215,17 @@ mod tests {
         // Wall-clock granularity is not a uniqueness guarantee across tests.
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        std::env::temp_dir().join(format!("ears-motion-{}-{nonce}-{serial}.oqp", std::process::id()))
+        std::env::temp_dir().join(format!(
+            "ears-motion-{}-{nonce}-{serial}.oqp",
+            std::process::id()
+        ))
     }
     #[test]
     fn temp_paths_are_unique_within_the_process() {
         let mut paths = std::collections::HashSet::new();
-        for _ in 0..1000 { assert!(paths.insert(temp_path())); }
+        for _ in 0..1000 {
+            assert!(paths.insert(temp_path()));
+        }
     }
     fn write_fixture(path: &Path) {
         std::fs::OpenOptions::new()

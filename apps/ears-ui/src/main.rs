@@ -10,6 +10,10 @@ mod indicator_theme;
 mod motion_mark;
 mod oqtopus;
 mod overlay;
+#[cfg_attr(
+    not(feature = "experimental-overlays"),
+    path = "accepted_parametric_mark.rs"
+)]
 mod parametric_mark;
 mod platform;
 mod presentation;
