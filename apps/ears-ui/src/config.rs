@@ -306,10 +306,7 @@ mod tests {
 
 impl UiConfig {
     pub fn path() -> PathBuf {
-        let base = std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .or_else(dirs::config_dir)
-            .unwrap_or_else(|| PathBuf::from(".config"));
+        let base = ears::paths::config_dir();
         base.join("ears").join("ui.toml")
     }
 

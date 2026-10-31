@@ -87,6 +87,9 @@ fn engine_options(model: &AppModel) -> DictationOptions {
 /// Start (or restart) the dictation engine on its own thread.
 pub fn start_engine(cx: &mut App) {
     let model = model(cx);
+    if model.read(cx).configuration_is_preview {
+        return;
+    }
     let (core, options, hotkey_mode) = model.read_with(cx, |m, _| {
         let mut core = m.core.clone();
         core.hotkeys.mode = m.hotkey_mode;

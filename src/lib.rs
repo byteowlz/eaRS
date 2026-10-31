@@ -9,6 +9,7 @@ pub mod build_info;
 pub mod config;
 pub mod dictation;
 pub mod frontmost;
+pub mod paths;
 pub mod profiles;
 pub mod replacement;
 pub mod speaker_gate;

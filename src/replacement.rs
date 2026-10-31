@@ -297,10 +297,7 @@ pub fn dictionary_paths(config: &ReplacementConfig) -> Vec<PathBuf> {
 }
 
 pub fn default_dictionary_path() -> PathBuf {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(dirs::config_dir)
-        .unwrap_or_else(|| PathBuf::from(".config"));
+    let base = crate::paths::config_dir();
     base.join("ears").join("dictionaries").join("global.toml")
 }
 

@@ -4,6 +4,7 @@
 //! this binary only renders state and forwards commands.
 
 mod app;
+mod bootstrap;
 mod config;
 mod ears_mark;
 mod indicator_theme;
@@ -36,7 +37,7 @@ use runtime::Runtime;
 
 fn print_help() {
     println!(
-        "ears-ui {}\n\nUsage: ears-ui [--settings] [--no-overlay] [--oqtopus-check] [--preview-synthetic|--preview-synthetic-expanded|--preview-placement|--preview-click|--preview-settings|--preview-floating|--preview-oqtopus|--preview-oqtopus-reduced|--preview-parametric|--preview-parametric-reduced|--preview-parametric-override] [--help]\n\n  --settings           open the settings window at launch\n  --no-overlay         start with the floating island disabled\n  --preview-synthetic  display a synthetic notch fixture without starting dictation\n  --preview-synthetic-expanded  show the expanded synthetic fixture\n  --preview-placement  show a synthetic fixture at the actual screen anchor\n  --preview-click     show a clickable placement fixture without dictation\n  --preview-hit-test  show a centered clickable synthetic notch for native input tests\n  --preview-settings   show settings with synthetic state, without dictation\n  --preview-floating   show a synthetic bottom-anchored floating pill\n  --preview-word       synthetic fixed-width latest-word fixture (no dictation)\n  --preview-black / --preview-compact  synthetic skin/compact state\n  --preview-layout-report  synthetic numeric layout evidence, never text/pixels\n  --preview-settings-minimum / --preview-settings-light / --preview-settings-wide  synthetic layout variants\n  --preview-subtitle   add synthetic passive subtitles\n  --preview-cursor     add a synthetic pointer-anchored bubble\n  --preview-departure / --preview-jetbrains  synthetic overlay font choice\n  --overlay-config     print current overlay settings as JSON, no engine\n  --overlay-schema     print the ui.toml JSON schema, no engine\n  --oqtopus-check     validate the configured local vector pack without dictation\n  --preview-oqtopus   show the local Oqtopus pack without dictation\n  --preview-oqtopus-reduced   show its static reduced-motion rest frame\n  --preview-parametric-override  animate a synthetic icon despite reduced motion\n  --preview-parametric  show animated parametric bars in a synthetic notch\n  --preview-parametric-reduced  show the same fixture with reduced motion\n  --version            print the version\n\nConfig: {}",
+        "ears-ui {}\n\nUsage: ears-ui [--settings] [--no-overlay] [--oqtopus-check] [--preview-synthetic|--preview-synthetic-expanded|--preview-placement|--preview-click|--preview-settings|--preview-floating|--preview-oqtopus|--preview-oqtopus-reduced|--preview-parametric|--preview-parametric-reduced|--preview-parametric-override] [--help]\n\n  --settings           open the settings window at launch\n  --setup              configure without starting the engine until Apply\n  --build-info         read-only compiled capabilities JSON\n  --no-overlay         start with the floating island disabled\n  --preview-synthetic  display a synthetic notch fixture without starting dictation\n  --preview-synthetic-expanded  show the expanded synthetic fixture\n  --preview-placement  show a synthetic fixture at the actual screen anchor\n  --preview-click     show a clickable placement fixture without dictation\n  --preview-hit-test  show a centered clickable synthetic notch for native input tests\n  --preview-settings   show settings with synthetic state, without dictation\n  --preview-floating   show a synthetic bottom-anchored floating pill\n  --preview-word       synthetic fixed-width latest-word fixture (no dictation)\n  --preview-black / --preview-compact  synthetic skin/compact state\n  --preview-layout-report  synthetic numeric layout evidence, never text/pixels\n  --preview-settings-minimum / --preview-settings-light / --preview-settings-wide  synthetic layout variants\n  --preview-subtitle   add synthetic passive subtitles\n  --preview-cursor     add a synthetic pointer-anchored bubble\n  --preview-departure / --preview-jetbrains  synthetic overlay font choice\n  --overlay-config     print current overlay settings as JSON, no engine\n  --overlay-schema     print the ui.toml JSON schema, no engine\n  --oqtopus-check     validate the configured local vector pack without dictation\n  --preview-oqtopus   show the local Oqtopus pack without dictation\n  --preview-oqtopus-reduced   show its static reduced-motion rest frame\n  --preview-parametric-override  animate a synthetic icon despite reduced motion\n  --preview-parametric  show animated parametric bars in a synthetic notch\n  --preview-parametric-reduced  show the same fixture with reduced motion\n  --version            print the version\n\nConfig: {}",
         env!("CARGO_PKG_VERSION"),
         UiConfig::path().display()
     );
@@ -313,7 +314,16 @@ fn main() {
     if maybe_preview(&args) {
         return;
     }
-    let open_settings_at_launch = args.iter().any(|a| a == "--settings");
+    let setup_mode = match AppConfig::path()
+        .and_then(|path| bootstrap::setup_required(&path, args.iter().any(|a| a == "--setup")))
+    {
+        Ok(required) => required,
+        Err(error) => {
+            eprintln!("ears-ui: cannot preserve setup state: {error:#}");
+            std::process::exit(1);
+        }
+    };
+    let open_settings_at_launch = setup_mode || args.iter().any(|a| a == "--settings");
     let no_overlay = args.iter().any(|a| a == "--no-overlay");
 
     let core = match AppConfig::load() {
@@ -340,6 +350,7 @@ fn main() {
 
         let mut model = AppModel::new(core, ui);
         model.reduce_motion = platform::reduce_motion();
+        model.setup_mode = setup_mode;
         let model = cx.new(|_| model);
         cx.set_global(AppHandle(model.clone()));
         cx.set_global(Runtime::new(model.clone()));
@@ -350,8 +361,12 @@ fn main() {
 
         tray::install(cx);
         eprintln!("ears-ui: tray installed");
-        runtime::start_engine(cx);
-        eprintln!("ears-ui: engine started");
+        if !setup_mode {
+            runtime::start_engine(cx);
+            eprintln!("ears-ui: engine started");
+        } else {
+            eprintln!("ears-ui: setup mode; engine not started");
+        }
         runtime::spawn_tick_loop(cx);
 
         if open_settings_at_launch {

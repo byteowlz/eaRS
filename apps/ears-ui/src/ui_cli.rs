@@ -7,6 +7,7 @@ use gpui::Application;
 const OPTIONS: &[&str] = &[
     "--build-info",
     "--settings",
+    "--setup",
     "--no-overlay",
     "--preview-settings",
     "--preview-settings-minimum",

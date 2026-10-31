@@ -439,11 +439,7 @@ impl AppConfig {
 }
 
 fn get_config_path() -> Result<PathBuf> {
-    let config_dir = if let Some(xdg_config_home) = std::env::var_os("XDG_CONFIG_HOME") {
-        PathBuf::from(xdg_config_home)
-    } else {
-        dirs::config_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine config directory"))?
-    };
+    let config_dir = crate::paths::config_dir();
 
     Ok(config_dir.join("ears").join("config.toml"))
 }

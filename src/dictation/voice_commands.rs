@@ -43,10 +43,7 @@ struct CommandFile {
 }
 
 pub fn default_path() -> PathBuf {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(dirs::config_dir)
-        .unwrap_or_else(|| PathBuf::from("."));
+    let base = crate::paths::config_dir();
     base.join("ears").join("commands.toml")
 }
 

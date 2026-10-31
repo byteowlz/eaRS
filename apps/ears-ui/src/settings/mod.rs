@@ -347,8 +347,24 @@ impl SettingsView {
     }
 
     fn apply_server(&mut self, cx: &mut Context<Self>) {
+        if !self.model.read(cx).configuration_is_preview {
+            if let Err(error) = ears::config::AppConfig::path()
+                .and_then(|path| crate::bootstrap::finish_setup(&path))
+            {
+                self.model.update(cx, |model, cx| {
+                    model.error = Some(crate::app::UiError {
+                        kind: crate::app::ErrorKind::Other,
+                        message: format!("Cannot save setup completion: {error:#}"),
+                        since: std::time::Instant::now(),
+                    });
+                    cx.notify();
+                });
+                return;
+            }
+        }
         let value = self.server.read(cx).text().trim().to_string();
         self.model.update(cx, |m, cx| {
+            m.setup_mode = false;
             m.update_ui(cx, |ui| {
                 ui.dictation.server = value.clone();
             });
@@ -589,6 +605,9 @@ impl SettingsView {
         let mut pane = div().flex().flex_col().gap(theme.space(5.0));
 
         // Backend ---------------------------------------------------------
+        if self.model.read(cx).setup_mode {
+            pane=pane.child(hint("Setup: choose your dictation server, then Apply to start the engine. OS permissions are requested only when needed.",theme));
+        }
         let mut backend = section("Backend", theme).child(
             div()
                 .flex()

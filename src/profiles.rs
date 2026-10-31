@@ -174,10 +174,7 @@ impl Default for ProfilesConfig {
 
 /// Path of the profiles file (`$XDG_CONFIG_HOME/ears/profiles.toml`).
 pub fn profiles_path() -> PathBuf {
-    let config_dir = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(dirs::config_dir)
-        .unwrap_or_else(|| PathBuf::from("."));
+    let config_dir = crate::paths::config_dir();
     config_dir.join("ears").join("profiles.toml")
 }
 
