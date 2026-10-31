@@ -96,6 +96,9 @@ bun test scripts/release/install-macos.test.ts
 ```
 
 Bun/just are development-only. Tests use temporary roots and synthetic metadata.
+Run these tests **serially** with the Rust installer's native-launch suite: its
+harmless helper is intentionally named `ears-ui` and triggers this installer's
+same-user running-app refusal while alive. Do not weaken that guard to parallelize QA.
 They cover parser no-write behavior, unsafe paths, strict receipt refusals, unknown
 destination/journal preservation, prepared-WAL cancellation, actual descriptor locks,
 unsigned same-ID refusal using stock codesign, and test-driver boundary matching.

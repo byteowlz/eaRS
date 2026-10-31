@@ -58,7 +58,35 @@ clippy:
 lint:
     just clippy
 
-# === Installation ===
+# === Desktop candidates (no publication or implicit app launch) ===
+
+# Uses an immutable git archive, never dirty/shared Cargo changes
+# Example: just desktop-build <full-commit> /absolute/new/output
+desktop-build revision out jobs="2":
+    bun scripts/release/build.ts --source-commit "$1" --out "$2" --jobs "$3"
+
+desktop-runtime platform out:
+    bun scripts/release/runtime.ts --platform "$1" --out "$2"
+
+desktop-policy-test:
+    bun test scripts/release
+    cargo check --locked --manifest-path tools/desktop-installer/Cargo.toml
+    cargo test --locked --manifest-path tools/desktop-installer/Cargo.toml -- --nocapture
+
+# Apple Keychain profile stays local; this does not publish the resulting DMG
+desktop-macos-package bin runtime revision out profile:
+    bun scripts/release/macos.ts --bin-dir "$1" --ort-archive "$2" --source-commit "$3" --out "$4" --notary-profile "$5"
+
+desktop-macos-install app trusted_cdhash:
+    bash scripts/release/install-macos.sh --app "$1" --app-cdhash "$2"
+
+desktop-macos-rollback:
+    bash scripts/release/install-macos.sh --rollback
+
+desktop-macos-uninstall:
+    bash scripts/release/install-macos.sh --uninstall
+
+# === Legacy source/CLI installation (not the desktop release workflow) ===
 
 install:
     #!/usr/bin/env bash

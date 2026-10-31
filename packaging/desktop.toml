@@ -1,0 +1,41 @@
+schema = "ears.desktop-release/v1"
+role = "desktop-client"
+required_capabilities = ["client_vad"]
+server_is_separate = true
+models_bundled = false
+experimental_overlays = false
+
+[macos]
+bundle_id = "dev.byteowlz.ears-ui"
+minimum_version = "14.0"
+architectures = ["arm64"]
+accepted_renderer_source = "e034c69f"
+accepted_renderer_sha256 = "7e13e4585d75cb53771320acf845ee3fce84903bd7934f97567072e963882199"
+
+[onnxruntime]
+version = "1.28.0"
+license = "MIT"
+source = "https://github.com/microsoft/onnxruntime/releases/tag/v1.28.0"
+
+[linux]
+minimum_glibc = "2.35"
+architectures = ["x86_64"]
+qualification = "pending-native-desktop-install"
+
+[windows]
+minimum_os = "Windows 11"
+architectures = ["x86_64"]
+crt = "app-local Microsoft VC143 CRT; operator-supplied redistributable files and licence required"
+qualification = "pending-native-desktop-install"
+
+[onnxruntime.linux_x64]
+archive = "onnxruntime-linux-x64-1.28.0.tgz"
+sha256 = "a3e1b79d7bb1bf09696ce675f49e4064e6c81f6202b8225624fff0e93f8d6407"
+
+[onnxruntime.windows_x64]
+archive = "onnxruntime-win-x64-1.28.0.zip"
+sha256 = "abef733dacbe2f571547a7150b479b5cb9cc0df22f96c24983a42cadb1b4f8bc"
+
+[onnxruntime.macos_arm64]
+archive = "onnxruntime-osx-arm64-1.28.0.tgz"
+sha256 = "1268b359718099bde2cedb55787f182a130067bc4f31e8c88478c445b850d3d8"

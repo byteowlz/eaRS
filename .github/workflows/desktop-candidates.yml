@@ -1,0 +1,95 @@
+name: Desktop Build Candidates (No Publication)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Source ref to build; resolved and recorded as an immutable commit
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Native ${{ matrix.profile }} candidate
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            profile: linux-x64
+          - os: windows-2022
+            profile: windows-x64
+          - os: macos-15
+            profile: macos-arm64
+    env:
+      CARGO_BUILD_JOBS: 2
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
+      RAYON_NUM_THREADS: 2
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+        with:
+          arch: x64
+      - name: Linux desktop build dependencies (ephemeral runner only)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          xargs -r sudo apt-get install -y --no-install-recommends < packaging/linux/build-deps.txt
+      - name: Packaging policy and standalone installer tests
+        shell: bash
+        run: |
+          bun test scripts/release
+          cargo check --locked --manifest-path tools/desktop-installer/Cargo.toml
+          cargo test --locked --manifest-path tools/desktop-installer/Cargo.toml -- --nocapture
+      - name: Client and metadata regression tests (no normal startup)
+        shell: bash
+        run: |
+          cargo test --locked -p eaRS --lib --features client-vad
+          cargo test --locked -p eaRS --test build_info_cli --features client-vad
+          cargo test --locked -p ears-ui --no-default-features
+      - name: Build from immutable archive (no dirty checkout or server deployment)
+        shell: bash
+        run: |
+          bun scripts/release/build.ts --source-commit "$(git rev-parse HEAD)" --out "$RUNNER_TEMP/ears-desktop-build" --jobs 2
+      - name: Package policy-pinned runtime for subsequent local signing/VM qualification
+        shell: bash
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          profile="${PROFILE//-/_}"
+          bun scripts/release/runtime.ts --platform "$profile" --out "$RUNNER_TEMP/ears-desktop-runtime"
+      - name: Capture dependency/tool versions
+        shell: bash
+        run: |
+          rustc -vV > "$RUNNER_TEMP/ears-desktop-build/toolchain.txt"
+          cargo --version >> "$RUNNER_TEMP/ears-desktop-build/toolchain.txt"
+          bun --version >> "$RUNNER_TEMP/ears-desktop-build/toolchain.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-unqualified-${{ matrix.profile }}-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/ears-desktop-build/bin/
+            ${{ runner.temp }}/ears-desktop-build/build-receipt.json
+            ${{ runner.temp }}/ears-desktop-build/toolchain.txt
+            ${{ runner.temp }}/ears-desktop-runtime/*
+# Intentionally no release, tag, push, tap dispatch, signing secret import,
+# normal application startup, microphone access, or unqualified desktop publication.
+# Build-info/runtime checks are separate from GUI/model/dictation acceptance.
