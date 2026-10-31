@@ -570,10 +570,14 @@ impl SettingsView {
         let model = self.model.read(cx);
         let r = &theme.roles;
 
-        let (state_text, state_color) = match model.connection {
-            ConnectionState::Connected => ("Connected", r.success),
-            ConnectionState::Connecting => ("Connecting…", r.warning),
-            ConnectionState::Disconnected => ("Disconnected", r.danger),
+        let (state_text, state_color) = if model.setup_mode {
+            ("Not started", r.muted_foreground)
+        } else {
+            match model.connection {
+                ConnectionState::Connected => ("Connected", r.success),
+                ConnectionState::Connecting => ("Connecting…", r.warning),
+                ConnectionState::Disconnected => ("Disconnected", r.danger),
+            }
         };
         let backend_line = match &model.backend {
             Some(backend) => {

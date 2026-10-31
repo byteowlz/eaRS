@@ -117,6 +117,8 @@ func verifyColumns() {
         let left=cells.map {$0[0]}.min()!,right=cells.map {$0[0]+$0[2]}.max()!
         guard abs(left-x-3)<1,abs(right-x-297)<1,cells.allSatisfy({abs($0[2]-cells[0][2])<=1.01}) else {finish(23,"FAIL: segment edges or cell widths differ")}
     }
+    let labels=reports().filter {($0["tag"] as? String)=="settings-segment-label"}.flatMap {rectangles($0)}
+    guard !labels.isEmpty,labels.allSatisfy({$0[2]>1}) else {finish(25,"FAIL: choice text collapsed to ellipsis despite equal outer tracks")}
     guard let report=latest("server-compound"),let fields=rectangles(report).first,let action=rectangles(report).last,abs(fields[0]-column(report))<1,abs(action[0]+action[2]-column(report)-300)<1,abs(action[2]-64)<1 else {finish(24,"FAIL: compound Server/Apply exceeds common control width")}
 }
 let screen=CGDisplayBounds(CGMainDisplayID())

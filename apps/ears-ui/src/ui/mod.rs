@@ -194,7 +194,19 @@ pub fn segmented<T: Copy + PartialEq + 'static>(
                 .when(!active, |s| s.hover(move |s| s.bg(hover)))
                 .cursor_pointer()
                 .on_click(move |_: &ClickEvent, window, cx| on_select(value, window, cx))
-                .child(div().min_w_0().text_ellipsis().child(label)),
+                .child(
+                    div()
+                        .on_children_prepainted(crate::preview_proof::bounds(
+                            true,
+                            "settings-segment-label",
+                            label.chars().count() as u32,
+                        ))
+                        .w_full()
+                        .min_w_0()
+                        .text_align(gpui::TextAlign::Center)
+                        .text_ellipsis()
+                        .child(label),
+                ),
         );
     }
     container
