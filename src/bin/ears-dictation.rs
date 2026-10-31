@@ -14,8 +14,12 @@ use ears::dictation::InsertionMode;
 type EngineArg = ears::server::EngineKind;
 
 #[derive(Debug, Parser)]
-#[command(name = "ears-dictation", about = "Dictation client for eaRS")]
+#[command(name = "ears-dictation", version, about = "Dictation client for eaRS")]
 struct Args {
+    /// Report compiled capabilities without reading config or starting capture.
+    #[arg(long)]
+    build_info: bool,
+
     #[arg(
         long,
         help = "Set the transcription language (e.g., 'en', 'de', 'es', 'fr', 'ja')"
@@ -65,6 +69,10 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    if args.build_info {
+        println!("{:#}", ears::build_info::json());
+        return Ok(());
+    }
     let config = AppConfig::load().unwrap_or_default();
 
     if args.list_servers {

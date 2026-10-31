@@ -10,9 +10,14 @@ type EngineArg = ears::server::EngineKind;
 #[derive(Debug, Parser)]
 #[command(
     name = "ears-server",
+    version,
     about = "Standalone transcription server for eaRS"
 )]
 struct Args {
+    /// Report compiled capabilities without config, models or server startup.
+    #[arg(long)]
+    build_info: bool,
+
     /// Address to bind the transcription server to (default: <config host>:<config port>)
     #[arg(long)]
     bind: Option<String>,
@@ -89,6 +94,10 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    if args.build_info {
+        println!("{:#}", ears::build_info::json());
+        return Ok(());
+    }
     let options = build_server_options(&args)?;
     server::run(options).await
 }
@@ -119,7 +128,9 @@ fn build_server_options(args: &Args) -> Result<server::ServerOptions> {
         default_engine: args.engine,
         with_kyutai: args.with_kyutai,
         #[cfg(feature = "moonshine")]
-        moonshine_model_dir: args.moonshine_model.clone()
+        moonshine_model_dir: args
+            .moonshine_model
+            .clone()
             .or_else(|| config.moonshine.model_dir.clone())
             .map(|path| ears::replacement::expand_tilde(&path)),
         #[cfg(feature = "parakeet-rs")]
