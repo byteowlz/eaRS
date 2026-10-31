@@ -37,6 +37,11 @@ pub fn set_click_through(_window: &Window, _on: bool) {}
 
 pub fn set_window_alpha(_window: &Window, _alpha: f32) {}
 
+pub struct PreviewFrames;
+pub fn preview_frames(_display: u32, _callback: impl Fn() + 'static) -> Option<PreviewFrames> {
+    None
+}
+
 pub fn passive_previews_supported() -> bool {
     false
 }

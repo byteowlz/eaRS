@@ -37,9 +37,9 @@ word_fade = true
 - **Hidden:** hide the top indicator; an independently enabled passive preview may
   remain visible. The tray still provides Settings. Disabling Overlay disables both.
 - **Subtitle:** opaque, lifted black provisional-text bar.
-- **Cursor:** pointer-adjacent bubble that follows the mouse at the existing bounded
-  UI tick (33 ms while visible), clamped/flipped at display edges. This supersedes
-  the earlier anchored prototype. It is **not an AX/caret implementation**.
+- **Cursor:** pointer-adjacent bubble that follows the mouse on the display clock,
+  clamped/flipped at display edges. This supersedes the earlier anchored prototype
+  and its 30 Hz service-timer motion. It is **not an AX/caret implementation**.
 
 Departure Mono and JetBrains Mono regular faces are bundled under OFL; there is
 no runtime font download. System remains the default. Exceptionally long words
@@ -80,6 +80,34 @@ body edge 28 px away when unconstrained. Coordinates are display-local logical
 pixels; AppKit conversion includes actual screen origin. Passive windows currently
 require macOS. Elsewhere the option is reported unavailable; inline text remains.
 No accessibility or event-posting permission is requested by normal rendering.
+
+## Cursor motion scheduling
+
+On macOS 14+, a public screen-bound `CADisplayLink` drives visible cursor previews at
+that screen's advertised refresh rate (up to 240 Hz). It samples the latest absolute
+pointer position, without tweening/prediction lag. Movement does not pump ASR events,
+tray work or theme refresh. Every frame retains capture/generation/PID/Secure Event
+Input eligibility checks; it adds no input monitors, permission requests or actions.
+
+Native callbacks coalesce to one queued GPUI main-thread update. Closing/hiding or
+invalidating the preview drops its frame clock; crossing displays recreates it for
+the new screen without changing capture ownership. A missing/stalled clock falls
+back to the existing service tick after 50 ms, rather than freezing the preview.
+Text/font/size/above-below changes invalidate cached height; origin-only movement
+keeps that native text-height result and does not explicitly notify unchanged text.
+GPUI may still redraw in response to its native window-bounds observer.
+
+A synthetic 60 Hz VM replay measured native movement gaps of 33.5 ms median/50.2 ms p95
+before, versus 17.1 ms/22.5 ms after. These are public window-bounds observations,
+**not physical compositor scanout or 120 Hz hardware acceptance**. The observer in
+`scripts/probe_preview_motion.swift` reads only an owned fixture's numeric geometry;
+it never moves the cursor, captures pixels/text or grants permissions. Run motion
+input only inside an isolated, owned desktop; retain raw evidence privately.
+`just ui-cursor-motion-check before.json after.json 60` verifies the old replay
+fails and the new replay meets fixed median/p95 budgets of 1.25/1.5 display periods.
+Its 120 Hz unit examples test arithmetic, not 120 Hz hardware. In a separate debug-only
+replay without the observer, UI-process CPU was 0.79 s before/0.89 s after; these are
+not release/idle/real-ASR CPU budgets.
 
 ## Verification and synthetic fixtures
 

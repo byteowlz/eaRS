@@ -4,6 +4,14 @@
 #[path = "mac_input.rs"]
 mod input;
 pub use input::set_overlay_input_shape;
+#[path = "mac_frames.rs"]
+mod frames;
+pub use frames::PreviewFrames;
+
+pub fn preview_frames(display: u32, callback: impl Fn() + 'static) -> Option<PreviewFrames> {
+    let screen = screen_for(display)?;
+    frames::start(&screen, callback)
+}
 
 use super::Notch;
 use gpui::Window;

@@ -40,6 +40,16 @@ ui-input-test binary="target/debug/ears-ui":
     swift scripts/probe_overlay_hit_test.swift "{{binary}}" --word --floating
     swift scripts/probe_overlay_hit_test.swift "{{binary}}" --word --floating --click-through
 
+# Read-only numeric motion observation of an OWNED synthetic preview; never posts input
+ui-cursor-motion-probe pid seconds="7":
+    swift scripts/probe_preview_motion.swift "$1" "$2"
+
+ui-cursor-motion-check before after hz="60":
+    bun scripts/check_preview_motion.ts "$1" "$2" "$3"
+
+ui-cursor-motion-test: ui-test
+    bun test scripts/check_preview_motion.test.ts
+
 # === Code Quality ===
 
 # Format code

@@ -54,7 +54,7 @@ jobs:
       - name: Packaging policy and standalone installer tests
         shell: bash
         run: |
-          bun test scripts/release
+          bun test scripts/release scripts/check_preview_motion.test.ts
           cargo check --locked --manifest-path tools/desktop-installer/Cargo.toml
           cargo test --locked --manifest-path tools/desktop-installer/Cargo.toml -- --nocapture
       - name: Client and metadata regression tests (no normal startup)

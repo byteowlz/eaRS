@@ -94,31 +94,67 @@ impl DisplayText {
     }
 }
 
-struct Snapshot {
-    overlay: crate::config::OverlayConfig,
+#[derive(Clone, Copy)]
+struct Eligibility {
+    enabled: bool,
+    placement: PreviewPlacement,
     active: bool,
     generation: Option<u64>,
     synthetic: bool,
-    text: String,
+}
+fn eligibility(model: &AppModel) -> Eligibility {
+    Eligibility {
+        enabled: model.ui.overlay.enabled,
+        placement: model.ui.overlay.preview,
+        active: model.is_capturing()
+            && model
+                .engine
+                .as_ref()
+                .map_or(model.configuration_is_preview, |engine| {
+                    engine.is_capturing()
+                }),
+        generation: model.capture_generation(),
+        synthetic: model.configuration_is_preview,
+    }
 }
 
-#[derive(Default)]
-struct PreviewManager {
-    window: Option<WindowHandle<PreviewView>>,
-    ownership: Ownership,
-    placement: Option<PreviewPlacement>,
-    rect: Option<PreviewRect>,
-    text: DisplayText,
-    status: PreviewStatus,
+fn motion_clock_live(last: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+    last.and_then(|last| now.checked_duration_since(last))
+        .is_some_and(|age| age <= std::time::Duration::from_millis(50))
 }
-impl Global for PreviewManager {}
 
-pub fn sync(cx: &mut App) {
+fn needs_paint(previous: PreviewRect, next: PreviewRect, content_changed: bool) -> bool {
+    content_changed
+        || previous.width != next.width
+        || previous.height != next.height
+        || previous.align_bottom != next.align_bottom
+}
+
+// Queue at most one main-thread update; never re-enter GPUI from an AppKit callback.
+fn motion_frames(display: u32, cx: &App) -> Option<platform::PreviewFrames> {
+    let app = cx.to_async();
+    let executor = cx.foreground_executor().clone();
+    let pending = std::rc::Rc::new(std::cell::Cell::new(false));
+    platform::preview_frames(display, move || {
+        if pending.replace(true) {
+            return;
+        }
+        let pending = pending.clone();
+        let app = app.clone();
+        executor
+            .spawn(async move {
+                pending.set(false);
+                let _ = app.update(|cx| update_manager(cx, PreviewManager::follow_frame));
+            })
+            .detach();
+    })
+}
+fn update_manager(cx: &mut App, update: fn(&mut PreviewManager, &mut App) -> PreviewStatus) {
     if !cx.has_global::<PreviewManager>() {
         cx.set_global(PreviewManager::default());
     }
     let status = cx.update_global::<PreviewManager, _>(|manager, cx| {
-        manager.status = manager.sync(cx);
+        manager.status = update(manager, cx);
         manager.status
     });
     runtime::model(cx).update(cx, |model, cx| {
@@ -129,6 +165,23 @@ pub fn sync(cx: &mut App) {
     });
 }
 
+#[derive(Default)]
+struct PreviewManager {
+    window: Option<WindowHandle<PreviewView>>,
+    frames: Option<platform::PreviewFrames>,
+    last_frame: Option<std::time::Instant>,
+    ownership: Ownership,
+    placement: Option<PreviewPlacement>,
+    rect: Option<PreviewRect>,
+    text: DisplayText,
+    status: PreviewStatus,
+}
+impl Global for PreviewManager {}
+
+pub fn sync(cx: &mut App) {
+    update_manager(cx, PreviewManager::sync);
+}
+
 pub fn is_active(cx: &App) -> bool {
     cx.try_global::<PreviewManager>()
         .is_some_and(|manager| manager.window.is_some())
@@ -136,6 +189,8 @@ pub fn is_active(cx: &App) -> bool {
 
 impl PreviewManager {
     fn hide(&mut self, cx: &mut App) {
+        self.frames = None;
+        self.last_frame = None;
         if let Some(window) = self.window.take() {
             let _ = window.update(cx, |_, window, _| window.remove_window());
         }
@@ -155,37 +210,25 @@ impl PreviewManager {
     }
     fn sync(&mut self, cx: &mut App) -> PreviewStatus {
         let model = runtime::model(cx);
-        let (overlay, active, generation, synthetic, text) = model.read_with(cx, |m, _| {
+        let (eligible, overlay, text) = model.read_with(cx, |m, _| {
             (
+                eligibility(m),
                 m.ui.overlay.clone(),
-                m.is_capturing()
-                    && m.engine
-                        .as_ref()
-                        .map_or(m.configuration_is_preview, |engine| engine.is_capturing()),
-                m.capture_generation(),
-                m.configuration_is_preview,
                 presentation::preview_text(&m.partial),
             )
         });
-
-        let snapshot = Snapshot {
-            overlay,
-            active,
-            generation,
-            synthetic,
-            text,
-        };
-        let (generation, display) = match self.prepare(&snapshot, cx) {
+        let (generation, display) = match self.prepare(eligible, cx) {
             Ok(ready) => ready,
             Err(status) => return status,
         };
-        let overlay = &snapshot.overlay;
-        let text = &snapshot.text;
         let display_id = u32::from(display.id());
         self.text.observe(&text);
         let bounds = display.bounds();
         let screen = (f32::from(bounds.size.width), f32::from(bounds.size.height));
-        let rect = if overlay.preview == PreviewPlacement::Cursor || self.rect.is_none() {
+        let rect = if (overlay.preview == PreviewPlacement::Cursor
+            && !motion_clock_live(self.last_frame, std::time::Instant::now()))
+            || self.rect.is_none()
+        {
             presentation::preview_rect(
                 screen,
                 overlay.preview,
@@ -212,25 +255,55 @@ impl PreviewManager {
         }
     }
 
+    fn follow_frame(&mut self, cx: &mut App) -> PreviewStatus {
+        if self.window.is_none() || self.placement != Some(PreviewPlacement::Cursor) {
+            return self.status;
+        }
+        self.last_frame = Some(std::time::Instant::now());
+        let eligible = runtime::model(cx).read_with(cx, |m, _| eligibility(m));
+        let (generation, display) = match self.prepare(eligible, cx) {
+            Ok(ready) => ready,
+            Err(status) => return status,
+        };
+        // Screen/placement changes retain text but recreate the passive window and
+        // its screen-bound frame clock. Capture/insertion ownership never changes.
+        let Some(handle) = self.window else {
+            return self.sync(cx);
+        };
+        let display_id = u32::from(display.id());
+        let bounds = display.bounds();
+        let rect = presentation::preview_rect(
+            (f32::from(bounds.size.width), f32::from(bounds.size.height)),
+            PreviewPlacement::Cursor,
+            platform::cursor_on_display(display_id),
+        );
+        let Some(rect) = rect else {
+            return self.block(generation, cx, PreviewStatus::DisplayUnavailable);
+        };
+        let moved = handle
+            .update(cx, |view, window, cx| {
+                view.move_to(rect, display_id, window, cx)
+            })
+            .unwrap_or(false);
+        if !moved {
+            return self.block(generation, cx, PreviewStatus::DisplayUnavailable);
+        }
+        self.rect = Some(rect);
+        PreviewStatus::Active
+    }
+
     fn update_window(&mut self, rect: PreviewRect, display: u32, cx: &mut App) -> Option<bool> {
         let handle = self.window?;
         match handle.update(cx, |view, window, cx| {
-            if view.rect != rect {
-                if view.rect.width != rect.width || view.rect.height != rect.height {
-                    window.resize(size(px(rect.width), px(rect.height)));
-                }
-                if !platform::position_preview(window, display, rect.x, rect.y) {
-                    return false;
-                }
+            if !view.move_to(rect, display, window, cx) {
+                return false;
             }
-            view.rect = rect;
-            view.text = self.text.0.clone();
-            cx.notify();
+            view.set_content(&self.text.0, cx);
             true
         }) {
             Ok(positioned) => Some(positioned),
             Err(_) => {
-                self.window = None;
+                self.hide(cx);
                 None
             }
         }
@@ -239,29 +312,24 @@ impl PreviewManager {
     /// Capture/security eligibility is separate from moving or creating windows.
     fn prepare(
         &mut self,
-        snapshot: &Snapshot,
+        eligible: Eligibility,
         cx: &mut App,
     ) -> Result<(u64, std::rc::Rc<dyn gpui::PlatformDisplay>), PreviewStatus> {
-        let Snapshot {
-            overlay,
+        let Eligibility {
+            enabled,
+            placement,
             active,
             generation,
             synthetic,
-            ..
-        } = snapshot;
-        let active = *active;
-        let generation = *generation;
-        let synthetic = *synthetic;
-        if !overlay.enabled || overlay.preview == PreviewPlacement::Inline || !active {
+        } = eligible;
+        if !enabled || placement == PreviewPlacement::Inline || !active {
             self.clear(cx);
             self.ownership = Ownership::default();
-            return Err(
-                if overlay.enabled && overlay.preview != PreviewPlacement::Inline {
-                    PreviewStatus::Paused
-                } else {
-                    PreviewStatus::Inactive
-                },
-            );
+            return Err(if enabled && placement != PreviewPlacement::Inline {
+                PreviewStatus::Paused
+            } else {
+                PreviewStatus::Inactive
+            });
         }
         if !platform::passive_previews_supported() {
             self.clear(cx);
@@ -274,7 +342,7 @@ impl PreviewManager {
         if self.ownership.blocked == Some(generation) {
             return Err(self.status);
         }
-        let display = if overlay.preview == PreviewPlacement::Subtitle {
+        let display = if placement == PreviewPlacement::Subtitle {
             self.ownership
                 .owner
                 .as_ref()
@@ -326,10 +394,10 @@ impl PreviewManager {
         }
         if fresh {
             self.clear(cx);
-        } else if display_changed || self.placement != Some(overlay.preview) {
+        } else if display_changed || self.placement != Some(placement) {
             self.close(cx);
         }
-        self.placement = Some(overlay.preview);
+        self.placement = Some(placement);
         Ok((generation, display))
     }
 
@@ -341,6 +409,7 @@ impl PreviewManager {
         cx: &mut App,
     ) -> bool {
         let display_id = u32::from(display.id());
+        let font = model.read(cx).ui.overlay.font;
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                 point(px(rect.x), px(rect.y)),
@@ -366,6 +435,8 @@ impl PreviewManager {
                 model,
                 rect,
                 text: self.text.0.clone(),
+                font,
+                cached_height: None,
                 scroll: gpui::ScrollHandle::new(),
             })
         }) else {
@@ -377,6 +448,9 @@ impl PreviewManager {
             })
             .unwrap_or(false);
         self.window = Some(handle);
+        if positioned && self.placement == Some(PreviewPlacement::Cursor) {
+            self.frames = motion_frames(display_id, cx);
+        }
         positioned
     }
 }
@@ -386,6 +460,43 @@ struct PreviewView {
     rect: PreviewRect,
     scroll: gpui::ScrollHandle,
     text: String,
+    font: crate::config::OverlayFont,
+    cached_height: Option<f32>,
+}
+impl PreviewView {
+    fn move_to(
+        &mut self,
+        rect: PreviewRect,
+        display: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.rect == rect {
+            return true;
+        }
+        if self.rect.width != rect.width || self.rect.height != rect.height {
+            window.resize(size(px(rect.width), px(rect.height)));
+        }
+        if !platform::position_preview(window, display, rect.x, rect.y) {
+            return false;
+        }
+        if needs_paint(self.rect, rect, false) {
+            self.cached_height = None;
+            cx.notify();
+        }
+        self.rect = rect;
+        true
+    }
+    fn set_content(&mut self, text: &str, cx: &mut Context<Self>) {
+        let font = self.model.read(cx).ui.overlay.font;
+        if self.text != text || self.font != font {
+            self.text.clear();
+            self.text.push_str(text);
+            self.font = font;
+            self.cached_height = None;
+            cx.notify();
+        }
+    }
 }
 impl Render for PreviewView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -395,9 +506,10 @@ impl Render for PreviewView {
         let text = self.text.clone();
         let subtitle = placement == PreviewPlacement::Subtitle;
         let size = if subtitle { 22.0 } else { 18.0 };
-        let height =
+        let height = *self.cached_height.get_or_insert_with(|| {
             presentation::preview_height(window.text_system(), &text, font, size, self.rect.width)
-                .min(self.rect.height);
+                .min(self.rect.height)
+        });
         self.scroll.scroll_to_bottom();
         div().size_full().relative().overflow_hidden().child(
             div()
@@ -430,6 +542,10 @@ impl Render for PreviewView {
         )
     }
 }
+
+#[cfg(test)]
+#[path = "cursor_follow_tests.rs"]
+mod cursor_follow_tests;
 
 #[cfg(test)]
 mod tests {
