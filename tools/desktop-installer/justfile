@@ -1,0 +1,14 @@
+default: test
+
+check:
+    cargo check --locked
+
+test:
+    cargo test --locked
+
+fmt:
+    cargo fmt --check
+    rustfmt --check --edition 2021 tests/fixtures/launch-helper.rs
+
+lint:
+    cargo clippy --locked --all-targets -- -D warnings

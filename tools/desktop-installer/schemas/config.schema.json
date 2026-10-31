@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ears.installer-config/v1",
+  "title": "eaRS per-user desktop installer configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "prefix": { "type": "string", "minLength": 1 }
+  }
+}

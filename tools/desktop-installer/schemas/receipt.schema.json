@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ears.desktop-installer-receipt/v1",
+  "title": "eaRS desktop installer ownership and selection receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "active", "previous", "managed"],
+  "properties": {
+    "schema": { "const": "ears.desktop-installer-receipt/v1" },
+    "active": { "$ref": "#/$defs/slot" },
+    "previous": { "$ref": "#/$defs/slot" },
+    "managed": {
+      "type": "array", "maxItems": 128, "uniqueItems": true,
+      "items": { "$ref": "#/$defs/hash" }
+    }
+  },
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "slot": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/hash" }] }
+  },
+  "$comment": "Runtime requires non-null slots to be distinct managed hashes and previous to have an active slot. Never accept this receipt as proof of release provenance; package installation requires an externally trusted manifest SHA-256."
+}
