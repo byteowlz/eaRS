@@ -18,7 +18,10 @@ unselected six-page/sidebar study. The four existing destinations remain intact.
 - Choice cells share equal grid tracks within each group. Short codes/numeric
   options stay in compact rows; longer/dense choices use bounded rows rather than
   stretching the form. Native pixel rounding may distribute1px across tracks.
-  Opaque long aliases ellipsize visually without changing their actual value.
+  Long aliases wrap or clip within the choice track without changing their value.
+  Choice labels deliberately avoid GPUI0.2.2's text-overflow truncation path: its
+  reused mutable text runs can retain a minimum-width probe's three-character
+  length during final grid layout. Native pixel/OCR checks cover complete labels.
 - Server input and compact Apply button share that same300px compound-control
   width; the field flexes instead of adding a300px input beside a second button.
   Standalone actions remain compact, not full-width.

@@ -181,6 +181,7 @@ pub fn segmented<T: Copy + PartialEq + 'static>(
         container = container.child(
             div()
                 .id(index)
+                .overflow_hidden()
                 .flex()
                 .items_center()
                 .justify_center()
@@ -204,7 +205,6 @@ pub fn segmented<T: Copy + PartialEq + 'static>(
                         .w_full()
                         .min_w_0()
                         .text_align(gpui::TextAlign::Center)
-                        .text_ellipsis()
                         .child(label),
                 ),
         );
