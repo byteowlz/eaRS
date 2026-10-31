@@ -4,10 +4,10 @@ import { clientBuild, macDependencies, options } from "./common";
 import { portableProfile } from "./portable";
 
 const revision = "a".repeat(40);
-const base = { source_commit: revision, os: "linux", arch: "x86_64", version: "0.6.0", client_vad: true, moonshine: false, parakeet: false, experimental_overlays: false, renderer: "accepted-e034c69f" };
+const base = { source_commit: revision, os: "linux", arch: "x86_64", version: "0.6.0", client_vad: true, moonshine: false, parakeet_rs: false, experimental_overlays: false, renderer: "accepted-e034c69f" };
 test("release profiles require exact source, platform, client VAD and accepted UI", () => {
   expect(clientBuild(base, revision, "linux", "x86_64", true)).toEqual(base);
-  for (const changed of [{ source_commit: "b".repeat(40) }, { os: "windows" }, { arch: "aarch64" }, { client_vad: false }, { moonshine: true }, { parakeet: true }, { version: "dev" }, { experimental_overlays: true }, { renderer: "experimental" }]) {
+  for (const changed of [{ source_commit: "b".repeat(40) }, { os: "windows" }, { arch: "aarch64" }, { client_vad: false }, { moonshine: true }, { parakeet_rs: true }, { version: "dev" }, { experimental_overlays: true }, { renderer: "experimental" }]) {
     expect(() => clientBuild({ ...base, ...changed }, revision, "linux", "x86_64", true)).toThrow();
   }
 });

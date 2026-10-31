@@ -86,7 +86,7 @@ export function macDependencies(output: string) {
 export function clientBuild(info: any, revision: string, os: string, arch: string, ui: boolean) {
   if (!/^[a-f0-9]{40}$/.test(revision) || !info || info.source_commit !== revision) throw new Error("Build source mismatch");
   if (info.os !== os || info.arch !== arch || info.client_vad !== true) throw new Error("Native client-VAD capabilities required");
-  if (info.moonshine !== false || info.parakeet !== false) throw new Error("Server/local-ASR features are not a desktop release profile");
+  if (info.moonshine !== false || info.parakeet_rs !== false) throw new Error("Server/local-ASR features are not a desktop release profile");
   if (!/^\d+\.\d+\.\d+$/.test(info.version)) throw new Error("Numeric version required");
   if (ui && (info.experimental_overlays !== false || info.renderer !== "accepted-e034c69f")) throw new Error("Accepted release renderer required");
   return info;
