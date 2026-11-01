@@ -836,7 +836,7 @@ impl SettingsView {
             section("Island", theme)
                 .child(row(
                     "Enabled",
-                    Some("Show the floating pill while dictating.".into()),
+                    Some("Show the island and optional recording notch.".into()),
                     toggle("overlay-enabled", overlay.enabled, theme, {
                         let entity = entity.clone();
                         move |on: bool, _, cx| {
@@ -866,7 +866,7 @@ impl SettingsView {
                 ))
                 .child(row(
                     "Anchor",
-                    Some("Screen edge the island hugs; drag it to fine-tune.".into()),
+                    Some(if overlay.recording_notch { "Recording notch pins the top; this saved anchor returns when switched off." } else { "Screen edge the island hugs; drag it to fine-tune." }.into()),
                     segmented(
                         "anchor",
                         OverlayAnchor::ALL
@@ -897,6 +897,21 @@ impl SettingsView {
                             entity.update(cx, |this, cx| {
                                 this.model.update(cx, |m, cx| {
                                     m.update_ui(cx, |ui| ui.overlay.island_mode = on);
+                                });
+                            });
+                        }
+                    }),
+                    theme,
+                ))
+                .child(row(
+                    "Recording notch",
+                    Some("macOS: recordable notch on built-in and external displays. Presentation only, not a recorder.".into()),
+                    toggle("recording-notch", overlay.recording_notch, theme, {
+                        let entity = entity.clone();
+                        move |on: bool, _, cx| {
+                            entity.update(cx, |this, cx| {
+                                this.model.update(cx, |m, cx| {
+                                    m.update_ui(cx, |ui| ui.overlay.recording_notch = on);
                                 });
                             });
                         }

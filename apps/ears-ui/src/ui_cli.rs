@@ -30,6 +30,8 @@ const OPTIONS: &[&str] = &[
     "--preview-layout-report",
     "--preview-subtitle",
     "--preview-cursor",
+    "--preview-recording-notch",
+    "--preview-recording-notch-active",
     "--preview-departure",
     "--preview-jetbrains",
     "--overlay-config",
@@ -153,6 +155,8 @@ mod tests {
     #[test]
     fn preview_modifiers_are_non_engine_options_and_unknown_flags_fail_closed() {
         for flag in [
+            "--preview-recording-notch",
+            "--preview-recording-notch-active",
             "--preview-departure",
             "--preview-word",
             "--preview-cursor",

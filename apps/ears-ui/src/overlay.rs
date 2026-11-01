@@ -70,7 +70,7 @@ use std::time::Instant;
 
 /// Window size. The pill is centred inside; the margin leaves room for the
 /// shadow and for the island to grow.
-const WIN_W: f32 = 640.0;
+pub(crate) const WIN_W: f32 = 640.0;
 const WIN_H: f32 = 110.0;
 /// Regular pill.
 const PILL_H: f32 = 36.0;
@@ -124,12 +124,23 @@ pub fn sync(cx: &mut App) {
         (m.ui.overlay.clone(), m.phase(), m.engine_running())
     });
 
+    crate::recording_notch::sync(&overlay, cx);
+    let overlay =
+        crate::recording_notch::effective(&overlay, platform::passive_previews_supported());
     if !overlay.enabled || overlay.transcript == TranscriptStyle::Hidden {
         close(cx);
         return;
     }
 
-    let want_visible = phase != Phase::Dormant || (overlay.dormant_dot && engine_running);
+    recording_transition(
+        cx,
+        crate::recording_notch::enabled(&overlay, platform::passive_previews_supported()),
+        phase,
+    );
+    let want_visible = phase != Phase::Dormant
+        || (overlay.dormant_dot
+            && engine_running
+            && !crate::recording_notch::enabled(&overlay, platform::passive_previews_supported()));
     let has_window = OverlayManager::get(cx).window.is_some();
 
     if want_visible {
@@ -179,28 +190,66 @@ pub fn sync(cx: &mut App) {
 }
 
 /// Placement and native input mode both require a fresh popup.
-type WindowConfiguration = (
-    OverlayAnchor,
-    f32,
-    bool,
-    f32,
-    f32,
-    bool,
-    TranscriptStyle,
-    crate::config::OverlayAppearance,
-);
+#[derive(Debug, PartialEq)]
+struct WindowConfiguration {
+    anchor: OverlayAnchor,
+    margin: f32,
+    island_mode: bool,
+    offset_x: f32,
+    offset_y: f32,
+    click_through: bool,
+    transcript: TranscriptStyle,
+    appearance: crate::config::OverlayAppearance,
+    recording_notch: bool,
+}
 
 fn window_configuration_signature(overlay: &OverlayConfig) -> WindowConfiguration {
-    (
-        overlay.anchor,
-        overlay.margin,
-        overlay.island_mode,
-        overlay.offset_x,
-        overlay.offset_y,
-        overlay.click_through,
-        overlay.transcript,
-        overlay.appearance,
-    )
+    WindowConfiguration {
+        anchor: overlay.anchor,
+        margin: overlay.margin,
+        island_mode: overlay.island_mode,
+        offset_x: overlay.offset_x,
+        offset_y: overlay.offset_y,
+        click_through: overlay.click_through,
+        transcript: overlay.transcript,
+        appearance: overlay.appearance,
+        recording_notch: crate::recording_notch::enabled(
+            overlay,
+            platform::passive_previews_supported(),
+        ),
+    }
+}
+
+/// Keep the collapse morph, but never let its lingering camera body eat clicks.
+/// A quick resume recreates the popup, as required by GPUI's native input mask.
+fn recording_transition(cx: &mut App, recording: bool, phase: Phase) {
+    if OverlayManager::get(cx)
+        .applied_placement
+        .as_ref()
+        .is_some_and(|p| p.recording_notch != recording)
+    {
+        close(cx);
+        return;
+    }
+    if !recording || phase != Phase::Dormant {
+        return;
+    }
+    if OverlayManager::get(cx)
+        .applied_placement
+        .as_ref()
+        .is_none_or(|p| p.click_through)
+    {
+        return;
+    }
+    let Some((handle, _)) = OverlayManager::get(cx).window else {
+        return;
+    };
+    let changed = handle
+        .update(cx, |_, window, _| platform::set_click_through(window, true))
+        .is_ok();
+    if changed && let Some(applied) = OverlayManager::get(cx).applied_placement.as_mut() {
+        applied.click_through = true;
+    }
 }
 
 fn close(cx: &mut App) {
@@ -259,6 +308,19 @@ mod placement_tests {
     }
 
     #[test]
+    fn recording_collapse_passivity_cannot_leak_into_a_quick_resume() {
+        let mut config = OverlayConfig::default();
+        config.recording_notch = true;
+        config.click_through = false;
+        let mut collapsed = window_configuration_signature(&config);
+        collapsed.click_through = true;
+        assert_ne!(collapsed, window_configuration_signature(&config));
+        assert_eq!(collapsed.recording_notch, cfg!(target_os = "macos"));
+        config.recording_notch = false;
+        assert!(!window_configuration_signature(&config).recording_notch);
+    }
+
+    #[test]
     fn top_anchors_account_for_platform_window_coordinates() {
         let overlay = OverlayConfig::default();
         let expected_top = 0.0;
@@ -304,13 +366,22 @@ pub(crate) fn open(cx: &mut App, overlay: &OverlayConfig, model: Entity<AppModel
     let Some(display) = target_display(cx) else {
         return;
     };
+    let overlay =
+        crate::recording_notch::effective(overlay, platform::passive_previews_supported());
     let display_id = u32::from(display.id());
-    let notch = if overlay.island_mode && overlay.anchor == OverlayAnchor::Top {
+    let recording =
+        crate::recording_notch::enabled(&overlay, platform::passive_previews_supported());
+    let notch = if recording {
+        crate::recording_notch::geometry(
+            platform::notch(display_id),
+            f32::from(display.bounds().size.width),
+        )
+    } else if overlay.island_mode && overlay.anchor == OverlayAnchor::Top {
         platform::notch(display_id)
     } else {
         None
     };
-    let (x, y) = window_origin(&display.bounds(), display_id, overlay, notch.is_some());
+    let (x, y) = window_origin(&display.bounds(), display_id, &overlay, notch.is_some());
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds {
             origin: point(px(x), px(y)),
@@ -331,7 +402,10 @@ pub(crate) fn open(cx: &mut App, overlay: &OverlayConfig, model: Entity<AppModel
     let click_through = overlay.click_through;
     let result = cx.open_window(options, |window, cx| {
         platform::prepare_overlay_panel(window);
-        if notch.is_some() {
+        if recording {
+            // Match the replica's display-relative origin on secondary screens too.
+            platform::position_preview(window, display_id, x, 0.0);
+        } else if notch.is_some() {
             platform::pin_to_screen_top(window, display_id, y);
         }
         platform::set_click_through(window, click_through);
@@ -342,7 +416,7 @@ pub(crate) fn open(cx: &mut App, overlay: &OverlayConfig, model: Entity<AppModel
         Ok(handle) => {
             let manager = OverlayManager::get(cx);
             manager.window = Some((handle, display_id));
-            manager.applied_placement = Some(window_configuration_signature(overlay));
+            manager.applied_placement = Some(window_configuration_signature(&overlay));
         }
         Err(err) => eprintln!("ears-ui: cannot open overlay: {err:#}"),
     }
@@ -418,7 +492,7 @@ fn throat_extent(width: f32, height: f32) -> f32 {
 }
 
 /// Draw only the outward top throats; the existing pill paints the body.
-fn notch_throats(width: f32, height: f32) -> impl IntoElement {
+pub(crate) fn notch_throats(width: f32, height: f32) -> impl IntoElement {
     canvas(
         |_, _, _| (),
         move |bounds, (), window, _| {
@@ -1074,6 +1148,9 @@ impl Render for IslandView {
             )
         });
 
+        let overlay =
+            crate::recording_notch::effective(&overlay, platform::passive_previews_supported());
+
         // Colours: the regular pill is a `surface` card; the island is the
         // notch's own black (a fixed identity effect, not a role).
         let word_style = overlay.transcript == TranscriptStyle::Word;
@@ -1184,7 +1261,7 @@ impl Render for IslandView {
                 max_text_w,
                 &OverlayConfig {
                     word_size: caption_size,
-                    ..overlay.clone()
+                    ..overlay.as_ref().clone()
                 },
                 content.text_color,
             )
@@ -1534,6 +1611,13 @@ impl Render for IslandView {
                     });
                 })
                 .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, window, cx| {
+                    if crate::recording_notch::enabled(
+                        &runtime::model(cx).read(cx).ui.overlay,
+                        platform::passive_previews_supported(),
+                    ) {
+                        runtime::open_settings(cx);
+                        return;
+                    }
                     let native = platform::start_native_drag(window);
                     let start_mouse = platform::mouse_screen_position().unwrap_or((0.0, 0.0));
                     let start_origin = platform::window_origin(window).unwrap_or((0.0, 0.0));

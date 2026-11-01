@@ -22,6 +22,7 @@ font = "departure_mono"   # system | departure_mono | jetbrains_mono; default sy
 word_width = 300.0        # 220–440 logical px; floating word pill only
 word_size = 18.0          # 12–24 maximum logical px; camera-safe cap applies
 word_fade = true
+recording_notch = false   # macOS software camera silhouette; opt-in
 ```
 
 - **Classic / Black appearance:** an explicit skin choice, independent of text.
@@ -34,8 +35,9 @@ word_fade = true
   text entrance. Camera mode retains the existing centered continuous silhouette,
   cubic throats and hardware gap between logo/content. It does not draw three slabs.
 - **Meter:** retain the selected indicator without top text.
-- **Hidden:** hide the top indicator; an independently enabled passive preview may
-  remain visible. The tray still provides Settings. Disabling Overlay disables both.
+- **Hidden:** hide the top indicator; independently enabled passive previews and
+  Recording notch may remain visible. The tray still provides Settings. Disabling
+  Overlay disables all of these surfaces.
 - **Subtitle:** opaque, lifted black provisional-text bar.
 - **Cursor:** pointer-adjacent bubble that follows the mouse on the display clock,
   clamped/flipped at display edges. This supersedes the earlier anchored prototype
@@ -45,6 +47,47 @@ Departure Mono and JetBrains Mono regular faces are bundled under OFL; there is
 no runtime font download. System remains the default. Exceptionally long words
 shrink to a 10 px floor, then ellipsize rather than widening the camera wings or
 fixed pill. This is display-only: no recognized/insertion text is altered.
+
+## Recording notch (macOS)
+
+Settings → Overlay → **Recording notch** paints a software camera-notch replica
+on **every attached display**, including built-in and external displays. Default
+off. The actual camera cutout is hardware, not painted image content; these black
+software pixels can therefore appear in display recordings. App-window-only
+capture may omit these separate panels; inclusion depends on the recorder/filter.
+
+- A matching real notch uses its existing logical hardware dimensions. Displays
+  without a cutout use the accepted synthetic fixture geometry (185 × 32 logical
+  px, the same lower corner radius and cubic top throats). Displays narrower than
+  the existing 640 px island viewport are not eligible.
+- Collapsed replicas persist without an engine, are nonactivating and entirely
+  click-through. They have no text, camera icon or animation clock. Display changes
+  reconcile through the existing UI tick; unchanged replicas are not invalidated.
+- While enabled, the active island temporarily hugs the top software/hardware
+  notch. Saved anchor, island-mode, margin and drag offsets are untouched and
+  return when switched off. Expanded click-to-Settings and the saved click-through
+  preference remain; dragging is disabled while pinned. A lingering collapse becomes
+  passive, and quick resume recreates the native popup before restoring interaction.
+- Hidden still hides speech/indicator content, but not this explicitly requested
+  replica. The global Overlay **Enabled** switch hides everything immediately.
+- This starts **no recorder, microphone, model, wake listener or dictation engine**,
+  requests no capture/input permission and changes no insertion authority. Existing
+  active dictation remains independently controlled.
+
+The same persisted/file interface is `[overlay] recording_notch = true` in
+`ui.toml`; `ears-ui --overlay-config` reads it without starting a GUI/engine. As
+with other overlay file edits, restart the UI to apply an external edit; the
+Settings control is live. Other operating systems preserve but ignore the field.
+Synthetic, no-engine/no-save native fixtures:
+
+```sh
+ears-ui --preview-recording-notch          # collapsed replicas only
+ears-ui --preview-recording-notch-active   # accepted expanded island + replicas
+```
+
+VM display pixels and a real click delivered through the collapsed replica can
+verify software rendering/passivity. These are not physical MacBook, multi-monitor,
+recorder-product compatibility or live-dictation acceptance.
 
 ## Quiet fade and ownership
 

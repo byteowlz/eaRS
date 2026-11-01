@@ -155,6 +155,9 @@ pub struct OverlayConfig {
     pub dormant_dot: bool,
     /// macOS only: hug the camera notch like a dynamic island.
     pub island_mode: bool,
+    /// macOS: paint a passive camera-notch replica on every display for recordings.
+    /// Presentation only; temporarily pins the active island without changing saved placement.
+    pub recording_notch: bool,
     /// Drag offset relative to the anchor position, persisted after a drag.
     pub offset_x: f32,
     pub offset_y: f32,
@@ -194,6 +197,7 @@ impl Default for OverlayConfig {
             click_through: false,
             dormant_dot: false,
             island_mode: false,
+            recording_notch: false,
             offset_x: 0.0,
             offset_y: 0.0,
         }

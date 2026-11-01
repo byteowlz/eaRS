@@ -27,6 +27,30 @@ fn surfaces_remain_independent_in_every_content_and_compact_state() {
 }
 
 #[test]
+fn recording_notch_is_explicit_and_preserves_saved_placement() {
+    let old: UiConfig =
+        toml::from_str("[overlay]\nanchor='bottom'\noffset_x=17.0\noffset_y=9.0\n").unwrap();
+    let old_json = serde_json::to_value(&old).unwrap();
+    assert_eq!(old_json["overlay"]["recording_notch"], false);
+    let chosen: UiConfig = toml::from_str(
+        "[overlay]\nrecording_notch=true\nanchor='bottom'\noffset_x=17.0\noffset_y=9.0\n",
+    )
+    .unwrap();
+    let decoded: UiConfig = toml::from_str(&toml::to_string(&chosen).unwrap()).unwrap();
+    let json = serde_json::to_value(decoded).unwrap();
+    assert_eq!(json["overlay"]["recording_notch"], true);
+    assert_eq!(json["overlay"]["anchor"], "bottom");
+    assert_eq!(json["overlay"]["offset_x"], 17.0);
+    assert_eq!(json["overlay"]["offset_y"], 9.0);
+    let schema: serde_json::Value =
+        serde_json::from_str(include_str!("../../../examples/ui.schema.json")).unwrap();
+    assert_eq!(
+        schema["properties"]["overlay"]["properties"]["recording_notch"]["default"],
+        false
+    );
+}
+
+#[test]
 fn appearance_is_an_independent_persisted_choice() {
     for content in ["current", "word", "meter", "hidden"] {
         let ui: UiConfig = toml::from_str(&format!(

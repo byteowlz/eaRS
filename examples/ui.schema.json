@@ -12,7 +12,8 @@
         "font": {"type":"string","enum":["system","departure_mono","jetbrains_mono"],"default":"system"},
         "word_width": {"type":"number","minimum":220,"maximum":440,"default":300},
         "word_size": {"type":"number","minimum":12,"maximum":24,"default":18},
-        "word_fade": {"type":"boolean","default":true}
+        "word_fade": {"type":"boolean","default":true},
+        "recording_notch": {"type":"boolean","default":false,"description":"macOS: recordable software notch on built-in and external displays. Presentation only; no recording/capture startup."}
       },
       "additionalProperties": true
     }

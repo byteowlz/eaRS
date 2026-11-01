@@ -19,6 +19,7 @@ mod parametric_mark;
 mod platform;
 mod presentation;
 mod preview_proof;
+mod recording_notch;
 mod runtime;
 mod settings;
 mod theme;
@@ -37,7 +38,7 @@ use runtime::Runtime;
 
 fn print_help() {
     println!(
-        "ears-ui {}\n\nUsage: ears-ui [--settings] [--no-overlay] [--oqtopus-check] [--preview-synthetic|--preview-synthetic-expanded|--preview-placement|--preview-click|--preview-settings|--preview-floating|--preview-oqtopus|--preview-oqtopus-reduced|--preview-parametric|--preview-parametric-reduced|--preview-parametric-override] [--help]\n\n  --settings           open the settings window at launch\n  --setup              configure without starting the engine until Apply\n  --build-info         read-only compiled capabilities JSON\n  --no-overlay         start with the floating island disabled\n  --preview-synthetic  display a synthetic notch fixture without starting dictation\n  --preview-synthetic-expanded  show the expanded synthetic fixture\n  --preview-placement  show a synthetic fixture at the actual screen anchor\n  --preview-click     show a clickable placement fixture without dictation\n  --preview-hit-test  show a centered clickable synthetic notch for native input tests\n  --preview-settings   show settings with synthetic state, without dictation\n  --preview-floating   show a synthetic bottom-anchored floating pill\n  --preview-word       synthetic fixed-width latest-word fixture (no dictation)\n  --preview-black / --preview-compact  synthetic skin/compact state\n  --preview-layout-report  synthetic numeric layout evidence, never text/pixels\n  --preview-settings-minimum / --preview-settings-light / --preview-settings-wide  synthetic layout variants\n  --preview-subtitle   add synthetic passive subtitles\n  --preview-cursor     add a synthetic pointer-anchored bubble\n  --preview-departure / --preview-jetbrains  synthetic overlay font choice\n  --overlay-config     print current overlay settings as JSON, no engine\n  --overlay-schema     print the ui.toml JSON schema, no engine\n  --oqtopus-check     validate the configured local vector pack without dictation\n  --preview-oqtopus   show the local Oqtopus pack without dictation\n  --preview-oqtopus-reduced   show its static reduced-motion rest frame\n  --preview-parametric-override  animate a synthetic icon despite reduced motion\n  --preview-parametric  show animated parametric bars in a synthetic notch\n  --preview-parametric-reduced  show the same fixture with reduced motion\n  --version            print the version\n\nConfig: {}",
+        "ears-ui {}\n\nUsage: ears-ui [--settings] [--no-overlay] [--oqtopus-check] [--preview-synthetic|--preview-synthetic-expanded|--preview-placement|--preview-click|--preview-settings|--preview-floating|--preview-oqtopus|--preview-oqtopus-reduced|--preview-parametric|--preview-parametric-reduced|--preview-parametric-override] [--help]\n\n  --settings           open the settings window at launch\n  --setup              configure without starting the engine until Apply\n  --build-info         read-only compiled capabilities JSON\n  --no-overlay         start with the floating island disabled\n  --preview-synthetic  display a synthetic notch fixture without starting dictation\n  --preview-synthetic-expanded  show the expanded synthetic fixture\n  --preview-placement  show a synthetic fixture at the actual screen anchor\n  --preview-click     show a clickable placement fixture without dictation\n  --preview-hit-test  show a centered clickable synthetic notch for native input tests\n  --preview-settings   show settings with synthetic state, without dictation\n  --preview-floating   show a synthetic bottom-anchored floating pill\n  --preview-word       synthetic fixed-width latest-word fixture (no dictation)\n  --preview-black / --preview-compact  synthetic skin/compact state\n  --preview-layout-report  synthetic numeric layout evidence, never text/pixels\n  --preview-settings-minimum / --preview-settings-light / --preview-settings-wide  synthetic layout variants\n  --preview-subtitle   add synthetic passive subtitles\n  --preview-cursor     add a synthetic pointer-anchored bubble\n  --preview-recording-notch / --preview-recording-notch-active  passive recording silhouette fixtures; no engine\n  --preview-departure / --preview-jetbrains  synthetic overlay font choice\n  --overlay-config     print current overlay settings as JSON, no engine\n  --overlay-schema     print the ui.toml JSON schema, no engine\n  --oqtopus-check     validate the configured local vector pack without dictation\n  --preview-oqtopus   show the local Oqtopus pack without dictation\n  --preview-oqtopus-reduced   show its static reduced-motion rest frame\n  --preview-parametric-override  animate a synthetic icon despite reduced motion\n  --preview-parametric  show animated parametric bars in a synthetic notch\n  --preview-parametric-reduced  show the same fixture with reduced motion\n  --version            print the version\n\nConfig: {}",
         env!("CARGO_PKG_VERSION"),
         UiConfig::path().display()
     );
@@ -57,6 +58,7 @@ struct PreviewOptions {
     font: config::OverlayFont,
     appearance: config::OverlayAppearance,
     compact: bool,
+    recording_notch: bool,
 }
 
 fn preview_ui(options: &PreviewOptions) -> UiConfig {
@@ -73,6 +75,7 @@ fn preview_ui(options: &PreviewOptions) -> UiConfig {
     ui.overlay.font = options.font;
     ui.overlay.appearance = options.appearance;
     ui.overlay.show_details = options.expanded;
+    ui.overlay.recording_notch = options.recording_notch;
     ui.overlay.animation = options.parametric || options.oqtopus;
     ui.overlay.click_through = !options.clickable;
     ui.overlay.island_mode = options.placement && !options.floating;
@@ -86,6 +89,10 @@ fn preview_ui(options: &PreviewOptions) -> UiConfig {
 /// Synthetic UI fixture: no engine, microphone, hotkeys, tray, or settings writes.
 fn preview_synthetic(options: PreviewOptions) {
     use ears::dictation::{ConnectionState, DictationState};
+    if options.recording_notch && !platform::passive_previews_supported() {
+        eprintln!("ears-ui: recording notch fixtures require macOS");
+        std::process::exit(2);
+    }
     let ui = preview_ui(&options);
     Application::new().run(move |cx| {
         platform::set_accessory_policy();
@@ -110,18 +117,31 @@ fn preview_synthetic(options: PreviewOptions) {
             }
         })
         .detach();
-        if options.placement || options.floating {
-            let overlay_config = model.read(cx).ui.overlay.clone();
-            overlay::open(cx, &overlay_config, model.clone());
-        } else {
-            overlay::open_preview(cx, model.clone());
-        }
+        open_synthetic_overlay(&options, model.clone(), cx);
         if options.transcript == config::TranscriptStyle::Word
             || options.preview != config::PreviewPlacement::Inline
         {
             animate_preview(model, cx);
         }
     });
+}
+
+fn open_synthetic_overlay(
+    options: &PreviewOptions,
+    model: gpui::Entity<AppModel>,
+    cx: &mut gpui::App,
+) {
+    let config = model.read(cx).ui.overlay.clone();
+    if options.recording_notch {
+        recording_notch::sync(&config, cx);
+        if !options.compact {
+            overlay::open(cx, &config, model);
+        }
+    } else if options.placement || options.floating {
+        overlay::open(cx, &config, model);
+    } else {
+        overlay::open_preview(cx, model);
+    }
 }
 
 /// Display-only sample clock for the explicitly synthetic native fixture.
@@ -274,7 +294,17 @@ fn maybe_preview(args: &[String]) -> bool {
             preview: presentation.preview,
             font: presentation.font,
             appearance: presentation.appearance,
-            compact: args.iter().any(|arg| arg == "--preview-compact"),
+            compact: args.iter().any(|arg| arg == "--preview-compact")
+                || (args.iter().any(|arg| arg == "--preview-recording-notch")
+                    && !args
+                        .iter()
+                        .any(|arg| arg == "--preview-recording-notch-active")),
+            recording_notch: args.iter().any(|arg| {
+                matches!(
+                    arg.as_str(),
+                    "--preview-recording-notch" | "--preview-recording-notch-active"
+                )
+            }),
         });
         return true;
     }
