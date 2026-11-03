@@ -132,15 +132,10 @@ pub fn sync(cx: &mut App) {
         return;
     }
 
-    recording_transition(
-        cx,
-        crate::recording_notch::enabled(&overlay, platform::passive_previews_supported()),
-        phase,
-    );
-    let want_visible = phase != Phase::Dormant
-        || (overlay.dormant_dot
-            && engine_running
-            && !crate::recording_notch::enabled(&overlay, platform::passive_previews_supported()));
+    let recording =
+        crate::recording_notch::enabled(&overlay, platform::passive_previews_supported());
+    let want_visible =
+        phase != Phase::Dormant || (overlay.dormant_dot && engine_running && !recording);
     let has_window = OverlayManager::get(cx).window.is_some();
 
     if want_visible {
@@ -179,18 +174,92 @@ pub fn sync(cx: &mut App) {
             OverlayManager::get(cx).window = None;
             return;
         }
-        // AppKit cannot restore alpha-based input after ignoresMouseEvents
-        // has been explicitly set. Recreate the popup when input mode changes.
-        let signature = window_configuration_signature(&overlay);
-        if OverlayManager::get(cx).applied_placement.as_ref() != Some(&signature) {
-            close(cx);
-            open(cx, &overlay, model.clone());
-        }
+        apply_input(cx, handle, &overlay, recording, phase, model);
     }
 }
 
+#[cfg(test)]
+#[path = "overlay_input_tests.rs"]
+mod input_tests;
+
+/// Bring the existing window's native input mode in line with this tick.
+fn apply_input(
+    cx: &mut App,
+    handle: WindowHandle<IslandView>,
+    overlay: &OverlayConfig,
+    recording: bool,
+    phase: Phase,
+    model: Entity<AppModel>,
+) {
+    let Some(mut applied) = OverlayManager::get(cx).applied_placement else {
+        return;
+    };
+    match reconcile_input(&mut applied, overlay, recording, phase) {
+        InputStep::Keep => {}
+        InputStep::MakePassive => {
+            let passive = handle
+                .update(cx, |_, window, _| platform::set_click_through(window, true))
+                .is_ok();
+            if passive {
+                OverlayManager::get(cx).applied_placement = Some(applied);
+            }
+        }
+        InputStep::Recreate => {
+            close(cx);
+            let config = OverlayConfig {
+                click_through: applied.click_through,
+                ..overlay.clone()
+            };
+            open(cx, &config, model);
+        }
+        InputStep::Close => close(cx),
+    }
+}
+
+/// What an existing island window needs this tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InputStep {
+    Keep,
+    /// AppKit can drop to full click-through in place.
+    MakePassive,
+    /// Alpha-based input cannot be restored once ignored, and placement or
+    /// presentation changes need a fresh popup.
+    Recreate,
+    Close,
+}
+
+/// Pure per-tick decision; `applied` is updated to the resulting window state.
+fn reconcile_input(
+    applied: &mut WindowConfiguration,
+    overlay: &OverlayConfig,
+    recording: bool,
+    phase: Phase,
+) -> InputStep {
+    if applied.recording_notch != recording {
+        return InputStep::Close;
+    }
+    // Effective input mode: a collapsed recording silhouette never eats clicks.
+    // Comparing against the saved preference instead recreated the window on
+    // every tick while paused (CPU load and input disruption).
+    let mut desired = window_configuration(overlay, recording);
+    desired.click_through |= recording && phase == Phase::Dormant;
+    if *applied == desired {
+        return InputStep::Keep;
+    }
+    let passive = WindowConfiguration {
+        click_through: true,
+        ..*applied
+    };
+    if !applied.click_through && passive == desired {
+        *applied = passive;
+        return InputStep::MakePassive;
+    }
+    *applied = desired;
+    InputStep::Recreate
+}
+
 /// Placement and native input mode both require a fresh popup.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct WindowConfiguration {
     anchor: OverlayAnchor,
     margin: f32,
@@ -204,6 +273,13 @@ struct WindowConfiguration {
 }
 
 fn window_configuration_signature(overlay: &OverlayConfig) -> WindowConfiguration {
+    window_configuration(
+        overlay,
+        crate::recording_notch::enabled(overlay, platform::passive_previews_supported()),
+    )
+}
+
+fn window_configuration(overlay: &OverlayConfig, recording: bool) -> WindowConfiguration {
     WindowConfiguration {
         anchor: overlay.anchor,
         margin: overlay.margin,
@@ -213,42 +289,7 @@ fn window_configuration_signature(overlay: &OverlayConfig) -> WindowConfiguratio
         click_through: overlay.click_through,
         transcript: overlay.transcript,
         appearance: overlay.appearance,
-        recording_notch: crate::recording_notch::enabled(
-            overlay,
-            platform::passive_previews_supported(),
-        ),
-    }
-}
-
-/// Keep the collapse morph, but never let its lingering camera body eat clicks.
-/// A quick resume recreates the popup, as required by GPUI's native input mask.
-fn recording_transition(cx: &mut App, recording: bool, phase: Phase) {
-    if OverlayManager::get(cx)
-        .applied_placement
-        .as_ref()
-        .is_some_and(|p| p.recording_notch != recording)
-    {
-        close(cx);
-        return;
-    }
-    if !recording || phase != Phase::Dormant {
-        return;
-    }
-    if OverlayManager::get(cx)
-        .applied_placement
-        .as_ref()
-        .is_none_or(|p| p.click_through)
-    {
-        return;
-    }
-    let Some((handle, _)) = OverlayManager::get(cx).window else {
-        return;
-    };
-    let changed = handle
-        .update(cx, |_, window, _| platform::set_click_through(window, true))
-        .is_ok();
-    if changed && let Some(applied) = OverlayManager::get(cx).applied_placement.as_mut() {
-        applied.click_through = true;
+        recording_notch: recording,
     }
 }
 
