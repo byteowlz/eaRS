@@ -111,21 +111,81 @@ pub fn default_input_device_name() -> Option<String> {
         .and_then(|device| device.name().ok())
 }
 
-pub fn list_audio_devices() -> Result<()> {
+/// Metadata only: enumeration never builds or plays a capture stream.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct InputDeviceInfo {
+    pub index: usize,
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct InputDevices {
+    pub default_name: Option<String>,
+    pub devices: Vec<InputDeviceInfo>,
+}
+
+pub fn input_devices() -> Result<InputDevices> {
     let host = cpal::default_host();
+    let devices = host
+        .input_devices()?
+        .enumerate()
+        .map(|(index, device)| InputDeviceInfo {
+            index,
+            name: device.name().ok(),
+        })
+        .collect();
+    Ok(InputDevices {
+        default_name: host.default_input_device().and_then(|d| d.name().ok()),
+        devices,
+    })
+}
+
+/// Resolve a pinned name afresh; never silently fall back or trust a stale index.
+fn named_input_index(names: &[Option<String>], wanted: &str) -> Result<usize> {
+    let mut matches = names
+        .iter()
+        .enumerate()
+        .filter(|(_, name)| name.as_deref() == Some(wanted));
+    let Some((index, _)) = matches.next() else {
+        bail!("Selected microphone is unavailable: {wanted}");
+    };
+    if matches.next().is_some() {
+        bail!(
+            "Selected microphone name is ambiguous: {wanted}; use System default or rename the devices"
+        );
+    }
+    Ok(index)
+}
+
+pub fn list_audio_devices() -> Result<()> {
     println!("Available input devices:");
-    for (i, device) in host.input_devices()?.enumerate() {
-        let name = device.name().unwrap_or("Unknown".to_string());
-        println!("  {}: {}", i, name);
+    for device in input_devices()?.devices {
+        println!(
+            "  {}: {}",
+            device.index,
+            device.name.as_deref().unwrap_or("Unknown")
+        );
     }
     Ok(())
 }
 
 pub fn start_audio_capture(audio_tx: Sender<Vec<f32>>, device_index: Option<usize>) -> Result<()> {
+    start_capture_with_selection(audio_tx, device_index, None)
+}
+
+pub fn start_audio_capture_named(audio_tx: Sender<Vec<f32>>, name: Option<&str>) -> Result<()> {
+    start_capture_with_selection(audio_tx, None, name)
+}
+
+fn start_capture_with_selection(
+    audio_tx: Sender<Vec<f32>>,
+    device_index: Option<usize>,
+    name: Option<&str>,
+) -> Result<()> {
     let max_retries = 3;
     let mut retry_count = 0;
     loop {
-        match start_audio_capture_internal(audio_tx.clone(), device_index) {
+        match start_audio_capture_internal(audio_tx.clone(), device_index, name) {
             Ok(()) => break,
             Err(e) => {
                 retry_count += 1;
@@ -173,9 +233,15 @@ where
 fn start_audio_capture_internal(
     audio_tx: Sender<Vec<f32>>,
     device_index: Option<usize>,
+    name: Option<&str>,
 ) -> Result<()> {
     let host = cpal::default_host();
-    let device = if let Some(index) = device_index {
+    let device = if let Some(name) = name {
+        let mut devices: Vec<_> = host.input_devices()?.collect();
+        let names: Vec<_> = devices.iter().map(|d| d.name().ok()).collect();
+        let index = named_input_index(&names, name)?;
+        devices.swap_remove(index)
+    } else if let Some(index) = device_index {
         host.input_devices()?
             .nth(index)
             .ok_or_else(|| anyhow::anyhow!("Device index {} not found", index))?
@@ -210,6 +276,45 @@ fn start_audio_capture_internal(
 mod tests {
     use super::*;
     use std::f64::consts::TAU;
+
+    #[test]
+    fn pinned_input_survives_reordering_and_rejects_missing_or_ambiguous_names() {
+        let names = |items: &[&str]| {
+            items
+                .iter()
+                .map(|s| Some((*s).to_string()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            named_input_index(
+                &names(&["Built-in microphone", "USB microphone"]),
+                "USB microphone"
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            named_input_index(
+                &names(&["USB microphone", "Built-in microphone"]),
+                "USB microphone"
+            )
+            .unwrap(),
+            0
+        );
+        assert!(named_input_index(&names(&["Built-in microphone"]), "USB microphone").is_err());
+        assert!(
+            named_input_index(
+                &names(&["USB microphone", "USB microphone"]),
+                "USB microphone"
+            )
+            .is_err()
+        );
+        assert_eq!(
+            named_input_index(&[None, Some("USB microphone".into())], "USB microphone").unwrap(),
+            1
+        );
+        assert!(named_input_index(&names(&["usb microphone"]), "USB microphone").is_err());
+    }
 
     fn converter(rate: u32, channels: u16) -> CaptureInput {
         CaptureInput::new(rate, channels, cpal::SampleFormat::F32).unwrap()

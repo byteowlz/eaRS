@@ -4,6 +4,7 @@
 //! immediately.
 
 mod auto_pause;
+mod microphone;
 mod navigation;
 mod transcription;
 
@@ -162,6 +163,7 @@ pub struct SettingsView {
     opacity: Entity<TextInput>,
     radius: Entity<TextInput>,
     speech_threshold: Entity<ProbabilitySlider>,
+    microphone: Entity<microphone::MicrophonePicker>,
     auto_pause_error: Option<String>,
     draft: Option<ProfileDraft>,
 }
@@ -286,6 +288,7 @@ impl SettingsView {
         })
         .detach();
 
+        let microphone = cx.new(|cx| microphone::MicrophonePicker::new(model.clone(), cx));
         let tab = model.read(cx).settings_tab;
         Self {
             model,
@@ -306,6 +309,7 @@ impl SettingsView {
             opacity,
             radius: radius_input,
             speech_threshold,
+            microphone,
             auto_pause_error: None,
             draft: None,
         }
@@ -679,7 +683,7 @@ impl SettingsView {
                 theme,
             ));
         }
-        pane = pane.child(backend);
+        pane = pane.child(backend).child(self.microphone.clone());
 
         // Dictation ---------------------------------------------------------
         let mut behaviour = section("Dictation", theme).child(row(

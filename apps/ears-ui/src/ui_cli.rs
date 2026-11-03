@@ -6,10 +6,13 @@ use crate::{
 use gpui::Application;
 const OPTIONS: &[&str] = &[
     "--build-info",
+    "--input-devices",
     "--settings",
     "--setup",
     "--no-overlay",
     "--preview-settings",
+    "--preview-settings-mic-empty",
+    "--preview-settings-mic-missing",
     "--preview-settings-minimum",
     "--preview-settings-light",
     "--preview-settings-wide",
@@ -63,6 +66,18 @@ pub fn handle(args: &[String]) -> bool {
             "{}",
             serde_json::to_string_pretty(&info).expect("static build information")
         );
+        return true;
+    }
+    if args.iter().any(|a| a == "--input-devices") {
+        match ears::audio::input_devices()
+            .and_then(|devices| Ok(serde_json::to_string_pretty(&devices)?))
+        {
+            Ok(json) => println!("{json}"),
+            Err(error) => {
+                eprintln!("ears-ui: cannot enumerate inputs: {error:#}");
+                std::process::exit(1);
+            }
+        }
         return true;
     }
     if args.iter().any(|a| a == "--overlay-config") {
@@ -155,6 +170,9 @@ mod tests {
     #[test]
     fn preview_modifiers_are_non_engine_options_and_unknown_flags_fail_closed() {
         for flag in [
+            "--input-devices",
+            "--preview-settings-mic-empty",
+            "--preview-settings-mic-missing",
             "--preview-recording-notch",
             "--preview-recording-notch-active",
             "--preview-departure",

@@ -138,6 +138,9 @@ impl Default for VoiceCommandsConfig {
 pub struct DictationConfig {
     pub enabled: bool,
     pub type_live_words: bool,
+    /// Exact unique input-device name; absent means the system default at startup.
+    #[serde(default)]
+    pub input_device: Option<String>,
     #[serde(default)]
     pub start_paused: bool,
     /// Capture-side silence timeout with acknowledged ASR finalization.
@@ -330,6 +333,7 @@ impl Default for DictationConfig {
         Self {
             enabled: false,
             type_live_words: true,
+            input_device: None,
             start_paused: false,
             auto_pause: Default::default(),
             codec: default_audio_codec(),
@@ -611,6 +615,25 @@ ref_audio = "~/.local/share/ears/ref_audio"
                 .unwrap()
                 .model_dir
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn input_device_default_and_named_preference_round_trip() {
+        let mut config = AppConfig::default();
+        assert!(config.dictation.input_device.is_none());
+        config.dictation.input_device = Some("USB microphone".into());
+        let serialized = toml::to_string(&config).unwrap();
+        let parsed: AppConfig = toml::from_str(&serialized).unwrap();
+        assert_eq!(
+            parsed.dictation.input_device.as_deref(),
+            Some("USB microphone")
+        );
+        let schema: serde_json::Value =
+            serde_json::from_str(include_str!("../examples/config.schema.json")).unwrap();
+        assert_eq!(
+            schema["properties"]["dictation"]["properties"]["input_device"]["type"],
+            serde_json::json!(["string", "null"])
         );
     }
 

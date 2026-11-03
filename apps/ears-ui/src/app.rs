@@ -94,6 +94,9 @@ pub struct AppModel {
     pub last_activity: Instant,
     /// Bumped whenever the settings window should refresh derived data.
     pub generation: u64,
+    /// A pending input-device preference never hot-swaps this application's capture.
+    pub(crate) input_at_start: Option<String>,
+    pub(crate) input_started: bool,
 }
 
 /// Global pointer to the single [`AppModel`] entity.
@@ -105,6 +108,8 @@ impl AppModel {
         let hotkey_mode = ui.dictation.hotkey_mode.unwrap_or(core.hotkeys.mode);
         let profiles = ProfilesConfig::load().unwrap_or_default();
         Self {
+            input_at_start: core.dictation.input_device.clone(),
+            input_started: false,
             insertion_mode: ui.dictation.insertion_mode,
             hotkey_mode,
             core,
@@ -137,6 +142,15 @@ impl AppModel {
             last_activity: Instant::now(),
             generation: 0,
         }
+    }
+
+    pub fn engine_config(&self) -> AppConfig {
+        let mut core = self.core.clone();
+        core.hotkeys.mode = self.hotkey_mode;
+        if self.input_started {
+            core.dictation.input_device = self.input_at_start.clone();
+        }
+        core
     }
 
     pub fn is_capturing(&self) -> bool {
@@ -474,5 +488,32 @@ impl AppModel {
 
     pub fn profile_names(&self) -> Vec<String> {
         self.profiles.names_by_priority()
+    }
+}
+
+#[cfg(test)]
+mod input_tests {
+    use super::*;
+    #[test]
+    fn saved_microphone_waits_for_process_restart_including_when_boot_used_default() {
+        let mut setup = AppModel::new(AppConfig::default(), UiConfig::default());
+        setup.core.dictation.input_device = Some("Setup microphone".into());
+        assert_eq!(
+            setup.engine_config().dictation.input_device.as_deref(),
+            Some("Setup microphone")
+        );
+        for initial in [None, Some("Built-in microphone".to_string())] {
+            let mut core = AppConfig::default();
+            core.dictation.input_device = initial.clone();
+            let mut model = AppModel::new(core, UiConfig::default());
+            model.input_started = true;
+            model.core.dictation.input_device = Some("USB microphone".into());
+            assert_eq!(model.engine_config().dictation.input_device, initial);
+            let restarted = AppModel::new(model.core.clone(), model.ui.clone());
+            assert_eq!(
+                restarted.engine_config().dictation.input_device.as_deref(),
+                Some("USB microphone")
+            );
+        }
     }
 }

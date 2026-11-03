@@ -299,10 +299,11 @@ pub(crate) async fn run(
         audio_tx
     };
     let audio_shared = shared.clone();
+    let input_device = config.dictation.input_device.clone();
     thread::Builder::new()
         .name("ears-audio".to_string())
         .spawn(move || {
-            if let Err(e) = audio::start_audio_capture(capture_tx, None) {
+            if let Err(e) = audio::start_audio_capture_named(capture_tx, input_device.as_deref()) {
                 eprintln!("Audio capture error: {}", e);
                 audio_shared.emit(DictationEvent::Error {
                     message: format!("microphone unavailable: {e}"),
@@ -329,7 +330,11 @@ pub(crate) async fn run(
 
     let history = match AudioHistory::from_config(
         &config.dictation.audio_history,
-        crate::audio::default_input_device_name(),
+        config
+            .dictation
+            .input_device
+            .clone()
+            .or_else(crate::audio::default_input_device_name),
         backend.alias.clone().or_else(|| Some(backend.url.clone())),
     ) {
         Ok(Some(mut history)) => {

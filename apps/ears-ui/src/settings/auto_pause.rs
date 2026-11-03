@@ -30,6 +30,10 @@ fn updated_document(original: &str, threshold: f32) -> Result<String> {
 }
 
 pub fn persist_threshold(path: &Path, threshold: f32) -> Result<()> {
+    persist_edit(path, |original| updated_document(original, threshold))
+}
+
+pub(super) fn persist_edit(path: &Path, edit: impl FnOnce(&str) -> Result<String>) -> Result<()> {
     // Follow an intentional dotfile symlink rather than replacing it.
     let resolved = if path.exists() {
         path.canonicalize()?
@@ -41,7 +45,7 @@ pub fn persist_threshold(path: &Path, threshold: f32) -> Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(e.into()),
     };
-    let updated = updated_document(&original, threshold)?;
+    let updated = edit(&original)?;
     let parent = resolved.parent().context("Config path has no parent")?;
     fs::create_dir_all(parent)?;
     let mut staged = tempfile::NamedTempFile::new_in(parent)?;
