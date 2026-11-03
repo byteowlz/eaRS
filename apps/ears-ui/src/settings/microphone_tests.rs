@@ -61,7 +61,7 @@ fn microphone_edit_preserves_other_preferences_and_default_removes_only_the_key(
 fn atomic_save_keeps_permissions_symlink_and_failed_edit_bytes() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
-    assert!(persist(&path, Some("USB microphone")).is_err());
+    assert!(persist_input_device(&path, Some("USB microphone")).is_err());
     assert!(!path.exists());
     std::fs::write(&path, "# keep\n[dictation]\nenabled=true\n").unwrap();
     #[cfg(unix)]
@@ -69,9 +69,9 @@ fn atomic_save_keeps_permissions_symlink_and_failed_edit_bytes() {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
     }
-    persist(&path, Some("USB microphone")).unwrap();
+    persist_input_device(&path, Some("USB microphone")).unwrap();
     let before = std::fs::read_to_string(&path).unwrap();
-    assert!(persist(&path, Some("")).is_err());
+    assert!(persist_input_device(&path, Some("")).is_err());
     assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
     #[cfg(unix)]
     {
@@ -82,7 +82,7 @@ fn atomic_save_keeps_permissions_symlink_and_failed_edit_bytes() {
         );
         let link = dir.path().join("linked.toml");
         std::os::unix::fs::symlink(&path, &link).unwrap();
-        persist(&link, None).unwrap();
+        persist_input_device(&link, None).unwrap();
         assert!(link.is_symlink());
         assert!(
             !std::fs::read_to_string(&path)

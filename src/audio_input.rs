@@ -15,10 +15,13 @@
 //! frame. Native 24 kHz bypasses both filtering and quantum buffering entirely.
 
 use crate::dictation::wake::Resampler;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use crossbeam_channel::Sender;
+use crossbeam_channel::{Sender, bounded};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
+use std::time::Duration;
 
 const CAPTURE_RATE: u32 = 24_000;
 const RESAMPLE_QUANTUM: usize = 16;
@@ -169,113 +172,269 @@ pub fn list_audio_devices() -> Result<()> {
     Ok(())
 }
 
+/// Legacy blocking API (CLI live mode): capture until the process exits.
 pub fn start_audio_capture(audio_tx: Sender<Vec<f32>>, device_index: Option<usize>) -> Result<()> {
-    start_capture_with_selection(audio_tx, device_index, None)
-}
-
-pub fn start_audio_capture_named(audio_tx: Sender<Vec<f32>>, name: Option<&str>) -> Result<()> {
-    start_capture_with_selection(audio_tx, None, name)
-}
-
-fn start_capture_with_selection(
-    audio_tx: Sender<Vec<f32>>,
-    device_index: Option<usize>,
-    name: Option<&str>,
-) -> Result<()> {
-    let max_retries = 3;
-    let mut retry_count = 0;
+    let selection = match device_index {
+        Some(index) => InputSelection::Index(index),
+        None => InputSelection::Default,
+    };
+    let on_error: ErrorHook = Arc::new(|message| {
+        eprintln!("Audio stream error: {message}");
+        std::process::exit(1);
+    });
+    let _capture = Capture::open_with_retry(audio_tx, selection, on_error, 3)?;
     loop {
-        match start_audio_capture_internal(audio_tx.clone(), device_index, name) {
-            Ok(()) => break,
-            Err(e) => {
-                retry_count += 1;
-                if retry_count >= max_retries {
-                    return Err(e);
+        thread::sleep(Duration::from_secs(3600));
+    }
+}
+
+/// Which input to open; resolved afresh at every open.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InputSelection {
+    Default,
+    Named(String),
+    Index(usize),
+}
+
+impl InputSelection {
+    pub fn from_name(name: Option<&str>) -> Self {
+        name.map_or(Self::Default, |name| Self::Named(name.to_owned()))
+    }
+}
+
+/// Called once when a running stream fails (e.g. the device was unplugged).
+pub type ErrorHook = Arc<dyn Fn(String) + Send + Sync>;
+
+/// One running input stream, owned by its own thread. Dropping it stops the
+/// stream and joins the thread; no capture outlives its owner.
+pub struct Capture {
+    device: String,
+    enabled: Arc<AtomicBool>,
+    stop: Sender<()>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl Capture {
+    /// Open and start a stream; returns once it is playing or has failed.
+    /// A disabled capture runs but discards audio until [`Capture::enable`].
+    pub fn open(
+        audio_tx: Sender<Vec<f32>>,
+        selection: InputSelection,
+        on_error: ErrorHook,
+        enabled: bool,
+    ) -> Result<Self> {
+        let enabled = Arc::new(AtomicBool::new(enabled));
+        let (ready_tx, ready_rx) = bounded::<Result<String>>(1);
+        let (stop_tx, stop_rx) = bounded::<()>(1);
+        let sink = Sink::new(audio_tx, enabled.clone(), stop_tx.clone());
+        let thread = thread::Builder::new()
+            .name("ears-audio".into())
+            .spawn(move || match play(&selection, sink, on_error) {
+                Ok((stream, device)) => {
+                    let _ = ready_tx.send(Ok(device));
+                    let _ = stop_rx.recv();
+                    drop(stream);
                 }
-                eprintln!(
-                    "Audio capture failed (attempt {}/{}): {}",
-                    retry_count, max_retries, e
-                );
-                eprintln!("Retrying audio capture in 1 second...");
-                thread::sleep(std::time::Duration::from_secs(1));
+                Err(error) => {
+                    let _ = ready_tx.send(Err(error));
+                }
+            })
+            .context("failed to spawn audio capture thread")?;
+        match ready_rx.recv() {
+            Ok(Ok(device)) => Ok(Self {
+                device,
+                enabled,
+                stop: stop_tx,
+                thread: Some(thread),
+            }),
+            Ok(Err(error)) => {
+                let _ = thread.join();
+                Err(error)
+            }
+            Err(_) => {
+                let _ = thread.join();
+                bail!("audio capture thread exited before the stream started")
             }
         }
     }
-    Ok(())
+
+    pub fn open_with_retry(
+        audio_tx: Sender<Vec<f32>>,
+        selection: InputSelection,
+        on_error: ErrorHook,
+        attempts: u32,
+    ) -> Result<Self> {
+        let mut attempt = 1;
+        loop {
+            match Self::open(audio_tx.clone(), selection.clone(), on_error.clone(), true) {
+                Ok(capture) => return Ok(capture),
+                Err(error) if attempt >= attempts => return Err(error),
+                Err(error) => {
+                    eprintln!("Audio capture failed (attempt {attempt}/{attempts}): {error}");
+                    eprintln!("Retrying audio capture in 1 second...");
+                    thread::sleep(Duration::from_secs(1));
+                    attempt += 1;
+                }
+            }
+        }
+    }
+
+    /// Name of the device actually opened.
+    pub fn device(&self) -> &str {
+        &self.device
+    }
+
+    pub fn enable(&self) {
+        self.enabled.store(true, Ordering::SeqCst);
+    }
+}
+
+impl Drop for Capture {
+    fn drop(&mut self) {
+        let _ = self.stop.try_send(());
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// Delivery side of the stream callback, separated for testing.
+struct Sink {
+    audio_tx: Sender<Vec<f32>>,
+    enabled: Arc<AtomicBool>,
+    stop: Sender<()>,
+    disconnected: bool,
+}
+
+impl Sink {
+    fn new(audio_tx: Sender<Vec<f32>>, enabled: Arc<AtomicBool>, stop: Sender<()>) -> Self {
+        Self {
+            audio_tx,
+            enabled,
+            stop,
+            disconnected: false,
+        }
+    }
+
+    /// Forward converted PCM. A vanished receiver stops the stream once
+    /// instead of logging on every buffer.
+    fn deliver(&mut self, pcm: Vec<f32>) {
+        if self.disconnected || pcm.is_empty() || !self.enabled.load(Ordering::SeqCst) {
+            return;
+        }
+        if self.audio_tx.send(pcm).is_err() {
+            self.disconnected = true;
+            let _ = self.stop.try_send(());
+        }
+    }
+}
+
+fn select_device(host: &cpal::Host, selection: &InputSelection) -> Result<cpal::Device> {
+    Ok(match selection {
+        InputSelection::Named(name) => {
+            let mut devices: Vec<_> = host.input_devices()?.collect();
+            let names: Vec<_> = devices.iter().map(|d| d.name().ok()).collect();
+            let index = named_input_index(&names, name)?;
+            devices.swap_remove(index)
+        }
+        InputSelection::Index(index) => host
+            .input_devices()?
+            .nth(*index)
+            .ok_or_else(|| anyhow::anyhow!("Device index {index} not found"))?,
+        InputSelection::Default => host
+            .default_input_device()
+            .ok_or_else(|| anyhow::anyhow!("No input device available"))?,
+    })
 }
 
 fn build_capture_stream<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
-    audio_tx: Sender<Vec<f32>>,
+    mut sink: Sink,
     mut input: CaptureInput,
+    on_error: ErrorHook,
 ) -> Result<cpal::Stream>
 where
     T: cpal::SizedSample,
     f32: cpal::FromSample<T>,
 {
+    let stop = sink.stop.clone();
+    let mut reported = false;
     Ok(device.build_input_stream(
         config,
-        move |data: &[T], _: &cpal::InputCallbackInfo| {
-            let pcm = input.push(data);
-            if !pcm.is_empty() && audio_tx.send(pcm).is_err() {
-                eprintln!("Audio receiver disconnected");
+        move |data: &[T], _: &cpal::InputCallbackInfo| sink.deliver(input.push(data)),
+        move |err| {
+            // A failed device stops this stream only; the owner decides what next.
+            if !reported {
+                reported = true;
+                on_error(err.to_string());
+                let _ = stop.try_send(());
             }
-        },
-        |err| {
-            eprintln!("Audio stream error: {}", err);
-            std::process::exit(1);
         },
         None,
     )?)
 }
 
-fn start_audio_capture_internal(
-    audio_tx: Sender<Vec<f32>>,
-    device_index: Option<usize>,
-    name: Option<&str>,
-) -> Result<()> {
+/// Runs on the capture thread: cpal streams must be dropped where they were built.
+fn play(
+    selection: &InputSelection,
+    sink: Sink,
+    on_error: ErrorHook,
+) -> Result<(cpal::Stream, String)> {
     let host = cpal::default_host();
-    let device = if let Some(name) = name {
-        let mut devices: Vec<_> = host.input_devices()?.collect();
-        let names: Vec<_> = devices.iter().map(|d| d.name().ok()).collect();
-        let index = named_input_index(&names, name)?;
-        devices.swap_remove(index)
-    } else if let Some(index) = device_index {
-        host.input_devices()?
-            .nth(index)
-            .ok_or_else(|| anyhow::anyhow!("Device index {} not found", index))?
-    } else {
-        host.default_input_device()
-            .ok_or_else(|| anyhow::anyhow!("No input device available"))?
-    };
+    let device = select_device(&host, selection)?;
+    let name = device.name().unwrap_or_else(|_| "Unknown".to_string());
     let config = device.default_input_config()?;
     let format = config.sample_format();
     let input = CaptureInput::new(config.sample_rate().0, config.channels(), format)?;
-    eprintln!(
-        "Using input device: {}",
-        device.name().unwrap_or("Unknown".to_string())
-    );
+    eprintln!("Using input device: {name}");
     eprintln!("Sample rate: {}", config.sample_rate().0);
     eprintln!("Sample format: {:?}", format);
     eprintln!("Channels: {}", config.channels());
     let config = config.into();
     let stream = match format {
-        cpal::SampleFormat::F32 => build_capture_stream::<f32>(&device, &config, audio_tx, input)?,
-        cpal::SampleFormat::I16 => build_capture_stream::<i16>(&device, &config, audio_tx, input)?,
-        cpal::SampleFormat::U16 => build_capture_stream::<u16>(&device, &config, audio_tx, input)?,
+        cpal::SampleFormat::F32 => {
+            build_capture_stream::<f32>(&device, &config, sink, input, on_error)?
+        }
+        cpal::SampleFormat::I16 => {
+            build_capture_stream::<i16>(&device, &config, sink, input, on_error)?
+        }
+        cpal::SampleFormat::U16 => {
+            build_capture_stream::<u16>(&device, &config, sink, input, on_error)?
+        }
         _ => bail!("Unsupported sample format: {format:?}"),
     };
     stream.play()?;
-    loop {
-        thread::sleep(std::time::Duration::from_millis(100));
-    }
+    Ok((stream, name))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::f64::consts::TAU;
+
+    #[test]
+    fn muted_sink_discards_and_a_vanished_receiver_stops_the_stream_once() {
+        let (audio_tx, audio_rx) = crossbeam_channel::unbounded();
+        let (stop_tx, stop_rx) = bounded(1);
+        let enabled = Arc::new(AtomicBool::new(false));
+        let mut sink = Sink::new(audio_tx, enabled.clone(), stop_tx);
+        sink.deliver(vec![0.1; 4]);
+        assert!(
+            audio_rx.try_recv().is_err(),
+            "muted stream must not be heard"
+        );
+        enabled.store(true, Ordering::SeqCst);
+        sink.deliver(vec![0.2; 4]);
+        assert_eq!(audio_rx.try_recv().unwrap(), vec![0.2; 4]);
+        drop(audio_rx);
+        for _ in 0..1000 {
+            sink.deliver(vec![0.3; 4]);
+        }
+        assert!(sink.disconnected);
+        assert!(stop_rx.try_recv().is_ok(), "stream asked to stop");
+        assert!(stop_rx.try_recv().is_err(), "stop requested exactly once");
+    }
 
     #[test]
     fn pinned_input_survives_reordering_and_rejects_missing_or_ambiguous_names() {

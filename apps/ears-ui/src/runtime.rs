@@ -101,7 +101,6 @@ pub fn start_engine(cx: &mut App) {
         Err(err) => eprintln!("ears-ui: could not stop running dictation: {err:#}"),
     }
 
-    let input_device = core.dictation.input_device.clone();
     match ears::dictation::spawn(core, options) {
         Ok(DictationSession {
             handle,
@@ -110,8 +109,6 @@ pub fn start_engine(cx: &mut App) {
         }) => {
             handle.set_hotkey_mode(hotkey_mode);
             model.update(cx, |m, cx| {
-                m.input_at_start = input_device;
-                m.input_started = true;
                 m.engine = Some(handle);
                 m.engine_stopped = false;
                 m.error = None;

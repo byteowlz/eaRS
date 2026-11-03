@@ -94,9 +94,11 @@ pub struct AppModel {
     pub last_activity: Instant,
     /// Bumped whenever the settings window should refresh derived data.
     pub generation: u64,
-    /// A pending input-device preference never hot-swaps this application's capture.
-    pub(crate) input_at_start: Option<String>,
-    pub(crate) input_started: bool,
+    /// Live microphone switch awaiting the engine's answer.
+    pub(crate) input_pending: Option<Option<String>>,
+    /// Device the engine reports as open.
+    pub(crate) input_active: Option<String>,
+    pub(crate) input_error: Option<String>,
 }
 
 /// Global pointer to the single [`AppModel`] entity.
@@ -108,8 +110,9 @@ impl AppModel {
         let hotkey_mode = ui.dictation.hotkey_mode.unwrap_or(core.hotkeys.mode);
         let profiles = ProfilesConfig::load().unwrap_or_default();
         Self {
-            input_at_start: core.dictation.input_device.clone(),
-            input_started: false,
+            input_pending: None,
+            input_active: None,
+            input_error: None,
             insertion_mode: ui.dictation.insertion_mode,
             hotkey_mode,
             core,
@@ -147,9 +150,6 @@ impl AppModel {
     pub fn engine_config(&self) -> AppConfig {
         let mut core = self.core.clone();
         core.hotkeys.mode = self.hotkey_mode;
-        if self.input_started {
-            core.dictation.input_device = self.input_at_start.clone();
-        }
         core
     }
 
@@ -358,6 +358,11 @@ impl AppModel {
                 self.set_error(kind, message);
                 self.touch();
             }
+            DictationEvent::InputDevice {
+                requested,
+                active,
+                error,
+            } => self.on_input_device(requested, active, error),
             DictationEvent::Stopped => {
                 self.engine_stopped = true;
                 self.state = DictationState::Inactive;
@@ -366,6 +371,46 @@ impl AppModel {
             }
         }
         cx.notify();
+    }
+
+    /// Engine report of the open microphone. A requested switch is saved only
+    /// once it succeeded; a failure keeps the previous input and preference.
+    pub(crate) fn on_input_device(
+        &mut self,
+        requested: Option<String>,
+        active: Option<String>,
+        error: Option<String>,
+    ) {
+        let answered = self.input_pending.as_ref() == Some(&requested);
+        if answered {
+            self.input_pending = None;
+        }
+        let label = |name: &Option<String>| name.clone().unwrap_or_else(|| "System default".into());
+        if let Some(error) = error {
+            self.input_error = Some(match &active {
+                Some(still) => format!(
+                    "Couldn't use {}: {error}. Still using {still}.",
+                    label(&requested)
+                ),
+                None => format!("Couldn't use {}: {error}", label(&requested)),
+            });
+            self.input_active = active;
+            return;
+        }
+        self.input_active = active;
+        self.input_error = None;
+        if answered && self.core.dictation.input_device != requested {
+            self.core.dictation.input_device = requested.clone();
+            if !self.configuration_is_preview {
+                let saved = ears::config::AppConfig::path().and_then(|path| {
+                    crate::settings::persist_input_device(&path, requested.as_deref())
+                });
+                if let Err(error) = saved {
+                    self.input_error =
+                        Some(format!("Switched, but couldn't save the choice: {error:#}"));
+                }
+            }
+        }
     }
 
     fn set_error(&mut self, kind: ErrorKind, message: String) {
@@ -498,26 +543,66 @@ impl AppModel {
 #[cfg(test)]
 mod input_tests {
     use super::*;
+
+    fn preview() -> AppModel {
+        let mut model = AppModel::new(AppConfig::default(), UiConfig::default());
+        model.configuration_is_preview = true; // never writes real preferences
+        model
+    }
+
     #[test]
-    fn saved_microphone_waits_for_process_restart_including_when_boot_used_default() {
-        let mut setup = AppModel::new(AppConfig::default(), UiConfig::default());
-        setup.core.dictation.input_device = Some("Setup microphone".into());
-        assert_eq!(
-            setup.engine_config().dictation.input_device.as_deref(),
-            Some("Setup microphone")
+    fn a_confirmed_switch_becomes_the_saved_choice() {
+        let mut model = preview();
+        model.input_pending = Some(Some("USB microphone".into()));
+        model.on_input_device(
+            Some("USB microphone".into()),
+            Some("USB microphone".into()),
+            None,
         );
-        for initial in [None, Some("Built-in microphone".to_string())] {
-            let mut core = AppConfig::default();
-            core.dictation.input_device = initial.clone();
-            let mut model = AppModel::new(core, UiConfig::default());
-            model.input_started = true;
-            model.core.dictation.input_device = Some("USB microphone".into());
-            assert_eq!(model.engine_config().dictation.input_device, initial);
-            let restarted = AppModel::new(model.core.clone(), model.ui.clone());
-            assert_eq!(
-                restarted.engine_config().dictation.input_device.as_deref(),
-                Some("USB microphone")
-            );
-        }
+        assert!(model.input_pending.is_none());
+        assert_eq!(
+            model.core.dictation.input_device.as_deref(),
+            Some("USB microphone")
+        );
+        assert_eq!(model.input_active.as_deref(), Some("USB microphone"));
+        assert!(model.input_error.is_none());
+        // The next engine start uses it; there is no restart pinning.
+        assert_eq!(
+            model.engine_config().dictation.input_device.as_deref(),
+            Some("USB microphone")
+        );
+    }
+
+    #[test]
+    fn a_failed_switch_keeps_the_previous_choice_and_says_so() {
+        let mut model = preview();
+        model.core.dictation.input_device = Some("Built-in microphone".into());
+        model.input_pending = Some(Some("Broken".into()));
+        model.on_input_device(
+            Some("Broken".into()),
+            Some("Built-in microphone".into()),
+            Some("device unavailable".into()),
+        );
+        assert!(model.input_pending.is_none());
+        assert_eq!(
+            model.core.dictation.input_device.as_deref(),
+            Some("Built-in microphone")
+        );
+        let error = model.input_error.unwrap();
+        assert!(error.contains("Broken") && error.contains("Still using Built-in microphone"));
+    }
+
+    #[test]
+    fn startup_reports_show_the_device_without_changing_preferences() {
+        let mut model = preview();
+        model.on_input_device(None, Some("MacBook Pro Microphone".into()), None);
+        assert_eq!(
+            model.input_active.as_deref(),
+            Some("MacBook Pro Microphone")
+        );
+        assert!(model.core.dictation.input_device.is_none());
+        model.on_input_device(Some("Gone".into()), None, Some("unavailable".into()));
+        assert!(model.input_error.unwrap().contains("Couldn't use Gone"));
+        assert!(model.core.dictation.input_device.is_none());
     }
 }

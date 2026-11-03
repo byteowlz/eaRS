@@ -110,7 +110,7 @@
       "properties": {
         "input_device": {
           "type": ["string", "null"],
-          "description": "Exact unique input microphone name. Omit for system default. Missing/duplicate names fail closed; GUI changes apply on full app relaunch."
+          "description": "Exact unique input microphone name. Omit for system default. Missing/duplicate names fail closed. Settings switches the running input live and saves only after the switch succeeds."
         },
         "enabled": {
           "type": "boolean",

@@ -46,10 +46,10 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::str::FromStr;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
 
@@ -224,6 +224,13 @@ pub enum DictationEvent {
     /// A wake detector reported a mapped phrase and dictation was started.
     /// Evidence only: the same effect as the toggle hotkey.
     Wake { phrase: String, score: f32 },
+    /// Microphone in use. `requested` is the saved choice (`None` = system
+    /// default); a failed switch carries `error` and the still-active input.
+    InputDevice {
+        requested: Option<String>,
+        active: Option<String>,
+        error: Option<String>,
+    },
     /// Non-fatal error worth showing to the user.
     Error { message: String },
     /// The engine loop exited.
@@ -253,6 +260,8 @@ pub enum DictationCommand {
     SetEscapeCancels(bool),
     /// Adjust auto-pause speech classification without restarting capture/drain.
     SetAutoPauseSpeechThreshold(f32),
+    /// Switch the microphone without restarting (`None` = system default).
+    SetInputDevice(Option<String>),
     /// Re-read dictionaries and profiles from disk immediately.
     Reload,
     /// Stop the engine.

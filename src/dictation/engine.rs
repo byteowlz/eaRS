@@ -25,7 +25,6 @@ use super::typing::TranscriptRecorder;
 use super::vlog;
 use super::voice_commands::{Registry, Route, Router, VoiceMode};
 use super::write_pid_file;
-use crate::audio;
 use crate::config::AppConfig;
 use crate::frontmost::frontmost_app;
 use crate::profiles::ContextProfile;
@@ -42,7 +41,6 @@ use serde_json::Value;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::Ordering;
-use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::mpsc;
@@ -215,6 +213,8 @@ struct Engine {
     ping_sent: Arc<Mutex<Option<Instant>>>,
     /// Opt-in utterance audio retention; `None` when disabled.
     history: Option<AudioHistory>,
+    /// The running microphone stream; dropped (stopped) with the engine.
+    input: Arc<input::InputSlot>,
 }
 
 pub(crate) async fn run(
@@ -298,19 +298,9 @@ pub(crate) async fn run(
     } else {
         audio_tx
     };
-    let audio_shared = shared.clone();
-    let input_device = config.dictation.input_device.clone();
-    thread::Builder::new()
-        .name("ears-audio".to_string())
-        .spawn(move || {
-            if let Err(e) = audio::start_audio_capture_named(capture_tx, input_device.as_deref()) {
-                eprintln!("Audio capture error: {}", e);
-                audio_shared.emit(DictationEvent::Error {
-                    message: format!("microphone unavailable: {e}"),
-                });
-            }
-        })
-        .context("failed to spawn audio capture thread")?;
+    // One replaceable microphone stream; Settings can switch it while running.
+    let input = Arc::new(input::InputSlot::for_capture(capture_tx, shared.clone()));
+    input.start(config.dictation.input_device.clone(), 3);
 
     vlog!("ears-dictation started");
     vlog!("Connecting to {}...", url);
@@ -383,6 +373,7 @@ pub(crate) async fn run(
         target_reader: frontmost_app,
         auto_pause,
         history,
+        input,
         router: {
             let mut router = Router::new(config.voice_commands.mode);
             router.set_stop_phrases(&config.dictation.wake.stop_phrases);
@@ -900,6 +891,36 @@ impl Engine {
         Ok(None)
     }
 
+    fn switch_input(&mut self, name: Option<String>) {
+        let wanted = name.as_deref().unwrap_or("system default").to_owned();
+        let event = match self
+            .input
+            .switch(crate::audio::InputSelection::from_name(name.as_deref()))
+        {
+            Ok(device) => {
+                eprintln!("input switch: {wanted} -> now using {device}");
+                if let Some(history) = self.history.as_mut() {
+                    history.set_device(Some(device.clone()));
+                }
+                self.config.dictation.input_device = name.clone();
+                DictationEvent::InputDevice {
+                    requested: name,
+                    active: Some(device),
+                    error: None,
+                }
+            }
+            Err(error) => {
+                eprintln!("input switch: {wanted} failed, keeping previous input: {error:#}");
+                DictationEvent::InputDevice {
+                    requested: name,
+                    active: self.input.device(),
+                    error: Some(format!("{error:#}")),
+                }
+            }
+        };
+        self.shared.emit(event);
+    }
+
     fn handle_command(&mut self, command: DictationCommand) -> Result<Flow> {
         let draining = self.auto_pause.draining();
         let resume = match &command {
@@ -989,6 +1010,11 @@ impl Engine {
                 }
                 // A sensitivity edit is not a capture edge: preserve the owned
                 // Final/ACK barrier, buffered PCM, generation and held-key state.
+                return Ok(Flow::Continue);
+            }
+            DictationCommand::SetInputDevice(name) => {
+                self.switch_input(name);
+                // A device change is not a capture edge: keep drain/generation state.
                 return Ok(Flow::Continue);
             }
             DictationCommand::Reload => {
@@ -1510,6 +1536,9 @@ mod finalization;
 #[path = "engine_capture.rs"]
 mod capture;
 
+#[path = "engine_input.rs"]
+pub(crate) mod input;
+
 #[cfg(all(test, feature = "client-vad"))]
 #[path = "engine_auto_pause_tests.rs"]
 mod auto_pause_tests;
@@ -1573,6 +1602,7 @@ mod tests {
             just_finished: false,
             ping_sent: Arc::new(Mutex::new(None)),
             history: None,
+            input: Arc::new(input::InputSlot::detached()),
             config,
             options: DictationOptions::default(),
             shared: shared.clone(),
@@ -1651,6 +1681,7 @@ mod tests {
             just_finished: false,
             ping_sent: Arc::new(Mutex::new(None)),
             history: None,
+            input: Arc::new(input::InputSlot::detached()),
             config,
             options: DictationOptions::default(),
             shared,
@@ -1821,6 +1852,7 @@ mod tests {
             just_finished: false,
             ping_sent: Arc::new(Mutex::new(None)),
             history,
+            input: Arc::new(input::InputSlot::detached()),
             config,
             options: DictationOptions::default(),
             shared,

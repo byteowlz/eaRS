@@ -5,6 +5,7 @@
 
 mod auto_pause;
 mod microphone;
+pub(crate) use microphone::persist_input_device;
 mod navigation;
 mod transcription;
 

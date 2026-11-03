@@ -6,6 +6,7 @@ use crate::{
 };
 use anyhow::{Result, ensure};
 use ears::audio::{InputDeviceInfo, InputDevices};
+use ears::dictation::DictationCommand;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Context, Entity, FocusHandle, InteractiveElement, IntoElement, KeyDownEvent, ParentElement,
@@ -41,7 +42,7 @@ fn updated_document(original: &str, name: Option<&str>) -> Result<String> {
     }
     Ok(document.to_string())
 }
-fn persist(path: &Path, name: Option<&str>) -> Result<()> {
+pub(crate) fn persist_input_device(path: &Path, name: Option<&str>) -> Result<()> {
     ensure!(
         path.exists(),
         "Configuration disappeared; reopen Settings before saving"
@@ -188,23 +189,37 @@ impl MicrophonePicker {
             return;
         };
         let name = choice.name.clone();
-        let preview = self.model.read(cx).configuration_is_preview;
-        if !preview {
-            let result =
-                ears::config::AppConfig::path().and_then(|path| persist(&path, name.as_deref()));
-            if result.is_err() {
-                self.error = Some(
-                    "Could not save microphone preference. Check config.toml access and try again."
-                        .into(),
-                );
+        let (preview, running) = {
+            let model = self.model.read(cx);
+            (model.configuration_is_preview, model.engine_running())
+        };
+        if running {
+            // Switch live; the engine's answer decides whether it is saved.
+            self.model.update(cx, |m, cx| {
+                m.input_pending = Some(name.clone());
+                m.input_error = None;
+                m.send(DictationCommand::SetInputDevice(name));
                 cx.notify();
-                return;
+            });
+        } else {
+            if !preview {
+                let result = ears::config::AppConfig::path()
+                    .and_then(|path| persist_input_device(&path, name.as_deref()));
+                if result.is_err() {
+                    self.error = Some(
+                        "Could not save microphone preference. Check config.toml access and try again."
+                            .into(),
+                    );
+                    cx.notify();
+                    return;
+                }
             }
+            self.model.update(cx, |m, cx| {
+                m.core.dictation.input_device = name;
+                m.input_error = None;
+                cx.notify();
+            });
         }
-        self.model.update(cx, |m, cx| {
-            m.core.dictation.input_device = name;
-            cx.notify();
-        });
         self.error = None;
         self.expanded = false;
         cx.notify();
@@ -238,9 +253,19 @@ impl Render for MicrophonePicker {
         let theme: Theme = theme(cx).clone();
         let saved = self.model.read(cx).core.dictation.input_device.clone();
         let preview = self.model.read(cx).configuration_is_preview;
-        let pending =
-            self.model.read(cx).input_started && saved != self.model.read(cx).input_at_start;
-        let selected = saved.as_deref().unwrap_or("System default").to_string();
+        let (pending, active, input_error, running) = {
+            let model = self.model.read(cx);
+            (
+                model.input_pending.clone(),
+                model.input_active.clone(),
+                model.input_error.clone(),
+                model.engine_running(),
+            )
+        };
+        let selected = pending
+            .clone()
+            .unwrap_or(saved.clone())
+            .unwrap_or_else(|| "System default".into());
         let focus_color = theme.roles.primary;
         let mut control = div()
             .id("microphone-picker")
@@ -357,18 +382,25 @@ impl Render for MicrophonePicker {
         if let Some(error) = &self.error {
             control = control.child(hint(error.clone(), &theme).text_color(theme.roles.danger));
         }
+        if let Some(error) = input_error {
+            control = control.child(hint(error, &theme).text_color(theme.roles.danger));
+        } else if pending.is_some() {
+            control = control.child(hint("Switching…", &theme));
+        } else if let (true, Some(active)) = (running, active) {
+            control = control.child(hint(format!("In use: {active}"), &theme));
+        }
         if preview {
             control = control.child(hint(
                 "Preview only; no device access or settings write.",
                 &theme,
             ));
-        } else if pending {
-            control = control.child(hint(
-                "Saved. Quit and reopen eaRS to use this microphone.",
-                &theme,
-            ));
         }
-        section("Input",&theme).child(row("Microphone",Some("Choose the input before starting. If capture has started, quit and reopen eaRS to apply changes. Refresh never records.".into()),control,&theme))
+        section("Input", &theme).child(row(
+            "Microphone",
+            Some("Switching applies immediately. Refresh never records.".into()),
+            control,
+            &theme,
+        ))
     }
 }
 

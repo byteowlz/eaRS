@@ -370,6 +370,11 @@ impl AudioHistory {
         self.engine = engine;
     }
 
+    /// Input device recorded for subsequent utterances.
+    pub fn set_device(&mut self, device: Option<String>) {
+        self.device = device;
+    }
+
     /// Listening started: a new capture session.
     pub fn begin_session(&mut self) {
         self.session_id = new_id();

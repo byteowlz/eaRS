@@ -56,7 +56,7 @@ listener_tokens = []
 # ears-auto does not use VAD timeout by default (runs indefinitely until manually stopped).
 
 [dictation]
-# input_device = "USB microphone" # omit for system default; exact unique name, next app launch
+# input_device = "USB microphone" # omit for system default; exact unique name; Settings switches live
 # Enable dictation mode (types transcribed text directly into any focused textbox)
 enabled = false
 # Type words immediately as they arrive (true) or only when final transcription is ready (false)

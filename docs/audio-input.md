@@ -47,13 +47,23 @@ Renamed, disconnected, unnamed or duplicate-name devices require reselection;
 there is no silent fallback to another input. This is a name-based preference,
 not an immutable hardware ID, and does not change the OS-wide default device.
 
-Before the first engine start (for example, during first-run setup), the saved
-selection is used for that start. Once an engine has started, quit and reopen the
-**entire eaRS UI** to apply another input. Internal engine restarts preserve the
-previous selection, including System default; that option still resolves the OS
-input at stream startup. Live device handoff is deliberately not claimed while
-`trx-ntjy` remains unresolved. Existing configuration files keep System default
-unless an input is explicitly selected.
+Switching is live. Picking an input while eaRS runs opens the new device muted
+while the old one keeps capturing, then stops and joins the old stream before the
+new one is heard, so dictation, the wake tee and recording never receive two
+devices interleaved. A brief device gap (milliseconds) is not filled. If the new
+device cannot be opened, the previous input keeps running and Settings says so.
+The preference is saved only after the engine confirms the switch; when eaRS is
+not running (e.g. first-run setup) the choice is saved for the next start. The
+engine reports the device actually open (`In use: …`). This is the same engine
+command for any front end: `DictationCommand::SetInputDevice(Option<String>)`,
+answered by `DictationEvent::InputDevice { requested, active, error }`.
+
+Each capture stream is owned by a stoppable `Capture` on its own thread: dropping
+it stops the stream, so engine restarts no longer leave old capture threads
+running. A stream that fails at runtime (device unplugged) reports an error
+instead of exiting the process; a vanished receiver stops its stream once instead
+of logging on every buffer (`trx-ntjy`). The legacy blocking CLI live mode keeps
+its exit-on-stream-error behaviour.
 
 The picker atomically edits only this key, retaining other values/comments,
 permissions and intentional config symlinks. Save errors/conflicts stay visible;
