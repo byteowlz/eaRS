@@ -14,6 +14,7 @@ use crate::config::IndicatorStyle;
 use crate::config::OverlayAnchor;
 use crate::config::OverlayConfig;
 use crate::config::ShapeMotion;
+use crate::config::UiConfig;
 use crate::runtime;
 use crate::theme::Theme;
 use crate::ui::ButtonKind;
@@ -25,7 +26,7 @@ use crate::ui::label;
 use crate::ui::row;
 use crate::ui::section;
 use crate::ui::segmented;
-use crate::ui::slider::{ProbabilitySlider, SliderCommit};
+use crate::ui::slider::{RangeSlider, SliderCommit, SliderSpec};
 use crate::ui::text_input::{TextInput, TextInputEvent, init};
 use crate::ui::toggle;
 use ears::config::DictationHotkeyMode;
@@ -158,11 +159,11 @@ pub struct SettingsView {
     test_output: String,
     dict_replacement: Entity<TextInput>,
     dict_phrases: Entity<TextInput>,
-    margin: Entity<TextInput>,
-    linger: Entity<TextInput>,
-    opacity: Entity<TextInput>,
-    radius: Entity<TextInput>,
-    speech_threshold: Entity<ProbabilitySlider>,
+    margin: Entity<RangeSlider>,
+    linger: Entity<RangeSlider>,
+    opacity: Entity<RangeSlider>,
+    radius: Entity<RangeSlider>,
+    speech_threshold: Entity<RangeSlider>,
     microphone: Entity<microphone::MicrophonePicker>,
     auto_pause_error: Option<String>,
     draft: Option<ProfileDraft>,
@@ -186,6 +187,56 @@ fn input(
         }
         field
     })
+}
+
+const RADIUS: SliderSpec = SliderSpec {
+    id: "radius-slider",
+    min: 0.0,
+    max: 32.0,
+    step: 1.0,
+    format: |v| format!("{v:.0} px"),
+};
+const OPACITY: SliderSpec = SliderSpec {
+    id: "opacity-slider",
+    min: 0.2,
+    max: 1.0,
+    step: 0.01,
+    format: |v| format!("{v:.2}"),
+};
+const MARGIN: SliderSpec = SliderSpec {
+    id: "margin-slider",
+    min: 0.0,
+    max: 200.0,
+    step: 1.0,
+    format: |v| format!("{v:.0} px"),
+};
+const LINGER: SliderSpec = SliderSpec {
+    id: "linger-slider",
+    min: 0.0,
+    max: 5000.0,
+    step: 50.0,
+    format: |v| format!("{v:.0} ms"),
+};
+
+/// A UI-config slider that persists once per gesture or key step.
+fn appearance_slider(
+    cx: &mut Context<SettingsView>,
+    spec: SliderSpec,
+    value: f32,
+    apply: fn(&mut UiConfig, f32),
+    refresh_theme: bool,
+) -> Entity<RangeSlider> {
+    let slider = cx.new(|cx| RangeSlider::new(spec, value, cx));
+    cx.subscribe(&slider, move |this, _, event: &SliderCommit, cx| {
+        let value = event.0;
+        this.model
+            .update(cx, |m, cx| m.update_ui(cx, |ui| apply(ui, value)));
+        if refresh_theme {
+            runtime::apply_theme(cx, None);
+        }
+    })
+    .detach();
+    slider
 }
 
 fn split_csv(text: &str) -> Vec<String> {
@@ -218,13 +269,32 @@ impl SettingsView {
         let test_input = input(cx, "Type a phrase containing a trigger…", "", false);
         let dict_replacement = input(cx, "Canonical text", "", false);
         let dict_phrases = input(cx, "Observed phrase(s), comma separated", "", false);
-        let margin = input(cx, "12", &format!("{}", overlay.margin), true);
-        let linger = input(cx, "900", &format!("{}", overlay.linger_ms), true);
-        let opacity = input(cx, "0.96", &format!("{:.2}", overlay.opacity), true);
-        let radius_input = input(cx, "8", &format!("{}", radius), true);
+        let margin = appearance_slider(
+            cx,
+            MARGIN,
+            overlay.margin,
+            |ui, v| ui.overlay.margin = v,
+            false,
+        );
+        let linger = appearance_slider(
+            cx,
+            LINGER,
+            overlay.linger_ms as f32,
+            |ui, v| ui.overlay.linger_ms = v.round() as u64,
+            false,
+        );
+        let opacity = appearance_slider(
+            cx,
+            OPACITY,
+            overlay.opacity,
+            |ui, v| ui.overlay.opacity = v,
+            false,
+        );
+        let radius_input = appearance_slider(cx, RADIUS, radius, |ui, v| ui.theme.radius = v, true);
 
         let threshold = model.read(cx).core.dictation.auto_pause.speech_threshold;
-        let speech_threshold = cx.new(|cx| ProbabilitySlider::new(threshold, cx));
+        let speech_threshold =
+            cx.new(|cx| RangeSlider::new(SliderSpec::PROBABILITY, threshold, cx));
         cx.subscribe(&speech_threshold, |this, _, event: &SliderCommit, cx| {
             this.commit_speech_threshold(event.0, cx);
         })
@@ -242,49 +312,6 @@ impl SettingsView {
             let text = this.test_input.read(cx).text().to_string();
             this.test_output = run_test(cx, &text);
             cx.notify();
-        })
-        .detach();
-
-        // Numeric overlay fields apply on every valid edit.
-        let numeric_model = model.clone();
-        cx.subscribe(&margin, move |this, _, _: &TextInputEvent, cx| {
-            let raw = this.margin.read(cx).text().to_string();
-            if let Ok(value) = raw.trim().parse::<f32>() {
-                numeric_model.update(cx, |m, cx| {
-                    m.update_ui(cx, |ui| ui.overlay.margin = value.clamp(0.0, 400.0));
-                });
-            }
-        })
-        .detach();
-        let numeric_model = model.clone();
-        cx.subscribe(&linger, move |this, _, _: &TextInputEvent, cx| {
-            let raw = this.linger.read(cx).text().to_string();
-            if let Ok(value) = raw.trim().parse::<u64>() {
-                numeric_model.update(cx, |m, cx| {
-                    m.update_ui(cx, |ui| ui.overlay.linger_ms = value.min(60_000));
-                });
-            }
-        })
-        .detach();
-        let numeric_model = model.clone();
-        cx.subscribe(&opacity, move |this, _, _: &TextInputEvent, cx| {
-            let raw = this.opacity.read(cx).text().to_string();
-            if let Ok(value) = raw.trim().parse::<f32>() {
-                numeric_model.update(cx, |m, cx| {
-                    m.update_ui(cx, |ui| ui.overlay.opacity = value.clamp(0.2, 1.0));
-                });
-            }
-        })
-        .detach();
-        let numeric_model = model.clone();
-        cx.subscribe(&radius_input, move |this, _, _: &TextInputEvent, cx| {
-            let raw = this.radius.read(cx).text().to_string();
-            if let Ok(value) = raw.trim().parse::<f32>() {
-                numeric_model.update(cx, |m, cx| {
-                    m.update_ui(cx, |ui| ui.theme.radius = value.clamp(0.0, 32.0));
-                });
-                runtime::apply_theme(cx, None);
-            }
         })
         .detach();
 
@@ -1066,26 +1093,26 @@ impl SettingsView {
                 ))
                 .child(row(
                     "Corner radius",
-                    Some("The radius dial in px; 0 is sharp everywhere.".into()),
-                    div().w(px(NUM_W)).child(self.radius.clone()),
+                    Some("0 is sharp everywhere.".into()),
+                    self.radius.clone(),
                     theme,
                 ))
                 .child(row(
                     "Opacity",
-                    Some("Pill opacity, 0.2 – 1.0.".into()),
-                    div().w(px(NUM_W)).child(self.opacity.clone()),
+                    Some("Pill opacity.".into()),
+                    self.opacity.clone(),
                     theme,
                 ))
                 .child(row(
                     "Margin",
-                    Some("Distance from the screen edge, px.".into()),
-                    div().w(px(NUM_W)).child(self.margin.clone()),
+                    Some("Distance from the screen edge.".into()),
+                    self.margin.clone(),
                     theme,
                 ))
                 .child(row(
                     "Linger",
-                    Some("How long the island stays after dictation, ms.".into()),
-                    div().w(px(NUM_W)).child(self.linger.clone()),
+                    Some("How long the island stays after dictation.".into()),
+                    self.linger.clone(),
                     theme,
                 )),
         );

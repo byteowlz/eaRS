@@ -473,6 +473,10 @@ impl AppModel {
     }
 
     pub fn save_ui(&self) {
+        // Synthetic preview fixtures never write real preferences.
+        if self.configuration_is_preview {
+            return;
+        }
         if let Err(err) = self.ui.save() {
             eprintln!("ears-ui: cannot save ui.toml: {err:#}");
         }

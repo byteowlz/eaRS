@@ -4,6 +4,13 @@ use gpui::KeyDownEvent;
 #[cfg(test)]
 use gpui::ScrollHandle;
 
+impl SettingsView {
+    /// Synthetic preview only: reveal the end of the current pane.
+    pub(crate) fn preview_scroll_to_bottom(&self) {
+        self.pane_scroll[self.tab.index()].scroll_to_bottom();
+    }
+}
+
 impl Tab {
     pub(super) fn index(self) -> usize {
         Self::ALL.iter().position(|tab| *tab == self).unwrap_or(0)

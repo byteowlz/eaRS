@@ -13,8 +13,16 @@ unselected six-page/sidebar study. The four existing destinations remain intact.
   entities are not reconstructed when changing tabs.
 - A single300px control column defines both edges of form fields and segmented
   groups, not just their right edge. Labels take the remaining width at minimum,
-  default and enlarged window sizes. Numeric inputs stay short at the column's
-  leading edge; switches remain compact at its trailing edge.
+  default and enlarged window sizes. Bounded values (speech threshold, corner
+  radius 0–32 px, opacity 0.20–1.00, margin 0–200 px, linger 0–5000 ms in 50 ms
+  steps) are full-column sliders with a visible value; remaining free-form
+  numeric inputs (profile priority/language) stay short at the column's leading
+  edge; switches remain compact at its trailing edge.
+- Sliders commit once per pointer gesture or key step (arrows step, Page Up/Down
+  ten steps, Home/End to the ends). A saved value outside a slider's range (e.g.
+  a hand-edited 12 s linger) is shown unchanged with the thumb pinned to the end
+  until the user moves it. Synthetic previews never persist preference changes;
+  `--preview-settings-appearance` opens the Overlay pane at Appearance.
 - Choice cells share equal grid tracks within each group. Short codes/numeric
   options stay in compact rows; longer/dense choices use bounded rows rather than
   stretching the form. Native pixel rounding may distribute1px across tracks.
