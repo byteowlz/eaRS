@@ -6,11 +6,12 @@
 //! stdin, JSON-line detections on stdout. Which model runs is entirely the command's
 //! business; eaRS learns the phrases from the `ready` line and maps them to actions.
 //!
-//! A detection is evidence that a phrase was probably spoken. The only action it can
-//! take here is what the toggle hotkey can already do: start capture.
+//! A detection is evidence that a phrase was probably spoken. The only actions it can
+//! take here are what the hotkeys can already do: start capture (toggle) or discard the
+//! pending words and pause (Escape).
 
-use anyhow::{anyhow, bail, Context, Result};
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use anyhow::{Context, Result, anyhow, bail};
+use crossbeam_channel::{Receiver, Sender, unbounded};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -26,6 +27,10 @@ const DETECTOR_RATE: usize = 16_000;
 pub enum WakeAction {
     /// Same as pressing the toggle hotkey while paused.
     StartDictation,
+    /// Same as Escape while capturing: discard the pending words and pause, so the stop
+    /// phrase itself is never typed. Binding one makes the detector also listen during
+    /// dictation; bind it only to a phrase that is hard to say by accident ("Jupp stop").
+    StopDictation,
     /// Recognised but deliberately unused (e.g. logged for evaluation).
     Ignore,
 }
@@ -57,6 +62,8 @@ pub struct WakeConfig {
     pub log: bool,
     /// Log path; empty = $XDG_STATE_HOME/ears/wake-log.jsonl.
     pub log_path: String,
+    /// Published head catalog for `ears wake catalog/install`; empty = the waqy HF repo.
+    pub catalog: String,
 }
 
 impl Default for WakeConfig {
@@ -76,6 +83,7 @@ impl Default for WakeConfig {
             speaker: super::wake_speaker::SpeakerConfig::default(),
             log: true,
             log_path: String::new(),
+            catalog: String::new(),
         }
     }
 }
@@ -83,6 +91,30 @@ impl Default for WakeConfig {
 impl WakeConfig {
     pub fn active(&self) -> bool {
         self.enabled && !self.command.is_empty()
+    }
+
+    /// Whether any phrase stops dictation, so the detector must also hear capture audio.
+    pub fn listens_while_capturing(&self) -> bool {
+        self.actions
+            .values()
+            .any(|a| *a == WakeAction::StopDictation)
+    }
+
+    /// What a detection does, given whether capture is running. Pure, so every case is
+    /// testable; the event thread only executes the step.
+    pub fn route(&self, phrase: &str, score: f32, capturing: bool) -> WakeStep {
+        match (self.decide(phrase, score), capturing) {
+            (Some(WakeAction::StartDictation), false) => WakeStep::Start,
+            (Some(WakeAction::StopDictation), true) => WakeStep::Stop,
+            (Some(WakeAction::StartDictation), true) => WakeStep::Outcome("already_capturing"),
+            (Some(WakeAction::StopDictation), false) => WakeStep::Outcome("not_capturing"),
+            (Some(WakeAction::Ignore), _) => WakeStep::Outcome("ignored"),
+            (None, _) => WakeStep::Outcome(match self.actions.get(phrase) {
+                Some(WakeAction::Ignore) => "ignored",
+                Some(_) => "below_min_score",
+                None => "unmapped",
+            }),
+        }
     }
 
     /// The action for a detection, if any.
@@ -95,6 +127,15 @@ impl WakeConfig {
             .copied()
             .filter(|a| *a != WakeAction::Ignore)
     }
+}
+
+/// One detection's effect (see [`WakeConfig::route`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WakeStep {
+    Start,
+    Stop,
+    /// Nothing happens; the string is the logged outcome.
+    Outcome(&'static str),
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -505,11 +546,9 @@ pub(crate) fn spawn_tee(
                 for message in messages {
                     match message {
                         WakeMessage::Detection(d) => {
-                            let outcome = if shared.is_capturing() {
-                                "already_capturing"
-                            } else {
-                                match config.decide(&d.phrase, d.score) {
-                                    Some(WakeAction::StartDictation) => {
+                            let outcome =
+                                match config.route(&d.phrase, d.score, shared.is_capturing()) {
+                                    WakeStep::Start => {
                                         *preroll.lock().unwrap() = Some(d.at_sample);
                                         shared.mark_wake_started();
                                         if shared.set_capturing(true) {
@@ -522,17 +561,14 @@ pub(crate) fn spawn_tee(
                                             "already_capturing"
                                         }
                                     }
-                                    _ if config.actions.get(&d.phrase)
-                                        == Some(&WakeAction::Ignore) =>
-                                    {
-                                        "ignored"
+                                    WakeStep::Stop => {
+                                        // Escape semantics: the pending words (the stop phrase) are
+                                        // discarded and capture pauses; the engine emits Cancelled.
+                                        shared.command(super::DictationCommand::Cancel);
+                                        "stopped"
                                     }
-                                    _ if config.actions.contains_key(&d.phrase) => {
-                                        "below_min_score"
-                                    }
-                                    _ => "unmapped",
-                                }
-                            };
+                                    WakeStep::Outcome(outcome) => outcome,
+                                };
                             eprintln!("wake: {} {:.2} -> {outcome}", d.phrase, d.score);
                             log.write("detection", &d, outcome);
                         }
@@ -558,6 +594,7 @@ pub(crate) fn spawn_tee(
     }
 
     let preroll_samples = config.preroll_ms as u64 * CAPTURE_RATE as u64 / 1000;
+    let listen_while_capturing = config.listens_while_capturing();
     let speaker_config = config.speaker.clone();
     let speaker_log_config = config.clone();
     std::thread::Builder::new()
@@ -601,6 +638,16 @@ pub(crate) fn spawn_tee(
                         ring.clear();
                     }
                     was_capturing = true;
+                    if listen_while_capturing {
+                        // A stop phrase must be heard during dictation too. Detector errors here
+                        // drop wake support but never interrupt dictation.
+                        if let Some(Err(err)) = client.as_mut().map(|d| d.push_capture(&chunk)) {
+                            shared.emit(super::DictationEvent::Error {
+                                message: format!("wake detector stopped: {err}"),
+                            });
+                            client = None;
+                        }
+                    }
                     if let Some(samples) = tap.push(&chunk) {
                         spawn_speaker_check(&speaker_config, &speaker_log_config, samples);
                     }
@@ -673,6 +720,41 @@ mod tests {
         .unwrap();
         assert!(config.active());
         assert_eq!(config.actions["hey_oqto"], WakeAction::StartDictation);
+    }
+
+    #[test]
+    fn stop_phrases_route_only_while_capturing_and_enable_listening() {
+        let config: WakeConfig = toml::from_str(
+            "enabled = true\ncommand = [\"waqy\"]\nmin_score = 0.6\n[actions]\nhey_jupp = \"start_dictation\"\njupp-stop = \"stop_dictation\"\noqto = \"ignore\"\n",
+        )
+        .unwrap();
+        assert!(config.listens_while_capturing());
+        assert_eq!(config.route("hey_jupp", 0.9, false), WakeStep::Start);
+        assert_eq!(
+            config.route("hey_jupp", 0.9, true),
+            WakeStep::Outcome("already_capturing")
+        );
+        assert_eq!(config.route("jupp-stop", 0.9, true), WakeStep::Stop);
+        assert_eq!(
+            config.route("jupp-stop", 0.9, false),
+            WakeStep::Outcome("not_capturing")
+        );
+        assert_eq!(
+            config.route("jupp-stop", 0.5, true),
+            WakeStep::Outcome("below_min_score")
+        );
+        assert_eq!(
+            config.route("oqto", 0.9, false),
+            WakeStep::Outcome("ignored")
+        );
+        assert_eq!(
+            config.route("hex", 0.9, false),
+            WakeStep::Outcome("unmapped")
+        );
+        // Without a stop binding nothing extra listens during dictation.
+        let start_only: WakeConfig =
+            toml::from_str("[actions]\nhey_oqto = \"start_dictation\"\n").unwrap();
+        assert!(!start_only.listens_while_capturing());
     }
 
     #[test]
@@ -901,11 +983,17 @@ mod tests {
         let two = "{\"type\":\"detection\",\"phrase\":\"hey_oqto\",\"score\":0.91,\"at_sample\":16000}\n{\"type\":\"detection\",\"phrase\":\"oqto\",\"score\":0.88,\"at_sample\":16160}";
         let (capturing, events, _) = run_tee(
             fake_detector(&dir, two),
-            &[("hey_oqto", WakeAction::StartDictation), ("oqto", WakeAction::StartDictation)],
+            &[
+                ("hey_oqto", WakeAction::StartDictation),
+                ("oqto", WakeAction::StartDictation),
+            ],
             500,
         );
         assert!(capturing);
-        let wakes: Vec<_> = events.iter().filter(|e| matches!(e, DictationEvent::Wake { .. })).collect();
+        let wakes: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, DictationEvent::Wake { .. }))
+            .collect();
         assert_eq!(wakes.len(), 1, "only the first detection acts: {wakes:?}");
         // and the state change is emitted once
         let listening: Vec<_> = events

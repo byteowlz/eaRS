@@ -59,6 +59,8 @@ ort = { version = "=2.0.0-rc.12", optional = true, default-features = false, fea
 serde = { version = "1.0.210", features = ["derive"] }
 serde_json = "1.0.115"
 toml = "0.9"
+# Edits config.toml in place for `ears wake bind`, keeping comments.
+toml_edit = "0.25"
 dirs = "6.0"
 time = { version = "0.3", features = ["formatting"] }
 tokio = { version = "1.0", features = ["full"] }
@@ -128,7 +130,9 @@ objc2-core-foundation = { version = "0.3", features = ["CFBase", "CFString"] }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading"] }
 
 [features]
-default = []
+default = ["wake-models"]
+# `ears wake catalog/install`: download published wake heads (verified by sha256).
+wake-models = ["dep:ureq"]
 cudnn = ["candle/cudnn", "candle-nn/cudnn"]
 hooks = []
 # Opt-in evidence adapter only; never loads models/profiles automatically.

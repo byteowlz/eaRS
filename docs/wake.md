@@ -1,21 +1,60 @@
 # Wake phrases
 
-Start dictation by saying a wake phrase instead of pressing the toggle hotkey.
-Off by default (`[dictation.wake]`, see `examples/config.toml`).
+Start dictation by saying a wake phrase instead of pressing the toggle hotkey, and stop it
+with a stop phrase instead of Escape. Off by default (`[dictation.wake]`, see
+`examples/config.toml`).
+
+## Install heads and bind them to actions
+
+```sh
+ears wake catalog                         # published heads (waqy Hugging Face catalog)
+ears wake install hey_jupp jupp-stop      # download, verify every sha256
+ears wake bind hey_jupp start-dictation
+ears wake bind jupp-stop stop-dictation
+ears wake list                            # installed heads, actions, what runs
+ears wake unbind hey_jupp                 # stays installed, stops running
+ears wake remove hey_jupp
+```
+
+- The catalog (`catalog.json`, schema `waqy-catalog/1`) lists every published release and
+  head with file, sha256 and size. `install` downloads the shared front end once and each
+  head as a content-addressed blob under `$XDG_DATA_HOME/ears/wake/`; a hash mismatch is
+  refused and nothing is recorded. `--release` pins a release; `--catalog` (or
+  `[dictation.wake].catalog`) points at another catalog URL or a local path.
+- Only heads bound to `start_dictation` or `stop_dictation` run. Binding rebuilds
+  `$XDG_DATA_HOME/ears/wake/active/`, a normal waqy release folder with exactly those heads,
+  and points `[dictation.wake].command` at it when the command is empty or already managed
+  there; a custom command is never replaced. config.toml keeps its comments.
+- How many heads: CPU is not the limit (measured on an M2 Ultra: 2 heads 4.9 ms, 24 heads
+  11.4 ms per 80 ms of audio, a shared front end plus ~0.3 ms per head). False triggers are:
+  every active head adds its own, so `list` and `bind` warn above 8 active heads. Bind only
+  what you use.
+- Changes apply when dictation restarts; `waqy` must be on PATH.
 
 ## How it works
 
 - eaRS remains the only microphone owner. While dictation is **paused**, the captured
   24 kHz audio is resampled to 16 kHz and streamed to a detector process. While
-  dictation is capturing, nothing is sent; the detector is reset when capture pauses.
+  dictation is capturing, audio goes to the detector only if some phrase is bound to
+  `stop_dictation`; the detector is reset when capture pauses.
 - The detector is any command speaking `wake-stream/1`:
   - stdin: binary frames `kind: u8`, `len: u32 LE`, payload. `A` = 16 kHz mono s16le
     audio, `P` = playback gate (1 byte), `R` = reset, `Q` = quit.
   - stdout: JSON lines. First `{"type":"ready","protocol":"wake-stream/1","sample_rate":16000,"phrases":[...]}`,
     then `{"type":"detection","phrase":"...","score":0.91,"at_sample":123456}` or
     `{"type":"error","message":"..."}`. stderr is free-form logging.
-- `actions` maps reported phrases to `start_dictation` or `ignore`. Unlisted phrases do
-  nothing. `min_score` adds an optional floor.
+- `actions` maps reported phrases to an action. Unlisted phrases do nothing; `min_score`
+  adds an optional floor.
+
+  | action | while paused | while capturing |
+  |---|---|---|
+  | `start_dictation` | start capture, like the toggle hotkey (pre-roll kept) | logged `already_capturing` |
+  | `stop_dictation` | logged `not_capturing` | discard the pending words and pause, like Escape, so the stop phrase is not typed |
+  | `ignore` | logged only (the head does not run when installed through `ears wake`) | same |
+
+  Bind `stop_dictation` only to phrases that are hard to say by accident ("Jupp stop!",
+  "Halt stop!"): the detector then hears all dictation. Transcript `stop_phrases` (below)
+  still work as a second path; listing the same phrase there covers a missed detection.
 - The reference detector is `waqy listen --manifest <release-dir>` from the
   [waqy](https://github.com/byteowlz/waqy) repository. A release directory (`manifest.json` with a sha256 per file) holds the
   shared front end and one classifier per phrase, so swapping models means pointing the

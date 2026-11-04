@@ -164,8 +164,12 @@ log = true                  # detections and near misses (no audio), $XDG_STATE_
 # min_ms = 3000              # shorter audio is not judged; the verdict is unknown
 # timeout_ms = 4000
 
+# catalog = ""              # published heads for `ears wake catalog/install` (default: waqy on Hugging Face)
+
+# Phrase -> action. `ears wake bind <head> <action>` edits this table and the command above.
 [dictation.wake.actions]
 hey_oqto = "start_dictation"
+# jupp-stop = "stop_dictation"   # discard pending words and pause (the detector then also hears dictation)
 # oqto = "ignore"           # recognised, deliberately unused
 
 # Dictation hooks require compiling with `--features hooks`

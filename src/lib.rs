@@ -14,6 +14,7 @@ pub mod profiles;
 pub mod replacement;
 pub mod speaker_gate;
 pub mod virtual_keyboard;
+pub mod wake_models;
 pub use kaudio;
 pub mod server;
 

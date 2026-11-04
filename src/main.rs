@@ -1,4 +1,5 @@
 mod speaker_probe_cli;
+mod wake_cli;
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -63,6 +64,9 @@ enum Commands {
     /// Manage context profiles (per-app dictionary, language, insertion mode).
     #[command(subcommand)]
     Profile(ProfileCommand),
+    /// Wake phrases: list published heads, install them, bind a phrase to an action.
+    #[command(subcommand)]
+    Wake(wake_cli::WakeCommand),
     /// List and download transcribe.cpp models.
     #[cfg(feature = "transcribe-cpp")]
     #[command(subcommand)]
@@ -463,6 +467,10 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Profile(profile_cmd)) => {
             handle_profile_command(profile_cmd)?;
+            return Ok(());
+        }
+        Some(Commands::Wake(wake_cmd)) => {
+            wake_cli::handle(wake_cmd)?;
             return Ok(());
         }
         #[cfg(feature = "transcribe-cpp")]
