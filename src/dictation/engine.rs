@@ -77,6 +77,9 @@ struct LocalPause {
     cancel_epoch: u64,
     paused_generation: u64,
     target: Option<crate::frontmost::FrontmostApp>,
+    /// Secure Input already protected the target when capture paused; the live
+    /// words were typed under it, so only a later change blocks the tail.
+    secure_at_pause: bool,
     expect_ack: bool,
     deferred: Vec<String>,
 }
@@ -183,6 +186,8 @@ impl AutoPauseSession {
 
 struct Engine {
     target_reader: fn() -> Option<crate::frontmost::FrontmostApp>,
+    /// Whether Secure Input protects the app with this pid.
+    secure_input_reader: fn(Option<u32>) -> bool,
     auto_pause: AutoPauseSession,
     config: AppConfig,
     options: DictationOptions,
@@ -371,6 +376,7 @@ pub(crate) async fn run(
     };
     let mut engine = Engine {
         target_reader: frontmost_app,
+        secure_input_reader: crate::frontmost::secure_input_protects,
         auto_pause,
         history,
         input,
@@ -1379,7 +1385,7 @@ impl Engine {
             app_bundle_id: app.as_ref().and_then(|a| a.bundle_id.clone()),
             app_binary: app.as_ref().and_then(|a| a.binary.clone()),
             app_name: app.as_ref().and_then(|a| a.name.clone()),
-            secure_input: crate::frontmost::secure_input_active(),
+            secure_input: crate::frontmost::secure_input_protects(app.as_ref().and_then(|a| a.pid)),
         };
         if history.client_vad_enabled() {
             if let Err(err) = history.record_recognition(&ctx) {
@@ -1508,7 +1514,7 @@ fn capture_context(language: Option<String>) -> CommitContext {
         app_bundle_id: app.as_ref().and_then(|app| app.bundle_id.clone()),
         app_binary: app.as_ref().and_then(|app| app.binary.clone()),
         app_name: app.as_ref().and_then(|app| app.name.clone()),
-        secure_input: crate::frontmost::secure_input_active(),
+        secure_input: crate::frontmost::secure_input_protects(app.as_ref().and_then(|app| app.pid)),
         ..CommitContext::default()
     }
 }
@@ -1581,6 +1587,7 @@ mod tests {
         router.set_stop_phrases(&config.dictation.wake.stop_phrases);
         let mut engine = Engine {
             target_reader: frontmost_app,
+            secure_input_reader: |_| false,
             replacement: ReplacementReloader::new(config.replacement.clone()),
             recorder: TranscriptRecorder::new(config.transcripts.clone()),
             buffer: LiveWordBuffer::new(Duration::from_millis(700)),
@@ -1660,6 +1667,7 @@ mod tests {
         *inserter.keyboard() = Box::new(recording);
         let mut engine = Engine {
             target_reader: frontmost_app,
+            secure_input_reader: |_| false,
             replacement: ReplacementReloader::new(config.replacement.clone()),
             recorder: TranscriptRecorder::new(config.transcripts.clone()),
             buffer: LiveWordBuffer::new(Duration::from_millis(700)),
@@ -1831,6 +1839,7 @@ mod tests {
         *inserter.keyboard() = Box::new(recording);
         let engine = Engine {
             target_reader: frontmost_app,
+            secure_input_reader: |_| false,
             replacement: ReplacementReloader::new(config.replacement.clone()),
             recorder: TranscriptRecorder::new(config.transcripts.clone()),
             buffer: LiveWordBuffer::new(Duration::from_millis(700)),

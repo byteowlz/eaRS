@@ -83,11 +83,20 @@ invented confirmation. A source build is not an installed/live-qualified deploym
   A mismatch is a visible failure. Original recognition remains unassigned to
   acoustic training clips, as described in `client-vad.md`.
 - Already-received words and final-only suffixes may finish the old insertion
-  session only while locally paused, with no newer capture, the same known
-  application/window snapshot and Secure Event Input off. Unknown/changed focus
-  or a newer generation defers text rather than typing into the new target.
-  Once deferred, later words stay deferred even if focus returns. This is not
-  authenticated identity or a caret/field-tracking guarantee.
+  session only while locally paused, with no newer capture and the same target:
+  same process, application and front window. The window is identified by a
+  stable number (macOS window number, X11/Sway/Hyprland window, Windows HWND),
+  never by title: terminals and editors animate their titles constantly, and the
+  earlier exact-snapshot comparison deferred the last word on nearly every pause.
+  Secure Event Input blocks the tail only if it began protecting the target
+  after the pause (focus moved to a password field). It is system-wide on macOS,
+  so a different regular app holding it in the background (observed: Microsoft
+  Word) is ignored, and protection already present at the pause (Ghostty enables
+  it on its own; the live words were typed into that same window) does not block
+  the tail. An unknown or helper-process holder stays protective. Unknown or
+  changed focus, or a newer generation, defers text rather than typing into the
+  new target. Once deferred, later words stay deferred even if focus returns.
+  This is not authenticated identity or a caret/field-tracking guarantee.
 - Deferred text is bounded private evidence, not an executable action. It emits
   `DeferredTranscript { capture_generation, text, confirmed }` with a visible
   nonfatal warning. The UI keeps the latest deferred result in memory separately

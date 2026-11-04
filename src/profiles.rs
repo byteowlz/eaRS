@@ -402,6 +402,7 @@ mod tests {
             binary: Some(binary.to_string()),
             window_title: Some(title.to_string()),
             pid: Some(1),
+            window_id: None,
         }
     }
 

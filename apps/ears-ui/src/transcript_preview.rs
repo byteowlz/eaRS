@@ -360,9 +360,6 @@ impl PreviewManager {
             return Err(self.block(generation, cx, PreviewStatus::DisplayUnavailable));
         };
         let display_id = u32::from(display.id());
-        if !synthetic && ears::frontmost::secure_input_active() {
-            return Err(self.block(generation, cx, PreviewStatus::SecureInput));
-        }
         let pid = if synthetic {
             Some(0)
         } else {
@@ -370,6 +367,10 @@ impl PreviewManager {
                 .and_then(|app| app.pid)
                 .filter(|pid| *pid > 0)
         };
+        // A background app holding Secure Input must not hide the preview everywhere.
+        if !synthetic && ears::frontmost::secure_input_protects(pid) {
+            return Err(self.block(generation, cx, PreviewStatus::SecureInput));
+        }
         let Some(pid) = pid else {
             return Err(self.block(generation, cx, PreviewStatus::UnknownOwner));
         };

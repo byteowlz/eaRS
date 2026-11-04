@@ -5,6 +5,7 @@ impl Engine {
     pub(super) fn begin_local_pause(&mut self, generation: u64, request_id: u64) -> Result<bool> {
         let cancel_epoch = self.shared.cancel_epoch.load(Ordering::SeqCst);
         let target = (self.target_reader)();
+        let secure_at_pause = (self.secure_input_reader)(target.as_ref().and_then(|t| t.pid));
         // Preserve the old wake-strip ownership before rearming the wake listener.
         if self.shared.take_wake_started() {
             self.router
@@ -20,6 +21,7 @@ impl Engine {
             cancel_epoch,
             paused_generation,
             target,
+            secure_at_pause,
             expect_ack: self.auto_pause.supported,
             deferred: Vec::new(),
         });
@@ -50,10 +52,15 @@ impl Engine {
         let Some(pause) = &self.auto_pause.local_pause else {
             return false;
         };
+        let Some(target) = pause.target.as_ref() else {
+            return false;
+        };
+        // Same app and front window; titles may animate. Secure Input blocks
+        // only if it began protecting the target after the pause (focus moved
+        // to a password field); the live words were already typed before.
         self.pending_generation_matches()
-            && pause.target.is_some()
-            && pause.target == (self.target_reader)()
-            && !crate::frontmost::secure_input_active()
+            && (self.target_reader)().is_some_and(|now| target.same_insertion_target(&now))
+            && (pause.secure_at_pause || !(self.secure_input_reader)(target.pid))
     }
 
     fn pending_insertion_allowed(&self) -> bool {

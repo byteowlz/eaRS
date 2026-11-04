@@ -445,3 +445,75 @@ fn deferred_words_stay_ordered_and_uninserted_even_if_focus_returns() {
     assert!(typed.lock().unwrap().is_empty());
     assert!(events.try_iter().any(|event| matches!(event, DictationEvent::DeferredTranscript { text, confirmed: true, .. } if text == "first second")));
 }
+
+/// Run one pause whose only tail word arrives in the final, as Parakeet does
+/// for the last spoken word; returns what was typed.
+fn tail_after_pause(engine: &mut Engine, typed: &Arc<Mutex<String>>) -> String {
+    let _writer = pending(engine, true);
+    engine
+        .handle_session_message(&serde_json::json!({"type":"final","text":"time"}))
+        .unwrap();
+    engine
+        .handle_session_message(&serde_json::json!({"type":"drained","request_id":1}))
+        .unwrap();
+    typed.lock().unwrap().clone()
+}
+
+#[test]
+fn last_word_is_typed_when_only_the_window_title_changed() {
+    static TICK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let (mut engine, typed) = auto_pause_engine();
+    // A terminal animating its title: same app and window, new title each read.
+    engine.target_reader = || {
+        let n = TICK.fetch_add(1, Ordering::SeqCst);
+        Some(crate::frontmost::FrontmostApp {
+            pid: Some(123),
+            window_id: Some(7),
+            window_title: Some(format!("✳ working {n}")),
+            ..Default::default()
+        })
+    };
+    assert_eq!(tail_after_pause(&mut engine, &typed), "time ");
+}
+
+#[test]
+fn a_different_window_of_the_same_app_still_defers_the_tail() {
+    static TICK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let (mut engine, typed) = auto_pause_engine();
+    engine.target_reader = || {
+        let window = 7 + TICK.fetch_add(1, Ordering::SeqCst) as u64;
+        Some(crate::frontmost::FrontmostApp {
+            pid: Some(123),
+            window_id: Some(window),
+            ..Default::default()
+        })
+    };
+    assert_eq!(tail_after_pause(&mut engine, &typed), "");
+}
+
+#[test]
+fn secure_input_held_by_a_background_app_does_not_swallow_the_tail() {
+    let (mut engine, typed) = auto_pause_engine();
+    // Word (another regular app) holds Secure Input; the target is unaffected.
+    engine.secure_input_reader =
+        |pid| crate::frontmost::secure_input_blocks(true, Some(783), pid, true);
+    assert_eq!(tail_after_pause(&mut engine, &typed), "time ");
+}
+
+#[test]
+fn secure_input_already_on_at_the_pause_does_not_swallow_the_tail() {
+    // Ghostty keeps Secure Input on while focused; the live words were typed
+    // into it, so the final word belongs there too.
+    let (mut engine, typed) = auto_pause_engine();
+    engine.secure_input_reader = |pid| crate::frontmost::secure_input_blocks(true, pid, pid, false);
+    assert_eq!(tail_after_pause(&mut engine, &typed), "time ");
+}
+
+#[test]
+fn secure_input_that_starts_after_the_pause_defers_the_tail() {
+    // Focus moved to a password field in the same window during the pause.
+    static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let (mut engine, typed) = auto_pause_engine();
+    engine.secure_input_reader = |_| CALLS.fetch_add(1, Ordering::SeqCst) > 0;
+    assert_eq!(tail_after_pause(&mut engine, &typed), "");
+}

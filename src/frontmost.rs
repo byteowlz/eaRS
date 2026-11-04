@@ -29,6 +29,11 @@ pub struct FrontmostApp {
     pub window_title: Option<String>,
     /// Process id of the frontmost application.
     pub pid: Option<u32>,
+    /// Stable identity of the front window (macOS window number, X11 window,
+    /// Windows HWND). Unlike the title it does not change while an app updates
+    /// its title, e.g. a terminal animating a status line.
+    #[serde(default)]
+    pub window_id: Option<u64>,
 }
 
 impl FrontmostApp {
@@ -39,6 +44,39 @@ impl FrontmostApp {
             .or_else(|| self.binary.clone())
             .or_else(|| self.bundle_id.clone())
             .unwrap_or_else(|| "unknown".to_string())
+    }
+
+    /// Whether text meant for `self` may still be typed into `current`: same
+    /// process and application, and the same front window when both sides know
+    /// it. Window titles are deliberately ignored; they change constantly.
+    pub fn same_insertion_target(&self, current: &FrontmostApp) -> bool {
+        self.pid.is_some()
+            && self.pid == current.pid
+            && self.bundle_id == current.bundle_id
+            && self.binary == current.binary
+            && match (self.window_id, current.window_id) {
+                (Some(before), Some(now)) => before == now,
+                _ => true,
+            }
+    }
+}
+
+/// Secure Event Input is system-wide: any app (even in the background) can hold
+/// it. It protects the app being typed into only when that app holds it.
+/// `holder_is_other_app` means the holder is a different, regular (Dock) app;
+/// an unknown holder or a helper process stays protective.
+pub(crate) fn secure_input_blocks(
+    enabled: bool,
+    holder: Option<u32>,
+    target: Option<u32>,
+    holder_is_other_app: bool,
+) -> bool {
+    if !enabled {
+        return false;
+    }
+    match (holder, target) {
+        (Some(holder), Some(target)) if holder != target => !holder_is_other_app,
+        _ => true,
     }
 }
 
@@ -61,8 +99,23 @@ pub fn frontmost_app_identity() -> Option<FrontmostApp> {
     }
 }
 
-/// Whether macOS Secure Event Input is active, i.e. a password field or
-/// credential prompt has keyboard focus. Always false on other platforms.
+/// Whether Secure Event Input protects the app with `pid` (password field or
+/// credential prompt focused there). A background app holding it, e.g. an
+/// office app that keeps it enabled, does not block every other app.
+pub fn secure_input_protects(pid: Option<u32>) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        platform::secure_input_protects(pid)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
+/// Whether macOS Secure Event Input is enabled by any process. Prefer
+/// [`secure_input_protects`] for decisions about one target app.
 pub fn secure_input_active() -> bool {
     #[cfg(target_os = "macos")]
     {
@@ -115,6 +168,92 @@ mod platform {
         unsafe { IsSecureEventInputEnabled() != 0 }
     }
 
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGSessionCopyCurrentDictionary() -> core_foundation::dictionary::CFDictionaryRef;
+    }
+
+    fn number(
+        dict: &core_foundation::dictionary::CFDictionary<
+            core_foundation::string::CFString,
+            core_foundation::base::CFType,
+        >,
+        key: &core_foundation::string::CFString,
+    ) -> Option<i64> {
+        dict.find(key)?
+            .downcast::<core_foundation::number::CFNumber>()?
+            .to_i64()
+    }
+
+    /// Process holding Secure Event Input, from the session dictionary.
+    fn secure_input_holder() -> Option<u32> {
+        use core_foundation::base::TCFType;
+        // SAFETY: Copy rule; wrapped once and released on drop.
+        let raw = unsafe { CGSessionCopyCurrentDictionary() };
+        if raw.is_null() {
+            return None;
+        }
+        let dict =
+            unsafe { core_foundation::dictionary::CFDictionary::wrap_under_create_rule(raw) };
+        let key =
+            core_foundation::string::CFString::from_static_string("kCGSSessionSecureInputPID");
+        number(&dict, &key)
+            .and_then(|pid| u32::try_from(pid).ok())
+            .filter(|pid| *pid > 0)
+    }
+
+    fn is_regular_app(pid: u32) -> bool {
+        use objc2_app_kit::{NSApplicationActivationPolicy, NSRunningApplication};
+        let Ok(pid) = libc::pid_t::try_from(pid) else {
+            return false;
+        };
+        NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+            .is_some_and(|app| app.activationPolicy() == NSApplicationActivationPolicy::Regular)
+    }
+
+    pub fn secure_input_protects(target: Option<u32>) -> bool {
+        if !secure_input_active() {
+            return false;
+        }
+        let holder = secure_input_holder();
+        let other_app = holder.is_some_and(|h| Some(h) != target && is_regular_app(h));
+        super::secure_input_blocks(true, holder, target, other_app)
+    }
+
+    /// Number of the front on-screen normal window of `pid` (no permission
+    /// needed; titles are not read).
+    fn front_window_number(pid: u32) -> Option<u64> {
+        use core_foundation::base::{CFType, TCFType};
+        use core_foundation::dictionary::CFDictionary;
+        use core_foundation::string::CFString;
+        use core_graphics::window::{
+            copy_window_info, kCGNullWindowID, kCGWindowLayer, kCGWindowListExcludeDesktopElements,
+            kCGWindowListOptionOnScreenOnly, kCGWindowNumber, kCGWindowOwnerPID,
+        };
+        let windows = copy_window_info(
+            kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+            kCGNullWindowID,
+        )?;
+        // SAFETY: the window-info keys are immutable CoreGraphics constants.
+        let (owner, layer, number_key) = unsafe {
+            (
+                CFString::wrap_under_get_rule(kCGWindowOwnerPID),
+                CFString::wrap_under_get_rule(kCGWindowLayer),
+                CFString::wrap_under_get_rule(kCGWindowNumber),
+            )
+        };
+        // Front-to-back order: the first normal-layer window is the front one.
+        windows.iter().find_map(|raw| {
+            // SAFETY: each element of the window list is a CFDictionary.
+            let dict: CFDictionary<CFString, CFType> =
+                unsafe { CFDictionary::wrap_under_get_rule(*raw as _) };
+            (number(&dict, &owner) == Some(i64::from(pid)) && number(&dict, &layer) == Some(0))
+                .then(|| number(&dict, &number_key))
+                .flatten()
+                .and_then(|n| u64::try_from(n).ok())
+        })
+    }
+
     pub fn frontmost_app() -> Option<FrontmostApp> {
         app_info(true)
     }
@@ -138,12 +277,14 @@ mod platform {
         } else {
             None
         };
+        let pid = u32::try_from(pid).ok();
         Some(FrontmostApp {
             bundle_id,
             name,
             binary,
             window_title,
-            pid: u32::try_from(pid).ok(),
+            window_id: pid.and_then(front_window_number),
+            pid,
         })
     }
 
@@ -231,12 +372,17 @@ mod platform {
             .get("pid")
             .and_then(|v| v.as_i64())
             .and_then(|p| u32::try_from(p).ok());
+        let window_id = json
+            .get("address")
+            .and_then(|v| v.as_str())
+            .and_then(|a| u64::from_str_radix(a.trim_start_matches("0x"), 16).ok());
         Some(FrontmostApp {
             bundle_id: None,
             name: class.clone(),
             binary: pid.and_then(comm_for_pid).or(class),
             window_title: title,
             pid,
+            window_id,
         })
     }
 
@@ -268,6 +414,7 @@ mod platform {
             binary: pid.and_then(comm_for_pid).or(app_id),
             window_title: title,
             pid,
+            window_id: node.get("id").and_then(|v| v.as_u64()),
         })
     }
 
@@ -304,6 +451,7 @@ mod platform {
             binary: pid.and_then(comm_for_pid).or(class),
             window_title: title,
             pid,
+            window_id: window.trim().parse().ok(),
         })
     }
 }
@@ -355,6 +503,7 @@ mod platform {
                 binary,
                 window_title,
                 pid: (pid != 0).then_some(pid),
+                window_id: Some(hwnd as usize as u64),
             })
         }
     }
@@ -366,5 +515,60 @@ mod platform {
 
     pub fn frontmost_app() -> Option<FrontmostApp> {
         None
+    }
+}
+
+#[cfg(test)]
+mod insertion_target_tests {
+    use super::*;
+
+    fn app(pid: u32, window: Option<u64>, title: &str) -> FrontmostApp {
+        FrontmostApp {
+            bundle_id: Some("com.example.term".into()),
+            binary: Some("term".into()),
+            pid: Some(pid),
+            window_id: window,
+            window_title: Some(title.into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn titles_never_decide_identity_but_process_and_window_do() {
+        assert!(app(1, Some(5), "a").same_insertion_target(&app(1, Some(5), "b")));
+        assert!(!app(1, Some(5), "a").same_insertion_target(&app(1, Some(6), "a")));
+        assert!(!app(1, Some(5), "a").same_insertion_target(&app(2, Some(5), "a")));
+        // Window identity unknown on one side: fall back to the same process.
+        assert!(app(1, None, "a").same_insertion_target(&app(1, Some(5), "b")));
+        let unknown = FrontmostApp::default();
+        assert!(
+            !unknown.same_insertion_target(&unknown),
+            "no pid, no target"
+        );
+    }
+
+    #[test]
+    fn secure_input_blocks_only_its_own_or_an_unknown_holder() {
+        assert!(!secure_input_blocks(false, Some(9), Some(1), false));
+        assert!(
+            !secure_input_blocks(true, Some(9), Some(1), true),
+            "background app"
+        );
+        assert!(
+            secure_input_blocks(true, Some(1), Some(1), false),
+            "target holds it"
+        );
+        assert!(
+            secure_input_blocks(true, Some(9), Some(1), false),
+            "helper process"
+        );
+        assert!(
+            secure_input_blocks(true, None, Some(1), true),
+            "holder unknown"
+        );
+        assert!(
+            secure_input_blocks(true, Some(9), None, true),
+            "target unknown"
+        );
     }
 }
