@@ -262,7 +262,6 @@ fn ensure_onnx_runtime() -> Result<(PathBuf, String)> {
     Ok((path, version))
 }
 
-#[derive(Debug, Clone)]
 /// ONNX Runtime provider selection for the parakeet engine.
 ///
 /// `None` keeps parakeet-rs's default (CPU). CUDA is requested only when this binary was
@@ -281,6 +280,7 @@ fn parakeet_execution_config(_force_cpu: bool) -> Option<parakeet_rs::ExecutionC
     None
 }
 
+#[derive(Debug, Clone)]
 pub struct ParakeetRsEngineConfig {
     pub model_dir: PathBuf,
     /// Target language for the multilingual variant (e.g. "de", "auto").
