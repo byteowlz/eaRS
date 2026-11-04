@@ -130,7 +130,17 @@ async function main() {
   await mkdir(stage); await cp(built.app, join(stage, "eaRS.app"), { recursive: true });
   await symlink("/Applications", join(stage, "Applications"));
   const dmg = join(built.output, `eaRS-${built.version}-${built.revision.slice(0, 8)}-macos-arm64.dmg`);
-  await run("hdiutil", ["create", "-volname", "eaRS", "-srcfolder", stage, "-format", "UDZO", dmg]);
+  // hdiutil intermittently reports "Resource busy"; retry only that, a bounded number of times.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await run("hdiutil", ["create", "-volname", "eaRS", "-srcfolder", stage, "-format", "UDZO", dmg]);
+      break;
+    } catch (error) {
+      if (attempt >= 4 || !String(error).includes("Resource busy")) throw error;
+      console.error(`hdiutil busy (attempt ${attempt}/4); retrying`);
+      await Bun.sleep(3000 * attempt);
+    }
+  }
   await run("codesign", ["--sign", signer, "--timestamp", dmg]);
   await notarize(dmg, profile, join(built.output, "dmg-notary.json"));
   await run("xcrun", ["stapler", "staple", dmg]);
