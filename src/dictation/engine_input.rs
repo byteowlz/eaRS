@@ -3,9 +3,15 @@
 //! A switch opens the new input muted while the old one keeps running, then
 //! stops the old stream before unmuting the new one, so the downstream PCM
 //! never interleaves two devices. A failed open leaves the old input untouched.
+//!
+//! A supervisor keeps the chosen input alive: a stream that dies (device
+//! unplugged) is dropped and the *same* selection is reopened once it is back;
+//! a named microphone never silently becomes another device. With System
+//! default selected, a change of the OS default input is followed.
 use crate::audio::{Capture, ErrorHook, InputSelection};
 use anyhow::{Result, anyhow};
-use std::sync::{Arc, Mutex, TryLockError};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError, Weak};
 use std::thread;
 use std::time::Duration;
 
@@ -14,6 +20,8 @@ use crate::dictation::{DictationEvent, Shared};
 pub(crate) trait InputStream: Send {
     fn device(&self) -> &str;
     fn enable(&self);
+    /// The stream stopped because of a device error.
+    fn failed(&self) -> bool;
 }
 
 impl InputStream for Capture {
@@ -23,26 +31,53 @@ impl InputStream for Capture {
     fn enable(&self) {
         Capture::enable(self)
     }
+    fn failed(&self) -> bool {
+        Capture::failed(self)
+    }
 }
 
 /// Opens one stream for a selection; `enabled` controls whether audio flows yet.
 pub(crate) type Opener =
     Box<dyn Fn(InputSelection, bool) -> Result<Box<dyn InputStream>> + Send + Sync>;
 type Emit = Box<dyn Fn(DictationEvent) + Send + Sync>;
+/// Name of the OS default input right now (metadata only, no stream).
+type DefaultName = Box<dyn Fn() -> Option<String> + Send + Sync>;
+
+/// Shown while waiting for a lost microphone to return.
+pub(crate) const RECONNECTING: &str = "reconnecting automatically when it is available";
 
 pub(crate) struct InputSlot {
     open: Opener,
     emit: Emit,
+    default_name: DefaultName,
     current: Mutex<Option<Box<dyn InputStream>>>,
+    selection: Mutex<InputSelection>,
+    /// The loss was reported; avoids repeating it every supervisor tick.
+    lost_reported: AtomicBool,
     retry_delay: Duration,
 }
 
+fn requested(selection: &InputSelection) -> Option<String> {
+    match selection {
+        InputSelection::Named(name) => Some(name.clone()),
+        _ => None,
+    }
+}
+
 impl InputSlot {
-    pub(crate) fn new(open: Opener, emit: Emit, retry_delay: Duration) -> Self {
+    pub(crate) fn new(
+        open: Opener,
+        emit: Emit,
+        default_name: DefaultName,
+        retry_delay: Duration,
+    ) -> Self {
         Self {
             open,
             emit,
+            default_name,
             current: Mutex::new(None),
+            selection: Mutex::new(InputSelection::Default),
+            lost_reported: AtomicBool::new(false),
             retry_delay,
         }
     }
@@ -53,6 +88,7 @@ impl InputSlot {
         Self::new(
             Box::new(|_, _| Err(anyhow!("no audio in tests"))),
             Box::new(|_| {}),
+            Box::new(|| None),
             Duration::ZERO,
         )
     }
@@ -62,12 +98,9 @@ impl InputSlot {
         audio_tx: crossbeam_channel::Sender<Vec<f32>>,
         shared: Arc<Shared>,
     ) -> Self {
-        let failure = shared.clone();
         let on_error: ErrorHook = Arc::new(move |message| {
+            // The supervisor notices the failed stream and reports/reconnects.
             eprintln!("Audio stream error: {message}");
-            failure.emit(DictationEvent::Error {
-                message: format!("microphone stopped: {message}"),
-            });
         });
         Self::new(
             Box::new(move |selection, enabled| {
@@ -76,16 +109,42 @@ impl InputSlot {
                 Ok(Box::new(capture) as Box<dyn InputStream>)
             }),
             Box::new(move |event| shared.emit(event)),
+            Box::new(crate::audio::default_input_device_name),
             Duration::from_secs(1),
         )
     }
 
-    /// Open the configured input in the background, retrying transient failures.
+    fn selection(&self) -> InputSelection {
+        self.selection
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    fn try_current(&self) -> Result<MutexGuard<'_, Option<Box<dyn InputStream>>>> {
+        match self.current.try_lock() {
+            Ok(current) => Ok(current),
+            Err(TryLockError::WouldBlock) => {
+                Err(anyhow!("the microphone is busy starting; try again"))
+            }
+            Err(TryLockError::Poisoned(p)) => Ok(p.into_inner()),
+        }
+    }
+
+    /// Open the configured input in the background, retrying transient
+    /// failures, then keep it alive with the supervisor.
     pub(crate) fn start(self: &Arc<Self>, requested: Option<String>, attempts: u32) {
         let slot = self.clone();
         let spawned = thread::Builder::new()
             .name("ears-audio-start".into())
-            .spawn(move || slot.start_now(requested, attempts));
+            .spawn(move || {
+                slot.start_now(requested, attempts);
+                // Only a weak reference loops, so stopping the engine releases
+                // the slot and with it the microphone.
+                let weak = Arc::downgrade(&slot);
+                drop(slot);
+                Self::supervise_forever(weak, Duration::from_secs(1));
+            });
         if let Err(error) = spawned {
             (self.emit)(DictationEvent::Error {
                 message: format!("microphone unavailable: {error}"),
@@ -93,9 +152,21 @@ impl InputSlot {
         }
     }
 
+    /// Supervise until the slot (and with it the engine) is gone.
+    fn supervise_forever(slot: Weak<Self>, interval: Duration) {
+        loop {
+            thread::sleep(interval);
+            let Some(slot) = slot.upgrade() else {
+                return;
+            };
+            slot.supervise();
+        }
+    }
+
     pub(crate) fn start_now(&self, requested: Option<String>, attempts: u32) {
         let mut current = self.current.lock().unwrap_or_else(|p| p.into_inner());
         let selection = InputSelection::from_name(requested.as_deref());
+        *self.selection.lock().unwrap_or_else(|p| p.into_inner()) = selection.clone();
         let mut attempt = 1;
         let result = loop {
             match (self.open)(selection.clone(), true) {
@@ -119,14 +190,13 @@ impl InputSlot {
                 });
             }
             Err(error) => {
+                // The supervisor keeps trying; report the wait once.
                 eprintln!("Audio capture error: {error}");
-                (self.emit)(DictationEvent::Error {
-                    message: format!("microphone unavailable: {error}"),
-                });
+                self.lost_reported.store(true, Ordering::SeqCst);
                 (self.emit)(DictationEvent::InputDevice {
                     requested,
                     active: None,
-                    error: Some(format!("{error:#}")),
+                    error: Some(format!("unavailable ({error:#}); {RECONNECTING}")),
                 });
             }
         }
@@ -134,24 +204,86 @@ impl InputSlot {
 
     /// Replace the running input. On failure the previous input keeps running.
     pub(crate) fn switch(&self, selection: InputSelection) -> Result<String> {
-        let mut current = match self.current.try_lock() {
-            Ok(current) => current,
-            Err(TryLockError::WouldBlock) => {
-                return Err(anyhow!("the microphone is still starting; try again"));
-            }
-            Err(TryLockError::Poisoned(p)) => p.into_inner(),
-        };
-        let next = (self.open)(selection, current.is_none())?;
+        let mut current = self.try_current()?;
+        let next = (self.open)(selection.clone(), current.is_none())?;
         let device = next.device().to_owned();
         // Stop (and join) the old stream before the new one is heard.
         drop(current.replace(next));
         if let Some(stream) = current.as_ref() {
             stream.enable();
         }
+        *self.selection.lock().unwrap_or_else(|p| p.into_inner()) = selection;
+        self.lost_reported.store(false, Ordering::SeqCst);
         Ok(device)
     }
 
-    /// Device currently open; `None` while starting or after a failed start.
+    /// One supervisor step: drop a dead stream, reopen the chosen input when it
+    /// is available, and follow the OS default when that is the selection.
+    /// Never blocks a concurrent switch or startup: skips the tick instead.
+    pub(crate) fn supervise(&self) {
+        let Ok(mut current) = self.try_current() else {
+            return;
+        };
+        let selection = self.selection();
+        if current.as_ref().is_some_and(|stream| stream.failed()) {
+            let lost = current.take().map(|s| s.device().to_owned());
+            eprintln!(
+                "input: {} disconnected; waiting for it",
+                lost.as_deref().unwrap_or("microphone")
+            );
+        }
+        match current.as_ref() {
+            None => self.reconnect(&mut current, selection),
+            Some(stream) if selection == InputSelection::Default => {
+                let Some(default) = (self.default_name)() else {
+                    return;
+                };
+                if stream.device() == default {
+                    return;
+                }
+                // Follow the new OS default; on failure keep the old input.
+                if let Ok(next) = (self.open)(InputSelection::Default, false) {
+                    let device = next.device().to_owned();
+                    drop(current.replace(next));
+                    if let Some(stream) = current.as_ref() {
+                        stream.enable();
+                    }
+                    eprintln!("input: system default changed; now using {device}");
+                    (self.emit)(DictationEvent::InputDevice {
+                        requested: None,
+                        active: Some(device),
+                        error: None,
+                    });
+                }
+            }
+            Some(_) => {}
+        }
+    }
+
+    fn reconnect(&self, current: &mut Option<Box<dyn InputStream>>, selection: InputSelection) {
+        let wanted = requested(&selection);
+        match (self.open)(selection, true) {
+            Ok(stream) => {
+                let device = stream.device().to_owned();
+                *current = Some(stream);
+                self.lost_reported.store(false, Ordering::SeqCst);
+                eprintln!("input: reconnected to {device}");
+                (self.emit)(DictationEvent::InputDevice {
+                    requested: wanted,
+                    active: Some(device),
+                    error: None,
+                });
+            }
+            Err(_) if self.lost_reported.swap(true, Ordering::SeqCst) => {}
+            Err(_) => (self.emit)(DictationEvent::InputDevice {
+                requested: wanted,
+                active: None,
+                error: Some(format!("disconnected; {RECONNECTING}")),
+            }),
+        }
+    }
+
+    /// Device currently open; `None` while starting or while disconnected.
     pub(crate) fn device(&self) -> Option<String> {
         let current = self.current.try_lock().ok()?;
         Some(current.as_ref()?.device().to_owned())

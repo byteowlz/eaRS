@@ -392,6 +392,8 @@ impl AppModel {
                     "Couldn't use {}: {error}. Still using {still}.",
                     label(&requested)
                 ),
+                // Lost or missing device the engine keeps waiting for.
+                None if !answered => format!("{}: {error}", label(&requested)),
                 None => format!("Couldn't use {}: {error}", label(&requested)),
             });
             self.input_active = active;
@@ -593,6 +595,30 @@ mod input_tests {
     }
 
     #[test]
+    fn a_lost_microphone_shows_reconnecting_then_clears_without_changing_the_choice() {
+        let mut model = preview();
+        model.core.dictation.input_device = Some("BRIO".into());
+        model.on_input_device(Some("BRIO".into()), Some("BRIO".into()), None);
+        model.on_input_device(
+            Some("BRIO".into()),
+            None,
+            Some("disconnected; reconnecting automatically when it is available".into()),
+        );
+        let shown = model.input_error.clone().unwrap();
+        assert!(shown.starts_with("BRIO: disconnected") && !shown.contains("Couldn't"));
+        assert!(model.input_active.is_none());
+        assert_eq!(model.core.dictation.input_device.as_deref(), Some("BRIO"));
+        model.on_input_device(Some("BRIO".into()), Some("BRIO".into()), None);
+        assert!(model.input_error.is_none());
+        assert_eq!(model.input_active.as_deref(), Some("BRIO"));
+        // Following a new OS default shows it without saving a preference.
+        let mut model = preview();
+        model.on_input_device(None, Some("Headset".into()), None);
+        assert_eq!(model.input_active.as_deref(), Some("Headset"));
+        assert!(model.core.dictation.input_device.is_none());
+    }
+
+    #[test]
     fn startup_reports_show_the_device_without_changing_preferences() {
         let mut model = preview();
         model.on_input_device(None, Some("MacBook Pro Microphone".into()), None);
@@ -602,7 +628,7 @@ mod input_tests {
         );
         assert!(model.core.dictation.input_device.is_none());
         model.on_input_device(Some("Gone".into()), None, Some("unavailable".into()));
-        assert!(model.input_error.unwrap().contains("Couldn't use Gone"));
+        assert!(model.input_error.unwrap().starts_with("Gone: unavailable"));
         assert!(model.core.dictation.input_device.is_none());
     }
 }

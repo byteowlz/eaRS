@@ -210,6 +210,8 @@ pub type ErrorHook = Arc<dyn Fn(String) + Send + Sync>;
 pub struct Capture {
     device: String,
     enabled: Arc<AtomicBool>,
+    /// Set once this stream reported a runtime error (e.g. device unplugged).
+    failed: Arc<AtomicBool>,
     stop: Sender<()>,
     thread: Option<thread::JoinHandle<()>>,
 }
@@ -224,6 +226,14 @@ impl Capture {
         enabled: bool,
     ) -> Result<Self> {
         let enabled = Arc::new(AtomicBool::new(enabled));
+        let failed = Arc::new(AtomicBool::new(false));
+        let on_error: ErrorHook = {
+            let failed = failed.clone();
+            Arc::new(move |message| {
+                failed.store(true, Ordering::SeqCst);
+                on_error(message);
+            })
+        };
         let (ready_tx, ready_rx) = bounded::<Result<String>>(1);
         let (stop_tx, stop_rx) = bounded::<()>(1);
         let sink = Sink::new(audio_tx, enabled.clone(), stop_tx.clone());
@@ -244,6 +254,7 @@ impl Capture {
             Ok(Ok(device)) => Ok(Self {
                 device,
                 enabled,
+                failed,
                 stop: stop_tx,
                 thread: Some(thread),
             }),
@@ -286,6 +297,11 @@ impl Capture {
 
     pub fn enable(&self) {
         self.enabled.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether this stream stopped because of a device error.
+    pub fn failed(&self) -> bool {
+        self.failed.load(Ordering::SeqCst)
     }
 }
 

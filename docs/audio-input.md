@@ -60,8 +60,17 @@ answered by `DictationEvent::InputDevice { requested, active, error }`.
 
 Each capture stream is owned by a stoppable `Capture` on its own thread: dropping
 it stops the stream, so engine restarts no longer leave old capture threads
-running. A stream that fails at runtime (device unplugged) reports an error
-instead of exiting the process; a vanished receiver stops its stream once instead
+running. A stream that fails at runtime (device unplugged) no longer exits the process
+or leaves eaRS deaf. A supervisor checks once per second: it releases a dead
+stream and reopens the *same* selection as soon as it is available again, so a
+replugged webcam or USB microphone resumes on its own and Settings shows
+"…: disconnected; reconnecting automatically" meanwhile. A named microphone is
+never replaced by another device. A microphone missing at launch is picked up
+when plugged in. With **System default**, eaRS follows macOS: when the default
+input changes (headset connected, default changed in System Settings, the
+default device unplugged), it switches to the new default the same way as a
+manual switch (new stream opened muted, old one stopped, then unmuted). The
+supervisor never blocks a manual switch and stops with the engine. A vanished receiver stops its stream once instead
 of logging on every buffer (`trx-ntjy`). The legacy blocking CLI live mode keeps
 its exit-on-stream-error behaviour.
 
