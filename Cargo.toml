@@ -39,6 +39,9 @@ aho-corasick = "1"
 sha2 = "0.10"
 # Shared canonical identity/evidence model, pinned to a pushed voqx commit so
 # CI and fresh clones build without a sibling checkout.
+# wake detection, library-first (see docs/adr in byteowlz/waqy)
+waqy = { path = "../waqy", optional = true, default-features = false }
+
 voqx-core = { git = "https://github.com/byteowlz/voqx.git", rev = "36ca757a7f4f5f28bfc2b4ed97cfe63919e5082e" }
 voqx-recognition = { git = "https://github.com/byteowlz/voqx.git", rev = "36ca757a7f4f5f28bfc2b4ed97cfe63919e5082e", optional = true }
 anyhow = "1.0"
@@ -139,6 +142,8 @@ hooks = []
 speaker-voqx = ["dep:voqx-recognition"]
 # Optional client-side Silero inference; models are explicit local artifacts.
 client-vad = ["dep:ort", "ort/api-24"]
+# Bundled wake detection: the detector runs in-process, model assets are embedded.
+wake-embedded = ["dep:waqy"]
 
 # Engines
 # parakeet-rs Nemotron streaming engine (ort 2.0.0-rc.12). Activate the exact
@@ -154,7 +159,7 @@ transcribe-cpp = ["dep:transcribe-cpp", "dep:ureq"]
 moonshine = ["dep:moonshine-rs", "dep:ureq"]
 
 # Acceleration (shared flags)
-nvidia = ["dep:cudarc", "candle/cuda", "candle-nn/cuda", "transcribe-cpp?/cuda"]
+nvidia = ["dep:cudarc", "candle/cuda", "candle-nn/cuda", "transcribe-cpp?/cuda", "parakeet-rs?/cuda"]
 apple = ["candle/metal", "candle-nn/metal", "transcribe-cpp?/metal"]
 amd = []
 directml = []

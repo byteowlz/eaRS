@@ -315,6 +315,7 @@ pub async fn run(options: ServerOptions) -> Result<()> {
             let cfg = ParakeetRsEngineConfig {
                 model_dir,
                 lang: options.parakeet_rs_lang.clone(),
+                cpu: options.cpu,
             };
             match ParakeetRsEngine::load(cfg, options.transcription.clone(), batch_size) {
                 Ok(engine) => engine_manager.register(Arc::new(engine)),

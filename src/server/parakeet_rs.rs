@@ -263,11 +263,32 @@ fn ensure_onnx_runtime() -> Result<(PathBuf, String)> {
 }
 
 #[derive(Debug, Clone)]
+/// ONNX Runtime provider selection for the parakeet engine.
+///
+/// `None` keeps parakeet-rs's default (CPU). CUDA is requested only when this binary was
+/// built with the `nvidia` feature, so a CPU-only build cannot ask for a provider it does
+/// not have.
+#[cfg(feature = "nvidia")]
+fn parakeet_execution_config(force_cpu: bool) -> Option<parakeet_rs::ExecutionConfig> {
+    (!force_cpu).then(|| parakeet_rs::ExecutionConfig {
+        execution_provider: parakeet_rs::ExecutionProvider::Cuda,
+        ..Default::default()
+    })
+}
+
+#[cfg(not(feature = "nvidia"))]
+fn parakeet_execution_config(_force_cpu: bool) -> Option<parakeet_rs::ExecutionConfig> {
+    None
+}
+
 pub struct ParakeetRsEngineConfig {
     pub model_dir: PathBuf,
     /// Target language for the multilingual variant (e.g. "de", "auto").
     /// Ignored by the English-only variant.
     pub lang: Option<String>,
+    /// Force CPU execution, mirroring the server's `--cpu` flag. GPU is the default only
+    /// when this binary was built with the `nvidia` feature and its provider is available.
+    pub cpu: bool,
 }
 
 pub struct ParakeetRsEngine {
@@ -294,8 +315,16 @@ impl ParakeetRsEngine {
         }
         // Backstop: any remaining `ort` load panic becomes a startup error
         // instead of a crashed server.
+        // Provider choice: CUDA when the NVIDIA acceleration feature compiled it in and the
+        // operator has not forced CPU, otherwise the parakeet-rs default (CPU). The CUDA path
+        // needs an ONNX Runtime built with the CUDA provider (Arch: onnxruntime-cuda) and a
+        // usable CUDA device; a failure here is reported, never silently downgraded.
+        let exec = parakeet_execution_config(cfg.cpu);
+        if exec.is_some() {
+            eprintln!("[parakeet-rs] using CUDA execution provider");
+        }
         let loaded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            NemotronHandle::from_pretrained(&cfg.model_dir, None)
+            NemotronHandle::from_pretrained(&cfg.model_dir, exec)
         }))
         .map_err(|panic| {
             let reason = panic
