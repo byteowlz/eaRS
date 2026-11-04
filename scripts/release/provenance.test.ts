@@ -14,7 +14,7 @@ test("policy, artwork and licences come from the binary commit, never dirty reso
     const [out, error, code] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
     expect(code, error).toBe(0); return out.trim();
   }
-  const resources = ["LICENSE", "logo/ears_logo_mac_white_on_black.png", "apps/ears-ui/assets/fonts/DepartureMono-OFL.txt", "apps/ears-ui/assets/fonts/JetBrainsMono-OFL.txt"];
+  const resources = ["LICENSE", "logo/icons/macos/AppIcon.icns", "apps/ears-ui/assets/fonts/DepartureMono-OFL.txt", "apps/ears-ui/assets/fonts/JetBrainsMono-OFL.txt"];
   try {
     await run(["git", "init", "--initial-branch=main"]);
     for (const name of [...resources, "packaging/desktop.toml"]) await mkdir(dirname(join(repo, name)), { recursive: true });

@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { cp, mkdir, symlink } from "node:fs/promises";
+import { cp, mkdir, readdir, symlink } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { clientBuild, sourcePolicy, packageInputs, macDependencies, files, options, required, run, safeOutput, sha256, writeJson, xml, versionAtMost } from "./common";
 
@@ -18,27 +18,14 @@ async function inspectBinary(path: string, revision: string, ui: boolean) {
   return clientBuild(JSON.parse(await run(path, ["--build-info"])), revision, "macos", "aarch64", ui);
 }
 
-async function icon(output: string, inputs: string) {
-  const source = join(inputs, "logo/ears_logo_mac_white_on_black.png");
-  const dimensions=await run("sips",["-g","pixelWidth","-g","pixelHeight",source]);
-  const width=dimensions.match(/pixelWidth: (\d+)/)?.[1],height=dimensions.match(/pixelHeight: (\d+)/)?.[1];
-  if(!width||!height)throw new Error("Cannot determine supplied icon dimensions");
-  let input=source;
-  if(width!==height) {
-    // Preserve the full composition: pad (never crop/stretch) to the native square canvas.
-    input=join(output,"AppIcon-fit.png");const edge=String(Math.max(Number(width),Number(height)));
-    await run("sips",["-p",edge,edge,source,"--out",input]);
-  }
-  const set = join(output, "AppIcon.iconset");
-  await mkdir(set);
-  for (const size of [16, 32, 128, 256, 512]) {
-    for (const scale of [1, 2]) {
-      const destination = join(set, `icon_${size}x${size}${scale === 2 ? "@2x" : ""}.png`);
-      await run("sips", ["-z", String(size * scale), String(size * scale), input, "--out", destination]);
-    }
-  }
-  const path = join(output, "AppIcon.icns");
-  await run("iconutil", ["-c", "icns", "-o", path, set]);
+// Committed export of the approved logo (scripts/export-icons.sh): padded macOS tile.
+async function icon(inputs: string) {
+  const path = join(inputs, "logo/icons/macos/AppIcon.icns");
+  const check = join(inputs, "AppIcon-check.iconset");
+  await run("iconutil", ["-c", "iconset", "-o", check, path]);
+  const expected = [16, 32, 128, 256, 512].flatMap(s => [`icon_${s}x${s}.png`, `icon_${s}x${s}@2x.png`]);
+  const present = new Set(await readdir(check));
+  if (!expected.every(name => present.has(name))) throw new Error("AppIcon.icns lacks standard macOS sizes");
   return path;
 }
 
@@ -75,7 +62,7 @@ async function assemble(values: Record<string, string>) {
     throw new Error("Runtime has non-portable Homebrew dependencies; use the qualified upstream runtime");
   }
   await run("install_name_tool", ["-id", "@rpath/libonnxruntime.dylib", join(frameworks, "libonnxruntime.dylib")]);
-  await cp(await icon(output, inputs), join(resources, "AppIcon.icns"));
+  await cp(await icon(inputs), join(resources, "AppIcon.icns"));
   await cp(join(inputs, "LICENSE"), join(resources, "LICENSE.txt"));
   for (const name of ["DepartureMono-OFL.txt", "JetBrainsMono-OFL.txt"]) await cp(join(inputs, "apps/ears-ui/assets/fonts", name), join(resources, name));
   await cp(join(runtimeRoot,"LICENSE"), join(resources, "ONNX-Runtime-LICENSE.txt"));

@@ -68,7 +68,7 @@ export async function packageInputs(revision: string, output: string) {
   const archive = join(output, "source-resources.tar");
   // Exact public resources from the binary's commit, never dirty working files.
   await run("git", ["archive", "--format=tar", "--output", archive, revision,
-    "LICENSE", "packaging/desktop.toml", "logo/ears_logo_mac_white_on_black.png",
+    "LICENSE", "packaging/desktop.toml", "logo/icons/macos/AppIcon.icns",
     "apps/ears-ui/assets/fonts/DepartureMono-OFL.txt", "apps/ears-ui/assets/fonts/JetBrainsMono-OFL.txt"]);
   await run("tar", ["-xf", archive, "-C", root]);
   return root;
