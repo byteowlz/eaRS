@@ -147,6 +147,7 @@ enabled = false
 # --report-above makes the detector also report near misses (logged only)
 command = ["waqy", "listen", "--manifest", "/path/to/models/waqy/<release>", "--report-above", "0.3"]
 # min_score = 0.6           # optional floor on top of the detector's own threshold
+# threshold = 0.45          # wake sensitivity (Settings slider, live); lower wakes more easily
 preroll_ms = 1500           # audio before the detection sent after a wake (first words are kept)
 # strip_words: leading words dropped once after a wake (the phrase as the ASR spells it)
 # strip_words = ["hey", "hi", "he", "hej", "ey", "oqto", "okto", "octo", "otto", "ok", "to", "okay"]

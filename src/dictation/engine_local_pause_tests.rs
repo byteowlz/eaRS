@@ -517,3 +517,40 @@ fn secure_input_that_starts_after_the_pause_defers_the_tail() {
     engine.secure_input_reader = |_| CALLS.fetch_add(1, Ordering::SeqCst) > 0;
     assert_eq!(tail_after_pause(&mut engine, &typed), "");
 }
+
+#[test]
+fn pause_time_and_wake_sensitivity_change_live_without_a_capture_edge() {
+    let (mut engine, _) = auto_pause_engine();
+    let events = observe(&mut engine);
+    let generation = engine.shared.capture_generation();
+    assert_eq!(
+        engine
+            .handle_command(DictationCommand::SetAutoPauseIdle(1500))
+            .unwrap(),
+        Flow::Continue
+    );
+    assert_eq!(engine.config.dictation.auto_pause.idle_ms, 1500);
+    assert_eq!(
+        engine
+            .handle_command(DictationCommand::SetWakeThreshold(Some(0.4)))
+            .unwrap(),
+        Flow::Continue
+    );
+    assert_eq!(engine.shared.wake_threshold(), Some(0.4));
+    // A rejected value reports an error and keeps the previous pause time.
+    engine
+        .handle_command(DictationCommand::SetAutoPauseIdle(100))
+        .unwrap();
+    assert_eq!(engine.config.dictation.auto_pause.idle_ms, 1500);
+    assert!(
+        events
+            .try_iter()
+            .any(|e| matches!(e, DictationEvent::Error { .. }))
+    );
+    assert_eq!(
+        engine.shared.capture_generation(),
+        generation,
+        "no capture edge"
+    );
+    assert!(engine.shared.is_capturing());
+}

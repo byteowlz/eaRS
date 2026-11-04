@@ -38,7 +38,7 @@ use runtime::Runtime;
 
 fn print_help() {
     println!(
-        "ears-ui {}\n\nUsage: ears-ui [--settings] [--no-overlay] [--oqtopus-check] [--preview-synthetic|--preview-synthetic-expanded|--preview-placement|--preview-click|--preview-settings|--preview-floating|--preview-oqtopus|--preview-oqtopus-reduced|--preview-parametric|--preview-parametric-reduced|--preview-parametric-override] [--help]\n\n  --settings           open the settings window at launch\n  --setup              configure without starting the engine until Apply\n  --build-info         read-only compiled capabilities JSON\n  --input-devices      input-device metadata JSON; no recording\n  --no-overlay         start with the floating island disabled\n  --preview-synthetic  display a synthetic notch fixture without starting dictation\n  --preview-synthetic-expanded  show the expanded synthetic fixture\n  --preview-placement  show a synthetic fixture at the actual screen anchor\n  --preview-click     show a clickable placement fixture without dictation\n  --preview-hit-test  show a centered clickable synthetic notch for native input tests\n  --preview-settings   show settings with synthetic state, without dictation\n  --preview-floating   show a synthetic bottom-anchored floating pill\n  --preview-word       synthetic fixed-width latest-word fixture (no dictation)\n  --preview-black / --preview-compact  synthetic skin/compact state\n  --preview-layout-report  synthetic numeric layout evidence, never text/pixels\n  --preview-settings-minimum / --preview-settings-light / --preview-settings-wide  synthetic layout variants\n  --preview-settings-appearance  synthetic Overlay tab scrolled to Appearance\n  --preview-settings-mic-empty / --preview-settings-mic-missing  synthetic microphone states\n  --preview-subtitle   add synthetic passive subtitles\n  --preview-cursor     add a synthetic pointer-anchored bubble\n  --preview-recording-notch / --preview-recording-notch-active  passive recording silhouette fixtures; no engine\n  --preview-departure / --preview-jetbrains  synthetic overlay font choice\n  --overlay-config     print current overlay settings as JSON, no engine\n  --overlay-schema     print the ui.toml JSON schema, no engine\n  --oqtopus-check     validate the configured local vector pack without dictation\n  --preview-oqtopus   show the local Oqtopus pack without dictation\n  --preview-oqtopus-reduced   show its static reduced-motion rest frame\n  --preview-parametric-override  animate a synthetic icon despite reduced motion\n  --preview-parametric  show animated parametric bars in a synthetic notch\n  --preview-parametric-reduced  show the same fixture with reduced motion\n  --version            print the version\n\nConfig: {}",
+        "ears-ui {}\n\nUsage: ears-ui [--settings] [--no-overlay] [--oqtopus-check] [--preview-synthetic|--preview-synthetic-expanded|--preview-placement|--preview-click|--preview-settings|--preview-floating|--preview-oqtopus|--preview-oqtopus-reduced|--preview-parametric|--preview-parametric-reduced|--preview-parametric-override] [--help]\n\n  --settings           open the settings window at launch\n  --setup              configure without starting the engine until Apply\n  --build-info         read-only compiled capabilities JSON\n  --input-devices      input-device metadata JSON; no recording\n  --no-overlay         start with the floating island disabled\n  --preview-synthetic  display a synthetic notch fixture without starting dictation\n  --preview-synthetic-expanded  show the expanded synthetic fixture\n  --preview-placement  show a synthetic fixture at the actual screen anchor\n  --preview-click     show a clickable placement fixture without dictation\n  --preview-hit-test  show a centered clickable synthetic notch for native input tests\n  --preview-settings   show settings with synthetic state, without dictation\n  --preview-floating   show a synthetic bottom-anchored floating pill\n  --preview-word       synthetic fixed-width latest-word fixture (no dictation)\n  --preview-black / --preview-compact  synthetic skin/compact state\n  --preview-layout-report  synthetic numeric layout evidence, never text/pixels\n  --preview-settings-minimum / --preview-settings-light / --preview-settings-wide  synthetic layout variants\n  --preview-settings-appearance  synthetic Overlay tab scrolled to Appearance\n  --preview-settings-voice  synthetic Dictation tab scrolled to auto-pause and wake sliders\n  --preview-settings-mic-empty / --preview-settings-mic-missing  synthetic microphone states\n  --preview-subtitle   add synthetic passive subtitles\n  --preview-cursor     add a synthetic pointer-anchored bubble\n  --preview-recording-notch / --preview-recording-notch-active  passive recording silhouette fixtures; no engine\n  --preview-departure / --preview-jetbrains  synthetic overlay font choice\n  --overlay-config     print current overlay settings as JSON, no engine\n  --overlay-schema     print the ui.toml JSON schema, no engine\n  --oqtopus-check     validate the configured local vector pack without dictation\n  --preview-oqtopus   show the local Oqtopus pack without dictation\n  --preview-oqtopus-reduced   show its static reduced-motion rest frame\n  --preview-parametric-override  animate a synthetic icon despite reduced motion\n  --preview-parametric  show animated parametric bars in a synthetic notch\n  --preview-parametric-reduced  show the same fixture with reduced motion\n  --version            print the version\n\nConfig: {}",
         env!("CARGO_PKG_VERSION"),
         UiConfig::path().display()
     );
@@ -231,27 +231,45 @@ fn settings_fixture_size(args: &[String]) -> Option<gpui::Size<gpui::Pixels>> {
 }
 
 /// Render settings with synthetic state and without starting dictation.
+/// Synthetic Settings state for one preview variant; never starts the engine.
+fn preview_settings_fixture(args: &[String]) -> AppModel {
+    let has = |flag: &str| args.iter().any(|arg| arg == flag);
+    let mut fixture = settings_fixture(has("--preview-settings-light"));
+    if has("--preview-settings-mic-missing") {
+        fixture.core.dictation.input_device = Some("Disconnected microphone".into());
+    }
+    if has("--preview-settings-appearance") {
+        fixture.settings_tab = settings::Tab::Overlay;
+    }
+    if has("--preview-settings-voice") {
+        // The preview never starts the engine, so this command never runs.
+        let wake = &mut fixture.core.dictation.wake;
+        wake.enabled = true;
+        wake.command = [
+            "waqy",
+            "listen",
+            "--manifest",
+            "synthetic",
+            "--report-above",
+            "0.3",
+        ]
+        .map(String::from)
+        .into();
+        wake.threshold = Some(0.42);
+        fixture.core.dictation.auto_pause.idle_ms = 3000;
+    }
+    fixture
+}
+
 fn preview_settings(args: &[String]) {
     let viewport = settings_fixture_size(args);
-    let light = args.iter().any(|arg| arg == "--preview-settings-light");
-    let missing_mic = args
+    let scroll_to_end = ["--preview-settings-appearance", "--preview-settings-voice"]
         .iter()
-        .any(|arg| arg == "--preview-settings-mic-missing");
-    let appearance = args
-        .iter()
-        .any(|arg| arg == "--preview-settings-appearance");
+        .any(|flag| args.iter().any(|arg| arg == flag));
+    let fixture = preview_settings_fixture(args);
     Application::new().run(move |cx| {
         platform::set_accessory_policy();
-        let model = cx.new(|_| {
-            let mut fixture = settings_fixture(light);
-            if missing_mic {
-                fixture.core.dictation.input_device = Some("Disconnected microphone".into());
-            }
-            if appearance {
-                fixture.settings_tab = settings::Tab::Overlay;
-            }
-            fixture
-        });
+        let model = cx.new(|_| fixture);
         cx.set_global(AppHandle(model.clone()));
         cx.set_global(Runtime::new(model));
         runtime::apply_theme(cx, None);
@@ -265,7 +283,7 @@ fn preview_settings(args: &[String]) {
         if let (Some(viewport), Some(handle)) = (viewport, cx.global::<Runtime>().settings) {
             let _ = handle.update(cx, |_, window, _| window.resize(viewport));
         }
-        if let (true, Some(handle)) = (appearance, cx.global::<Runtime>().settings) {
+        if let (true, Some(handle)) = (scroll_to_end, cx.global::<Runtime>().settings) {
             let _ = handle.update(cx, |view, _, _| view.preview_scroll_to_bottom());
         }
     });
@@ -279,6 +297,7 @@ fn maybe_preview(args: &[String]) -> bool {
                 | "--preview-settings-mic-empty"
                 | "--preview-settings-mic-missing"
                 | "--preview-settings-appearance"
+                | "--preview-settings-voice"
                 | "--preview-settings-minimum"
                 | "--preview-settings-light"
                 | "--preview-settings-wide"

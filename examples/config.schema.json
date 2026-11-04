@@ -340,6 +340,16 @@
               "default": null,
               "description": "Optional extra score floor on top of the detector's threshold"
             },
+            "threshold": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 1,
+              "default": null,
+              "description": "Wake sensitivity applied by eaRS, live from Settings. Detections below it are ignored; near misses at or above it wake (reported down to the detector's --report-above). Null keeps the detector's own threshold."
+            },
             "preroll_ms": {
               "type": "integer",
               "minimum": 0,

@@ -260,6 +260,10 @@ pub enum DictationCommand {
     SetEscapeCancels(bool),
     /// Adjust auto-pause speech classification without restarting capture/drain.
     SetAutoPauseSpeechThreshold(f32),
+    /// Adjust how long silence lasts before auto-pause, without restarting.
+    SetAutoPauseIdle(u32),
+    /// Wake word sensitivity (`None` = detector default), applied immediately.
+    SetWakeThreshold(Option<f32>),
     /// Switch the microphone without restarting (`None` = system default).
     SetInputDevice(Option<String>),
     /// Re-read dictionaries and profiles from disk immediately.
@@ -350,6 +354,8 @@ pub(crate) struct Shared {
     /// Set by the wake path right before it starts capture: the next utterance begins
     /// with pre-roll audio that contains the wake phrase.
     wake_started: AtomicBool,
+    /// Live wake sensitivity (`None` = the detector's own threshold).
+    wake_threshold: Mutex<Option<f32>>,
 }
 
 impl Shared {
@@ -376,11 +382,20 @@ impl Shared {
             events,
             commands,
             wake_started: AtomicBool::new(false),
+            wake_threshold: Mutex::new(config.dictation.wake.threshold),
         }
     }
 
     pub(crate) fn mark_wake_started(&self) {
         self.wake_started.store(true, Ordering::SeqCst);
+    }
+
+    pub(crate) fn wake_threshold(&self) -> Option<f32> {
+        *self.wake_threshold.lock().unwrap()
+    }
+
+    pub(crate) fn set_wake_threshold(&self, threshold: Option<f32>) {
+        *self.wake_threshold.lock().unwrap() = threshold;
     }
 
     pub(crate) fn take_wake_started(&self) -> bool {

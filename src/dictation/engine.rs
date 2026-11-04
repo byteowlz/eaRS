@@ -115,6 +115,15 @@ impl AutoPauseSession {
         }
         Ok(())
     }
+    fn set_idle_ms(&mut self, idle_ms: u32) -> Result<()> {
+        super::auto_pause::validate_idle_ms(idle_ms)?;
+        match &mut self.runtime {
+            Some(auto) => auto.control.set_idle_ms(idle_ms),
+            None => anyhow::bail!(
+                "auto-pause was off when eaRS started; the new pause time applies after restart"
+            ),
+        }
+    }
     fn draining(&self) -> bool {
         self.runtime
             .as_ref()
@@ -1016,6 +1025,21 @@ impl Engine {
                 }
                 // A sensitivity edit is not a capture edge: preserve the owned
                 // Final/ACK barrier, buffered PCM, generation and held-key state.
+                return Ok(Flow::Continue);
+            }
+            DictationCommand::SetAutoPauseIdle(idle_ms) => {
+                if let Err(error) = self.auto_pause.set_idle_ms(idle_ms) {
+                    self.shared.emit(DictationEvent::Error {
+                        message: error.to_string(),
+                    });
+                } else {
+                    self.config.dictation.auto_pause.idle_ms = idle_ms;
+                }
+                return Ok(Flow::Continue);
+            }
+            DictationCommand::SetWakeThreshold(threshold) => {
+                self.shared.set_wake_threshold(threshold);
+                self.config.dictation.wake.threshold = threshold;
                 return Ok(Flow::Continue);
             }
             DictationCommand::SetInputDevice(name) => {

@@ -45,6 +45,13 @@ ears wake remove hey_jupp
     `{"type":"error","message":"..."}`. stderr is free-form logging.
 - `actions` maps reported phrases to an action. Unlisted phrases do nothing; `min_score`
   adds an optional floor.
+- `threshold` is the wake sensitivity, set live from Settings → Dictation → Wake word.
+  eaRS applies it to every reported score: detections below it are ignored, and near
+  misses at or above it wake like detections. It can only go as low as the detector's
+  `--report-above`, because weaker peaks are never reported; without that flag it can
+  only raise the bar. Unset keeps the detector's own threshold. A distant microphone
+  (e.g. a webcam) scores the same voice markedly lower: observed mean 0.41 on a BRIO
+  webcam versus 0.63 on the MacBook's built-in microphone with the same model.
 
   | action | while paused | while capturing |
   |---|---|---|

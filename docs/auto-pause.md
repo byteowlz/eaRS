@@ -11,6 +11,14 @@ drain_timeout_ms = 10000    # failure bound, not a successful finalization
 speech_threshold = 0.5    # finite, strictly between 0 and 1
 ```
 
+Settings → Dictation → Auto-pause has live sliders for **Pause after silence**
+(`idle_ms`, 0.5–10 s) and **Speech detection threshold** (`speech_threshold`). Both
+are saved with a narrow config edit first and then applied to the running engine
+without touching capture or a pending drain. Turning auto-pause on or off (`idle_ms`
+0) still needs a restart, since that loads or unloads the detector. The speech
+detection threshold is not the wake word threshold; that is Wake word sensitivity
+(see `wake.md`).
+
 The detector uses `[dictation.auto_pause.vad]` when supplied, otherwise the explicit
 `[dictation.audio_history.client_vad]` model/hash/runtime configuration. It works
 with audio-history retention disabled and does not write recordings itself. A

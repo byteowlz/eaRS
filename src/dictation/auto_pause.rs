@@ -63,6 +63,15 @@ impl AutoPauseConfig {
 }
 
 /// Shared validation for configuration, live commands and Settings.
+/// Live-editable pause timeout: 0.5 s to 1 h (0 = disabled is config-only).
+pub fn validate_idle_ms(idle_ms: u32) -> Result<()> {
+    ensure!(
+        (500..=3_600_000).contains(&idle_ms),
+        "auto-pause idle time must be 500..=3600000 ms"
+    );
+    Ok(())
+}
+
 pub fn validate_speech_threshold(threshold: f32) -> Result<()> {
     ensure!(
         threshold.is_finite() && threshold > 0.0 && threshold < 1.0,
@@ -128,6 +137,12 @@ impl IdlePause {
     pub fn set_speech_threshold(&mut self, threshold: f32) -> Result<()> {
         validate_speech_threshold(threshold)?;
         self.speech_threshold = threshold;
+        Ok(())
+    }
+    /// Change the silence needed before pausing; takes effect on the next check.
+    pub fn set_idle_ms(&mut self, idle_ms: u32) -> Result<()> {
+        validate_idle_ms(idle_ms)?;
+        self.idle_samples = u64::from(idle_ms) * 16;
         Ok(())
     }
     pub fn start(&mut self, generation: u64) {
@@ -371,6 +386,23 @@ mod tests {
         };
         assert!(AutoPause::from_config(&disabled, None).unwrap().is_none());
     }
+    #[test]
+    fn pause_time_can_change_while_running() {
+        let mut gate = gate();
+        gate.start(7);
+        gate.observe(0.8).unwrap();
+        silent(&mut gate, 50);
+        assert!(!gate.due(7));
+        // Shorter pause applies to the silence already observed.
+        gate.set_idle_ms(1500).unwrap();
+        assert!(gate.due(7), "50 frames of 32 ms exceed 1.5 s");
+        gate.set_idle_ms(5000).unwrap();
+        assert!(!gate.due(7));
+        assert!(gate.set_idle_ms(0).is_err(), "disabling is config-only");
+        assert!(gate.set_idle_ms(499).is_err());
+        assert!(!gate.due(7), "a rejected value keeps the previous one");
+    }
+
     #[test]
     fn deadline_uses_capture_silence_not_asr_or_wall_time() {
         let mut gate = gate();

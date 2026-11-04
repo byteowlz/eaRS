@@ -47,6 +47,10 @@ pub struct WakeConfig {
     pub actions: HashMap<String, WakeAction>,
     /// Optional extra floor on top of the detector's own threshold.
     pub min_score: Option<f32>,
+    /// eaRS wake sensitivity. Detections below it are ignored; near misses at
+    /// or above it act like detections (they are reported down to the
+    /// detector's `--report-above`). `None` keeps the detector's own threshold.
+    pub threshold: Option<f32>,
     /// Audio before the detection sent to the server after a wake, so the first words
     /// after the phrase are not lost. The phrase itself is then stripped (`strip_words`).
     pub preroll_ms: u32,
@@ -73,6 +77,7 @@ impl Default for WakeConfig {
             command: Vec::new(),
             actions: HashMap::new(),
             min_score: None,
+            threshold: None,
             preroll_ms: 1500,
             strip_words: [
                 "hey", "hi", "he", "hej", "ey", "oqto", "okto", "octo", "otto", "ok", "to", "okay",
@@ -126,6 +131,29 @@ impl WakeConfig {
             .get(phrase)
             .copied()
             .filter(|a| *a != WakeAction::Ignore)
+    }
+}
+
+/// Lowest score the detector reports (its `--report-above`), if configured:
+/// the floor below which a sensitivity setting cannot reach.
+pub fn report_floor(command: &[String]) -> Option<f32> {
+    command
+        .windows(2)
+        .find(|w| w[0] == "--report-above")
+        .and_then(|w| w[1].parse().ok())
+        .or_else(|| {
+            command
+                .iter()
+                .find_map(|a| a.strip_prefix("--report-above=")?.parse().ok())
+        })
+}
+
+/// Whether a reported score counts as a wake under the live sensitivity.
+/// `near_miss` marks a peak the detector reported below its own threshold.
+pub fn counts_as_wake(score: f32, near_miss: bool, threshold: Option<f32>) -> bool {
+    match threshold {
+        Some(threshold) => score >= threshold,
+        None => !near_miss,
     }
 }
 
@@ -545,7 +573,23 @@ pub(crate) fn spawn_tee(
             .spawn(move || {
                 for message in messages {
                     match message {
-                        WakeMessage::Detection(d) => {
+                        WakeMessage::Detection(_) | WakeMessage::Candidate(_) => {
+                            let (d, near_miss) = match message {
+                                WakeMessage::Detection(d) => (d, false),
+                                WakeMessage::Candidate(d) => (d, true),
+                                _ => unreachable!(),
+                            };
+                            // The live sensitivity decides, not only the detector's own
+                            // threshold: weak detections drop, strong near misses count.
+                            if !counts_as_wake(d.score, near_miss, shared.wake_threshold()) {
+                                if !shared.is_capturing() {
+                                    eprintln!("wake: near miss {} {:.2}", d.phrase, d.score);
+                                    let outcome =
+                                        if near_miss { "none" } else { "below_threshold" };
+                                    log.write("candidate", &d, outcome);
+                                }
+                                continue;
+                            }
                             let outcome =
                                 match config.route(&d.phrase, d.score, shared.is_capturing()) {
                                     WakeStep::Start => {
@@ -571,12 +615,6 @@ pub(crate) fn spawn_tee(
                                 };
                             eprintln!("wake: {} {:.2} -> {outcome}", d.phrase, d.score);
                             log.write("detection", &d, outcome);
-                        }
-                        WakeMessage::Candidate(d) => {
-                            if !shared.is_capturing() {
-                                eprintln!("wake: near miss {} {:.2}", d.phrase, d.score);
-                                log.write("candidate", &d, "none");
-                            }
                         }
                         WakeMessage::Error(message) => shared.emit(super::DictationEvent::Error {
                             message: format!("wake detector: {message}"),
@@ -684,6 +722,38 @@ pub(crate) fn spawn_tee(
         })
         .context("spawning wake tee thread")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod sensitivity_tests {
+    use super::*;
+
+    #[test]
+    fn sensitivity_promotes_strong_near_misses_and_drops_weak_detections() {
+        // Detector default: only its own detections count.
+        assert!(counts_as_wake(0.55, false, None));
+        assert!(!counts_as_wake(0.45, true, None));
+        // Lowered for a distant microphone: a 0.45 near miss now wakes.
+        assert!(counts_as_wake(0.45, true, Some(0.40)));
+        assert!(!counts_as_wake(0.35, true, Some(0.40)));
+        // Raised against false wakes: a 0.55 detection is dropped.
+        assert!(!counts_as_wake(0.55, false, Some(0.60)));
+        assert!(counts_as_wake(0.60, false, Some(0.60)));
+    }
+
+    #[test]
+    fn report_floor_is_read_from_either_argument_form() {
+        let split: Vec<String> = ["waqy", "listen", "--report-above", "0.3"]
+            .map(String::from)
+            .into();
+        assert_eq!(report_floor(&split), Some(0.3));
+        let joined: Vec<String> = ["waqy", "--report-above=0.25"].map(String::from).into();
+        assert_eq!(report_floor(&joined), Some(0.25));
+        assert_eq!(report_floor(&["waqy".to_string()]), None);
+        let toml: WakeConfig = toml::from_str("enabled = true\nthreshold = 0.42\n").unwrap();
+        assert_eq!(toml.threshold, Some(0.42));
+        assert_eq!(WakeConfig::default().threshold, None);
+    }
 }
 
 #[cfg(test)]

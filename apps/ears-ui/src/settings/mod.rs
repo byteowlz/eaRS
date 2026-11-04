@@ -4,6 +4,8 @@
 //! immediately.
 
 mod auto_pause;
+mod live_settings;
+use live_settings::LiveSetting;
 mod microphone;
 pub(crate) use microphone::persist_input_device;
 mod navigation;
@@ -165,8 +167,10 @@ pub struct SettingsView {
     opacity: Entity<RangeSlider>,
     radius: Entity<RangeSlider>,
     speech_threshold: Entity<RangeSlider>,
+    pause_after: Entity<RangeSlider>,
+    wake_sensitivity: Entity<RangeSlider>,
     microphone: Entity<microphone::MicrophonePicker>,
-    auto_pause_error: Option<String>,
+    live_error: Option<String>,
     draft: Option<ProfileDraft>,
 }
 
@@ -218,6 +222,36 @@ const LINGER: SliderSpec = SliderSpec {
     step: 50.0,
     format: |v| format!("{v:.0} ms"),
 };
+
+const PAUSE: SliderSpec = SliderSpec {
+    id: "pause-after-slider",
+    min: 0.5,
+    max: 10.0,
+    step: 0.25,
+    format: |v| format!("{v:.2} s"),
+};
+const WAKE: SliderSpec = SliderSpec {
+    id: "wake-sensitivity-slider",
+    min: 0.3,
+    max: 0.9,
+    step: 0.01,
+    format: |v| format!("{v:.2}"),
+};
+
+/// An engine-config slider applied live through [`SettingsView::commit_live`].
+fn live_slider(
+    cx: &mut Context<SettingsView>,
+    core: &ears::config::AppConfig,
+    setting: LiveSetting,
+    spec: SliderSpec,
+) -> Entity<RangeSlider> {
+    let slider = cx.new(|cx| RangeSlider::new(spec, setting.current(core), cx));
+    cx.subscribe(&slider, move |this, _, event: &SliderCommit, cx| {
+        this.commit_live(setting, event.0, cx);
+    })
+    .detach();
+    slider
+}
 
 /// A UI-config slider that persists once per gesture or key step.
 fn appearance_slider(
@@ -293,13 +327,27 @@ impl SettingsView {
         );
         let radius_input = appearance_slider(cx, RADIUS, radius, |ui, v| ui.theme.radius = v, true);
 
-        let threshold = model.read(cx).core.dictation.auto_pause.speech_threshold;
-        let speech_threshold =
-            cx.new(|cx| RangeSlider::new(SliderSpec::PROBABILITY, threshold, cx));
-        cx.subscribe(&speech_threshold, |this, _, event: &SliderCommit, cx| {
-            this.commit_speech_threshold(event.0, cx);
-        })
-        .detach();
+        let (speech_threshold, pause_after, wake_sensitivity) = {
+            let core = model.read(cx).core.clone();
+            let floor = ears::dictation::wake::report_floor(&core.dictation.wake.command)
+                .unwrap_or(0.3)
+                .clamp(0.05, 0.9);
+            (
+                live_slider(
+                    cx,
+                    &core,
+                    LiveSetting::SpeechThreshold,
+                    SliderSpec::PROBABILITY,
+                ),
+                live_slider(cx, &core, LiveSetting::PauseAfterSilence, PAUSE),
+                live_slider(
+                    cx,
+                    &core,
+                    LiveSetting::WakeSensitivity,
+                    SliderSpec { min: floor, ..WAKE },
+                ),
+            )
+        };
 
         // Re-render when the engine pushes events (connection badge, profile).
         cx.observe(&model, |_, _, cx| cx.notify()).detach();
@@ -337,42 +385,43 @@ impl SettingsView {
             opacity,
             radius: radius_input,
             speech_threshold,
+            pause_after,
+            wake_sensitivity,
             microphone,
-            auto_pause_error: None,
+            live_error: None,
             draft: None,
         }
     }
 
     // ---- actions ---------------------------------------------------------
 
-    fn commit_speech_threshold(&mut self, threshold: f32, cx: &mut Context<Self>) {
+    /// Save first, then apply live; a failed save restores the slider and applies nothing.
+    fn commit_live(&mut self, setting: LiveSetting, value: f32, cx: &mut Context<Self>) {
         let preview = self.model.read(cx).configuration_is_preview;
         let result = if preview {
             Ok(())
         } else {
             ears::config::AppConfig::path()
-                .and_then(|path| auto_pause::persist_threshold(&path, threshold))
+                .and_then(|path| live_settings::persist(&path, setting, value))
         };
         match result {
             Ok(()) => {
-                self.auto_pause_error = None;
+                self.live_error = None;
                 self.model.update(cx, |m, cx| {
-                    m.core.dictation.auto_pause.speech_threshold = threshold;
-                    m.send(DictationCommand::SetAutoPauseSpeechThreshold(threshold));
+                    let command = setting.apply(&mut m.core, value);
+                    m.send(command);
                     cx.notify();
                 });
             }
             Err(error) => {
-                self.auto_pause_error = Some(format!("Not saved or applied: {error:#}"));
-                let previous = self
-                    .model
-                    .read(cx)
-                    .core
-                    .dictation
-                    .auto_pause
-                    .speech_threshold;
-                self.speech_threshold
-                    .update(cx, |slider, cx| slider.set_value(previous, cx));
+                self.live_error = Some(format!("Not saved or applied: {error:#}"));
+                let previous = setting.current(&self.model.read(cx).core);
+                let slider = match setting {
+                    LiveSetting::SpeechThreshold => &self.speech_threshold,
+                    LiveSetting::PauseAfterSilence => &self.pause_after,
+                    LiveSetting::WakeSensitivity => &self.wake_sensitivity,
+                };
+                slider.update(cx, |slider, cx| slider.set_value(previous, cx));
             }
         }
         cx.notify();
@@ -826,25 +875,61 @@ impl SettingsView {
     }
 
     fn auto_pause_section(&self, theme: &Theme, cx: &Context<Self>) -> Div {
-        let idle_ms = self.model.read(cx).core.dictation.auto_pause.idle_ms;
-        let status = if idle_ms == 0 {
-            "Auto-pause is disabled (idle_ms = 0 in config.toml).".to_string()
-        } else {
-            format!("Pause after {idle_ms} ms of scored silence.")
-        };
-        let mut auto_pause = section("Auto-pause", theme)
-            .child(hint(status, theme))
-            .child(row(
-                "Speech threshold",
-                Some("Higher rejects more noise but may miss quiet speech. Saved to config.toml without restarting.".into()),
-                self.speech_threshold.clone(),
+        let core = &self.model.read(cx).core;
+        let auto_pause_on = core.dictation.auto_pause.idle_ms > 0;
+        let wake = &core.dictation.wake;
+        let mut section_el = section("Auto-pause", theme);
+        if auto_pause_on {
+            section_el = section_el.child(row(
+                "Pause after silence",
+                Some(
+                    "How long you can stay quiet before dictation pauses. Applies immediately."
+                        .into(),
+                ),
+                self.pause_after.clone(),
                 theme,
             ));
-        if let Some(error) = &self.auto_pause_error {
-            auto_pause =
-                auto_pause.child(div().text_color(theme.roles.danger).child(error.clone()));
+        } else {
+            section_el = section_el.child(hint(
+                "Auto-pause is off (idle_ms = 0 in config.toml).",
+                theme,
+            ));
         }
-        auto_pause
+        section_el = section_el.child(row(
+            "Speech detection threshold",
+            Some("Auto-pause only: how sure eaRS must be that you are still speaking. Higher ignores more noise but may cut off quiet speech. Not the wake word.".into()),
+            self.speech_threshold.clone(),
+            theme,
+        ));
+        let mut wake_el = section("Wake word", theme);
+        if wake.enabled && !wake.command.is_empty() {
+            let floor = ears::dictation::wake::report_floor(&wake.command);
+            let detail = match floor {
+                Some(floor) => format!("Lower wakes more easily (also from a distant microphone) but triggers falsely more often. Applies immediately; lowest {floor:.2}."),
+                None => "Raise to avoid false wakes. Lowering below the detector's own threshold needs --report-above in the wake command.".to_string(),
+            };
+            wake_el = wake_el.child(row(
+                "Wake word sensitivity",
+                Some(detail.into()),
+                self.wake_sensitivity.clone(),
+                theme,
+            ));
+        } else {
+            wake_el = wake_el.child(hint(
+                "Wake word is off ([dictation.wake] in config.toml).",
+                theme,
+            ));
+        }
+        let mut out = div()
+            .flex()
+            .flex_col()
+            .gap(theme.space(5.0))
+            .child(section_el)
+            .child(wake_el);
+        if let Some(error) = &self.live_error {
+            out = out.child(div().text_color(theme.roles.danger).child(error.clone()));
+        }
+        out
     }
 
     fn overlay_pane(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
