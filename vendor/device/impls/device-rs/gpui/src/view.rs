@@ -20,6 +20,7 @@ pub struct DeviceView {
     ui_font: SharedString,
     keyboard_enabled: bool,
     font_overrides: std::collections::HashMap<String, SharedString>,
+    icons: std::collections::HashMap<String, Icon>,
     hovered: Option<String>,
 }
 /// The control under the pointer changed (host-owned help; no app effect).
@@ -78,6 +79,7 @@ impl DeviceView {
             ui_font,
             keyboard_enabled: true,
             font_overrides: Default::default(),
+            icons: Default::default(),
             hovered: None,
         };
         this.resize(window, cx);
@@ -117,8 +119,11 @@ impl DeviceView {
     }
     fn hit(&self, x: f32, y: f32) -> Option<String> {
         let p = self.slot.current()?;
-        // Do not accept input against a newer state or a resized viewport over old pixels.
-        if p.snapshot.snapshot() != &self.snapshot {
+        // Accept input whenever the displayed pixels have the same geometry as the
+        // current state. A text or lamp change (for example hover help) must not
+        // swallow a click while its frame renders; a page, visibility, layout or
+        // viewport change still does.
+        if !same_geometry(p.snapshot.snapshot(), &self.snapshot) {
             return None;
         }
         let id = p.frame.hit_test(x as f64, y as f64)?;
@@ -160,6 +165,11 @@ impl DeviceView {
     /// Host font registry override, keyed by semantic control id; never a scene path.
     pub fn set_control_font(&mut self, id: &str, font: SharedString) {
         self.font_overrides.insert(id.into(), font);
+    }
+    /// Host-drawn icon in place of a key's legend. The label stays the accessible name;
+    /// the callback gets that label, the legend size in pixels and the ink colour.
+    pub fn set_control_icon(&mut self, id: &str, icon: Icon) {
+        self.icons.insert(id.into(), icon);
     }
     pub fn snapshot(&self) -> &Snapshot {
         &self.snapshot
@@ -366,7 +376,11 @@ impl DeviceView {
                 // Size follows the legend's role (its height), never the string length.
                 .text_size(px((height * 0.72).clamp(5.0, 28.0)))
                 .when(!label.raster.is_matrix(), |element| {
-                    element.child(etched(label, (height * 0.72).clamp(5.0, 28.0), color))
+                    let size = (height * 0.72).clamp(5.0, 28.0);
+                    match label.control_id.as_ref().and_then(|id| self.icons.get(id)) {
+                        Some(icon) => element.child(icon(&label.text, size, color)),
+                        None => element.child(etched(label, size, color)),
+                    }
                 }),
         )
     }
@@ -409,6 +423,49 @@ fn etched(label: &device_render_wgpu::Label, size: f32, color: u32) -> gpui::Any
                 .child(text),
         )
         .into_any_element()
+}
+
+/// A host-drawn legend: (label, size in px, ink colour) -> element.
+pub type Icon = std::rc::Rc<dyn Fn(&str, f32, u32) -> gpui::AnyElement>;
+
+/// Same pixels-to-controls mapping: scene geometry, page, visibility and viewport.
+type Geometry<'a> = Vec<(
+    &'a [f64; 3],
+    &'a device_scene::Chassis,
+    &'a Vec<device_scene::Panel>,
+    Vec<(
+        &'a String,
+        &'a device_scene::Rect,
+        &'a String,
+        device_scene::Kind,
+    )>,
+)>;
+fn geometry(s: &device_scene::Snapshot) -> Geometry<'_> {
+    s.scene
+        .devices
+        .iter()
+        .map(|d| {
+            let controls = d
+                .controls
+                .iter()
+                .map(|c| (&c.id, &c.rect, &c.page, c.kind))
+                .collect();
+            (&d.origin, &d.chassis, &d.panels, controls)
+        })
+        .collect()
+}
+fn same_geometry(a: &device_scene::Snapshot, b: &device_scene::Snapshot) -> bool {
+    a.scene.camera == b.scene.camera
+        && a.viewport == b.viewport
+        && a.state.active_page == b.state.active_page
+        && geometry(a) == geometry(b)
+        && a.state.controls.len() == b.state.controls.len()
+        && a.state.controls.iter().all(|(id, s)| {
+            b.state
+                .controls
+                .get(id)
+                .is_some_and(|t| t.visible == s.visible && t.enabled == s.enabled)
+        })
 }
 
 impl Render for DeviceView {

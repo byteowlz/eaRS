@@ -42,15 +42,19 @@ fn noise(p: vec2<f32>) -> f32 {
 /// Soft key-light visibility: 5x5 PCF over the fitted shadow map.
 fn visibility(world: vec3<f32>, n: vec3<f32>, light: vec3<f32>) -> f32 {
     // Normal offset keeps lit faces from self-shadowing at grazing angles.
-    let p = u.light_vp * vec4(world + n * 0.02, 1.0);
+    // Normal offset scaled by texel footprint and grazing angle: without it, plates
+    // nearly parallel to the light self-shadow in blotchy bands.
+    let texel = 1.0 / f32(textureDimensions(shadow_map).x);
+    let offset = mix(0.05, 0.20, 1.0 - clamp(abs(dot(n, light)), 0.0, 1.0)) + texel * 4.0;
+    let p = u.light_vp * vec4(world + n * offset, 1.0);
     let ndc = p.xyz / p.w;
     let uv = ndc.xy * vec2(0.5, -0.5) + vec2(0.5);
     if any(uv < vec2(0.0)) || any(uv > vec2(1.0)) || ndc.z > 1.0 { return 1.0; }
-    let texel = 1.0 / vec2<f32>(textureDimensions(shadow_map));
+    let step = 1.0 / vec2<f32>(textureDimensions(shadow_map));
     var sum = 0.0;
     for (var y = -2; y <= 2; y++) {
         for (var x = -2; x <= 2; x++) {
-            sum += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + vec2(f32(x), f32(y)) * texel * 1.5, ndc.z - 0.0008);
+            sum += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + vec2(f32(x), f32(y)) * step * 1.5, ndc.z - 0.0035);
         }
     }
     return sum / 25.0;
@@ -75,12 +79,12 @@ fn studio(r: vec3<f32>) -> f32 {
         // Horizontal machining at a scale the eye can resolve: broad tonal streaks,
         // finer lines faded out where they would alias below a pixel.
         let uv=select(v.world.xy,v.world.xz,abs(n.y)>0.7);
-        let coarse=noise(vec2(uv.x*0.12, uv.y*5.5));
-        let mid=noise(vec2(uv.x*0.35, uv.y*13.0));
-        let fine=noise(vec2(uv.x*0.9, uv.y*31.0));
-        let fine_aa=clamp(1.0-fwidth(uv.y*31.0)*0.6,0.0,1.0);
-        streak=(coarse-0.5)*0.35+(mid-0.5)*0.30+(fine-0.5)*0.30*fine_aa;
-        grain=1.0+streak*0.34;
+        // Fine, directional machining: no low-frequency blotches, only lines.
+        let mid=noise(vec2(uv.x*0.55, uv.y*22.0));
+        let fine=noise(vec2(uv.x*1.6, uv.y*54.0));
+        let fine_aa=clamp(1.0-fwidth(uv.y*54.0)*0.6,0.0,1.0);
+        streak=(mid-0.5)*0.22+(fine-0.5)*0.26*fine_aa;
+        grain=1.0+streak*0.30;
     }
     if v.props.z>1.5 && v.props.z<2.5 {
         let radius=length(v.local);

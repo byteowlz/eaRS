@@ -528,14 +528,13 @@ fn build() -> Snapshot {
     // Top module: main display, Test and Close; then the only navigation row,
     // whose keys line up with the two columns below.
     let display_top = inner - PAD;
+    // Close at the top and Test (a microphone key) at the bottom of one key
+    // column, both flush with the display's edges; the display takes the rest.
     let close = band.last(SIDE_KEY);
-    let test = Span {
-        left: close.left - GAP - 6.4,
-        right: close.left - GAP,
-    };
+    let test = close;
     let display = Span {
         left: band.left,
-        right: test.left - GAP,
+        right: close.left - GAP,
     };
     b.add(
         "display",
@@ -551,13 +550,13 @@ fn build() -> Snapshot {
     b.add(
         "test",
         "ears.top",
-        "toggle",
+        "button",
         "Test",
-        "Speak to see your words here. Nothing is typed or saved.",
+        "Test: speak to see your words here. Nothing is typed or saved.",
         test,
-        display_top - 2.2,
-        4.4,
-        json!(false),
+        display_top - 4.4 + ROW / 2.0,
+        ROW,
+        Json::Null,
     );
     b.add(
         "window.close",
@@ -895,7 +894,17 @@ mod tests {
             right(&rect(&s, "nav.profiles")),
             "top band",
         );
-        equal(rect(&s, "display").y, rect(&s, "test").y, "top band");
+        // Close and Test share a key column flush with the display's top and bottom.
+        equal(
+            rect(&s, "test").y - rect(&s, "test").height / 2.0,
+            rect(&s, "display").y - rect(&s, "display").height / 2.0,
+            "bottom edge",
+        );
+        equal(
+            left(&rect(&s, "test")),
+            left(&rect(&s, "window.close")),
+            "key column",
+        );
         equal(
             rect(&s, "display").y + rect(&s, "display").height / 2.0,
             rect(&s, "window.close").y + rect(&s, "window.close").height / 2.0,

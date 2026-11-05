@@ -33,14 +33,20 @@ pub(super) fn layout(text: &str, matrix: &Matrix) -> Option<Grid> {
     if text.chars().any(|ch| ch != '\n' && !font.contains_key(&ch)) {
         return None;
     }
-    let mut cells = vec![[0; 8]; (matrix.cols * matrix.rows) as usize];
-    let lines: Vec<_> = text
+    let (cols, rows) = (matrix.cols as usize, matrix.rows as usize);
+    let mut cells = vec![[0; 8]; cols * rows];
+    let lines: Vec<Vec<char>> = text
         .split('\n')
-        .flat_map(|paragraph| wrap(paragraph, matrix.cols as usize))
+        .flat_map(|paragraph| wrap(paragraph, cols))
+        .map(trim)
         .collect();
-    for (row, line) in lines.iter().take(matrix.rows as usize).enumerate() {
-        for (col, ch) in line.iter().enumerate() {
-            cells[row * matrix.cols as usize + col] = font[ch];
+    // Every display centres its text: each line across, the block of lines down.
+    let shown = lines.len().min(rows);
+    let first = (rows - shown) / 2;
+    for (i, line) in lines.iter().take(rows).enumerate() {
+        let offset = (cols - line.len().min(cols)) / 2;
+        for (col, ch) in line.iter().take(cols).enumerate() {
+            cells[(first + i) * cols + offset + col] = font[ch];
         }
     }
     let clipped = lines.len() > matrix.rows as usize;
@@ -48,6 +54,15 @@ pub(super) fn layout(text: &str, matrix: &Matrix) -> Option<Grid> {
         *cells.last_mut().expect("validated nonempty matrix") = font[&'…'];
     }
     Some(Grid { cells, clipped })
+}
+
+fn trim(mut line: Vec<char>) -> Vec<char> {
+    while line.last() == Some(&' ') {
+        line.pop();
+    }
+    let lead = line.iter().take_while(|c| **c == ' ').count();
+    line.drain(..lead);
+    line
 }
 
 fn wrap(text: &str, cols: usize) -> Vec<Vec<char>> {
@@ -108,12 +123,17 @@ mod tests {
         let text = "Right Option";
         let grid = layout(text, &m).unwrap();
         assert_eq!(grid.cells.len(), 16);
-        assert_eq!(grid.cells[8], glyphs()[&'O']);
+        // "Right" / "Option", each centred in 8 columns.
+        assert_eq!(grid.cells[1], glyphs()[&'R']);
+        assert_eq!(grid.cells[9], glyphs()[&'O']);
         assert!(!grid.clipped);
         let long = layout("right_ctrl+shift+alt+f12", &m).unwrap();
         assert!(long.clipped);
         assert_eq!(long.cells[15], glyphs()[&'…']);
-        assert_eq!(layout("A\nB", &m).unwrap().cells[8], glyphs()[&'B']);
+        assert_eq!(layout("A\nB", &m).unwrap().cells[11], glyphs()[&'B']);
+        // A single line sits on the middle row of a three-row display.
+        let three = matrix(5, 3);
+        assert_eq!(layout("Hi", &three).unwrap().cells[5 + 1], glyphs()[&'H']);
         assert_eq!(text, "Right Option");
         // Device names use typographic apostrophes and accents; they stay dot matrix.
         for name in ["Tommy’s iPhone", "Jürgen’s AirPods", "Café Mic", "“Studio”"] {

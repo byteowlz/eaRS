@@ -5,7 +5,7 @@ use device_render_wgpu::RenderFrame;
 use device_scene::ValidatedSnapshot;
 use gpui::{RenderImage, Window};
 use std::sync::Arc;
-pub use view::{DeviceView, Hover};
+pub use view::{DeviceView, Hover, Icon};
 pub use worker::{Completed, RenderWorker};
 
 /// Image and semantic projection are installed together, never from separate generations.

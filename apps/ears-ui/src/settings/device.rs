@@ -165,6 +165,7 @@ impl NativeSettings {
                 cx,
             );
             view.set_control_font("brand", "Geo".into());
+            view.set_control_icon("test", std::rc::Rc::new(mic_icon));
             view
         });
         cx.subscribe_in(&device, window, |this, _, action: &Action, window, cx| {
@@ -352,7 +353,8 @@ impl NativeSettings {
                         "display",
                         scene::display_text(&message, cols, rows, newest),
                     );
-                    scene::switch(s, "test", test_on);
+                    // The microphone glows while a test runs; the label is the accessible name.
+                    scene::label(s, "test", if test_on { "Stop test" } else { "Test" });
                     pages.write(s);
                     for tab in Tab::ALL {
                         scene::switch(s, &format!("nav.{}", page_id(tab)), tab == page);
@@ -1263,4 +1265,43 @@ impl Render for NativeSettings {
                 )
             })
     }
+}
+
+/// Microphone legend for the Test key: capsule, cradle, stem and base, drawn
+/// natively so it stays crisp. Amber while a test is running.
+fn mic_icon(label: &str, size: f32, ink: u32) -> gpui::AnyElement {
+    use gpui::{px, rgb};
+    let colour = if label == "Stop test" {
+        rgb(0xff9e52)
+    } else {
+        rgb(ink)
+    };
+    let u = (size / 10.0).max(1.0);
+    let line = (u * 1.1).max(1.0);
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .child(
+            div()
+                .w(px(4.0 * u))
+                .h(px(6.4 * u))
+                .rounded(px(2.0 * u))
+                .bg(colour),
+        )
+        .child(
+            div()
+                .mt(px(-2.6 * u))
+                .w(px(7.0 * u))
+                .h(px(4.2 * u))
+                .border_l(px(line))
+                .border_r(px(line))
+                .border_b(px(line))
+                .border_color(colour)
+                .rounded_bl(px(3.5 * u))
+                .rounded_br(px(3.5 * u)),
+        )
+        .child(div().w(px(line)).h(px(1.4 * u)).bg(colour))
+        .child(div().w(px(4.0 * u)).h(px(line)).bg(colour))
+        .into_any_element()
 }

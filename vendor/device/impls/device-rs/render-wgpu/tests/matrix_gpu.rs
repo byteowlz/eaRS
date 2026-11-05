@@ -33,9 +33,12 @@ fn matrix_phosphors_are_gpu_pixels_at_fixed_pitch_in_front_and_angled_views() {
                 device_scene::Value(serde_json::json!("A"));
             let (d, c, _) = s.control(&id).unwrap();
             let m = c.matrix.as_ref().unwrap();
+            // Text is centred: one character lands in the middle cell of the middle row.
+            let cell_x = ((m.cols - 1) / 2 * m.cell_width) as f64 * m.pitch;
+            let cell_y = ((m.rows - 1) / 2 * m.cell_height) as f64 * m.pitch;
             let origin = DVec3::new(
-                d.origin[0] + c.rect.x - c.rect.width / 2.0 + m.padding_x,
-                d.origin[1] + c.rect.y + c.rect.height / 2.0 - m.padding_y,
+                d.origin[0] + c.rect.x - c.rect.width / 2.0 + m.padding_x + cell_x,
+                d.origin[1] + c.rect.y + c.rect.height / 2.0 - m.padding_y - cell_y,
                 d.origin[2] + c.rect.z + 0.025,
             );
             let off = origin + DVec3::new(m.pitch * 0.5, -m.pitch * 0.5, 0.0);

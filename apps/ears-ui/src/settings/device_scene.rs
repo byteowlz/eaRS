@@ -138,7 +138,7 @@ fn lines(text: &str, cols: usize) -> Vec<String> {
     lines
 }
 
-/// Centre a message horizontally and vertically for a fixed-pitch display.
+/// Fit a message to a fixed-pitch display's capacity (the display centres it).
 /// Long help keeps its start; a streamed transcript keeps its newest words.
 pub(super) fn display_text(text: &str, cols: usize, rows: usize, newest: bool) -> String {
     let mut all = lines(text, cols);
@@ -153,13 +153,8 @@ pub(super) fn display_text(text: &str, cols: usize, rows: usize, newest: bool) -
             *last = format!("{keep}…");
         }
     }
-    let blank = (rows - all.len()) / 2;
-    let mut out: Vec<String> = vec![String::new(); blank];
-    for line in all {
-        let pad = (cols - line.chars().count().min(cols)) / 2;
-        out.push(format!("{}{line}", " ".repeat(pad)));
-    }
-    out.join("\n")
+    // Lines only; the display itself centres them across and down.
+    all.join("\n")
 }
 
 /// Phase semantics belong to the app adapter, not just schema validation.
@@ -196,8 +191,7 @@ mod tests {
     }
     #[test]
     fn display_text_centres_and_streams_newest_words() {
-        let centred = display_text("Ready", 11, 3, false);
-        assert_eq!(centred, "\n   Ready");
+        assert_eq!(display_text("Ready", 11, 3, false), "Ready");
         let help = display_text("one two three four five six seven", 9, 2, false);
         assert_eq!(help.lines().count(), 2);
         assert!(help.ends_with('…'));

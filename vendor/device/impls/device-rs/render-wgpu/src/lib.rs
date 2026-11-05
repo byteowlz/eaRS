@@ -209,8 +209,8 @@ impl OffscreenRenderer {
                 depth_compare: Some(wgpu::CompareFunction::LessEqual),
                 stencil: Default::default(),
                 bias: wgpu::DepthBiasState {
-                    constant: 2,
-                    slope_scale: 2.5,
+                    constant: 6,
+                    slope_scale: 4.0,
                     clamp: 0.0,
                 },
             }),

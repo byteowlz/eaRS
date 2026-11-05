@@ -632,19 +632,14 @@ impl PagesView {
             let id = format!("dict.entry.{i}");
             match self.entries.get(self.dict_page * DICT_ROWS + i) {
                 Some((write, heard)) => {
-                    scene::text(s, &id, format!("{write} = {}", heard.join(", ")));
+                    scene::text(s, &format!("{id}.write"), write.clone());
+                    scene::text(s, &id, heard.join(", "));
                     scene::enable(s, &format!("{id}.remove"), true);
                 }
                 None => {
-                    scene::text(
-                        s,
-                        &id,
-                        if i == 0 && self.entries.is_empty() {
-                            "No entries yet"
-                        } else {
-                            ""
-                        },
-                    );
+                    let empty = i == 0 && self.entries.is_empty();
+                    scene::text(s, &format!("{id}.write"), "");
+                    scene::text(s, &id, if empty { "No entries yet" } else { "" });
                     scene::enable(s, &format!("{id}.remove"), false);
                 }
             }

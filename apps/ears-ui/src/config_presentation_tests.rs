@@ -16,8 +16,10 @@ fn surfaces_remain_independent_in_every_content_and_compact_state() {
         assert!(ui.overlay.black_surface(true, true));
         ui.overlay.appearance = OverlayAppearance::Black;
         assert!(ui.overlay.black_surface(false, false));
-        assert!(!ui.overlay.black_surface(false, true));
+        // Black applies to the collapsed pill too.
+        assert!(ui.overlay.black_surface(false, true));
         assert!(ui.overlay.black_surface(true, false));
+        assert!(ui.overlay.black_surface(true, true));
     }
     let ui: UiConfig =
         toml::from_str("[overlay]\ntranscript='word'\nword_width=260.0\nword_size=14.0\n").unwrap();

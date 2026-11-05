@@ -166,8 +166,10 @@ pub struct OverlayConfig {
 }
 
 impl OverlayConfig {
-    pub fn black_surface(&self, hardware_notch: bool, compact: bool) -> bool {
-        hardware_notch || (self.appearance == OverlayAppearance::Black && !compact)
+    /// Hardware notches are always black; Black mode paints every pill, including
+    /// the compact one. `compact` no longer overrides the chosen appearance.
+    pub fn black_surface(&self, hardware_notch: bool, _compact: bool) -> bool {
+        hardware_notch || self.appearance == OverlayAppearance::Black
     }
 
     pub fn motion_enabled(&self, reduce_motion: bool) -> bool {

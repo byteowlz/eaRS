@@ -56,16 +56,71 @@ impl Column<'_> {
         self.b
             .add(id, module, "readout", help, help, full, y, ROW, json!(""));
     }
-    /// A list entry: wide display plus a key at the column edge.
-    fn list_row(&mut self, id: &str, key: &str, key_help: &str) {
-        let y = self.next_row();
-        let (full, module) = (self.full, self.module);
-        let display = Span {
-            right: full.right - SIDE_KEY - INNER,
-            ..full
+    /// Column headings over a two-display list: left over the narrow display.
+    fn list_headings(&mut self, left: (&str, &str), right: (&str, &str)) {
+        let top = self.slot();
+        let y = top - 0.8 - HEADING / 2.0;
+        let (narrow, wide) = self.split();
+        let module = self.module;
+        self.b.add(
+            left.0,
+            module,
+            "heading",
+            left.1,
+            left.1,
+            narrow,
+            y,
+            HEADING,
+            json!(left.1),
+        );
+        self.b.add(
+            right.0,
+            module,
+            "heading",
+            right.1,
+            right.1,
+            wide,
+            y,
+            HEADING,
+            json!(right.1),
+        );
+    }
+    /// Narrow (one third) and wide displays left of a row key.
+    fn split(&self) -> (Span, Span) {
+        let row = Span {
+            right: self.full.right - SIDE_KEY - INNER,
+            ..self.full
         };
+        let narrow = Span {
+            right: row.left + (row.width() - GAP) / 3.0,
+            ..row
+        };
+        (
+            narrow,
+            Span {
+                left: narrow.right + GAP,
+                ..row
+            },
+        )
+    }
+    /// A two-column list entry: narrow and wide displays, then a key at the edge.
+    fn pair_row(&mut self, id: &str, key: &str, key_help: &str) {
+        let y = self.next_row();
+        let (narrow, wide) = self.split();
+        let (full, module) = (self.full, self.module);
+        self.b.add(
+            &format!("{id}.write"),
+            module,
+            "readout",
+            "",
+            "",
+            narrow,
+            y,
+            ROW,
+            json!(""),
+        );
         self.b
-            .add(id, module, "readout", "", "", display, y, ROW, json!(""));
+            .add(id, module, "readout", "", "", wide, y, ROW, json!(""));
         self.b.add(
             &format!("{id}.remove"),
             module,
@@ -229,7 +284,7 @@ pub(super) fn overlay(b: &mut Builder, left: Span, right: Span, top: f64) {
         c.stepper(
             "ov.pill",
             "Pill",
-            "Pill look. Hardware notches stay black.",
+            "Applies to every pill, collapsed or expanded. Hardware notches stay black.",
             ("◀", "▶"),
         );
         c.stepper(
@@ -306,9 +361,12 @@ pub(super) fn dictionaries(b: &mut Builder, left: Span, right: Span, top: f64) {
     }
     {
         let mut c = Column::new(b, "ears.right", right, top);
-        c.heading("dict.head.entries", "ENTRIES");
+        c.list_headings(
+            ("dict.head.write", "WRITE"),
+            ("dict.head.heard", "HEARD AS"),
+        );
         for i in 0..DICT_ROWS {
-            c.list_row(&format!("dict.entry.{i}"), "×", "Remove this entry");
+            c.pair_row(&format!("dict.entry.{i}"), "×", "Remove this entry");
         }
         c.pager("dict.page");
     }
