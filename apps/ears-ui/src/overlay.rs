@@ -1856,7 +1856,8 @@ pub(crate) fn wave_columns(levels: &[u8], columns: usize, max_dots: usize) -> Ve
         out[columns - 1 - index] = wave_dots(*level, max_dots);
     }
     if levels.is_empty() {
-        out[columns - 1] = 1;
+        // Idle is a flat baseline across the display, not one stray dot.
+        out.fill(1);
     }
     let _ = start;
     out
@@ -1930,7 +1931,7 @@ mod wave_tests {
         let short = wave_columns(&[255], 4, 7);
         assert_eq!(short, vec![0, 0, 0, 7]);
         let empty = wave_columns(&[], 4, 7);
-        assert_eq!(empty, vec![0, 0, 0, 1], "idle shows the baseline dot");
+        assert_eq!(empty, vec![1, 1, 1, 1], "idle is a flat baseline, not one dot");
         // More history than columns keeps the newest and ignores the rest.
         assert_eq!(wave_columns(&[9; 40], 4, 7), vec![1; 4]);
     }
