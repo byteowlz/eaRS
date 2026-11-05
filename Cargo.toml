@@ -82,8 +82,10 @@ ctrlc = { version = "3.4", features = ["termination"] }
 # The old `0.17` pin (a) could never unify with candle's 0.19 so both got
 # compiled, and (b) only knows up to CUDA 13.0, so `--features nvidia` failed
 # on newer toolkits (e.g. CUDA 13.3) with "Unsupported cuda toolkit version".
-# 0.19.4 caps at 13.2; 0.19.9 is the first that recognizes 13.3.
-cudarc = { version = "0.19.9", optional = true, features = ["cuda-version-from-build-system"] }
+# 0.19.4 caps at 13.2; 0.19.9 first recognizes 13.3; 0.19.10 adds CUDA 13.4,
+# which an up-to-date Arch toolkit reports ("Unsupported cuda toolkit version: 13.4"
+# came from the build script of 0.19.9). Bump this when a toolkit outruns it.
+cudarc = { version = "0.19.10", optional = true, features = ["cuda-version-from-build-system"] }
 notifica = "3.0.2"
 regex = "1.10"
 arboard = { version = "3.6", default-features = false }
