@@ -31,7 +31,8 @@ impl Tab {
 impl SettingsView {
     pub(super) fn select_tab(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
         self.tab = tab;
-        self.native_active = tab == Tab::Dictation && self.native.is_some();
+        // The device shows every tab; the earlier panes are only a renderer fallback.
+        self.native_active = self.native.is_some();
         if self.native_active
             && let Some(native) = &self.native
         {

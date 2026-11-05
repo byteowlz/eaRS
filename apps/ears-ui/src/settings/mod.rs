@@ -378,7 +378,7 @@ impl SettingsView {
         let microphone = cx.new(|cx| microphone::MicrophonePicker::new(model.clone(), cx));
         let tab = model.read(cx).settings_tab;
         let native = device::attach(model.clone(), window, cx);
-        let native_active = native.is_some() && tab == Tab::Dictation;
+        let native_active = native.is_some();
         Self {
             model,
             focus_handle: cx.focus_handle(),

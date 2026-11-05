@@ -133,8 +133,12 @@ const LABEL_WIDTH: f64 = 10.4;
 const SIDE_KEY: f64 = 2.4;
 const SWITCH_KEY: f64 = 6.0;
 const EDGE: f64 = 30.4;
-const HEIGHT: f64 = 46.0;
-const SLOTS: usize = 11;
+const HEIGHT: f64 = 48.4;
+const SLOTS: usize = 12;
+
+#[path = "device_layout_pages.rs"]
+mod pages;
+pub(super) use pages::{DICT_ROWS, PROFILE_ROWS};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Span {
@@ -186,6 +190,8 @@ fn rows_for(height: f64) -> u32 {
 struct Builder {
     controls: Vec<Json>,
     states: serde_json::Map<String, Json>,
+    /// Page the next controls belong to; `*` is the shared top band.
+    page: &'static str,
 }
 impl Builder {
     #[allow(clippy::too_many_arguments)]
@@ -211,7 +217,7 @@ impl Builder {
             "legend" | "heading" => "readout",
             other => other,
         };
-        let mut control = json!({"id":id,"module_id":module,"page":"*","kind":kind_name,
+        let mut control = json!({"id":id,"module_id":module,"page":self.page,"kind":kind_name,
             "rect":{"x":(span.left+span.right)/2.0,"y":y,"z":0.8,"width":span.width(),"height":height,"depth":0.15},
             "material":material,"label":label,"accessible_name":label,"description":help,
             "tab_index":-1,"action":id,"presentation":presentation});
@@ -481,7 +487,7 @@ fn build() -> Snapshot {
     let scene = &mut base["scene"];
     scene["id"] = json!("ears.settings.receiver");
     scene["camera"] = json!({"projection":"perspective","fov_y_deg":25,"yaw_deg":0,
-        "pitch_deg":0,"target":[0,-0.5,-2],"distance":118});
+        "pitch_deg":0,"target":[0,-0.5,-2],"distance":124});
     scene["materials"]["module"] = json!({"base":"#272b30","ink":"#d4d7dc","emissive":"#000000",
         "roughness":0.62,"metalness":0.45,"finish":"brushed"});
     scene["materials"]["caption"] = json!({"base":"#272b30","ink":"#aab0b8","emissive":"#000000",
@@ -503,6 +509,7 @@ fn build() -> Snapshot {
     let mut b = Builder {
         controls: Vec::new(),
         states: Default::default(),
+        page: "*",
     };
 
     let left_full = Span {
@@ -587,6 +594,7 @@ fn build() -> Snapshot {
         );
     }
 
+    b.page = PAGE;
     {
         let mut c = Column::new(&mut b, "ears.left", left_full, column_top);
         c.heading("head.mic", "MICROPHONE");
@@ -679,6 +687,10 @@ fn build() -> Snapshot {
             "Connect to the chosen server (restarts dictation)",
         );
     }
+    pages::overlay(&mut b, left_full, right_full, column_top);
+    pages::dictionaries(&mut b, left_full, right_full, column_top);
+    pages::profiles(&mut b, left_full, right_full, column_top);
+    b.page = "*";
     b.add(
         "brand",
         "ears.front",
@@ -756,7 +768,14 @@ mod tests {
             !ids.iter().any(|id| id.starts_with("dictation.")),
             "no second navigation level"
         );
-        assert!(s.scene.devices[0].controls.iter().all(|c| c.page == "*"));
+        for c in &s.scene.devices[0].controls {
+            assert!(
+                ["*", "dictation", "overlay", "dictionaries", "profiles"]
+                    .contains(&c.page.as_str()),
+                "{}",
+                c.id
+            );
+        }
     }
     #[test]
     fn columns_rows_and_compound_controls_share_edges() {
@@ -939,6 +958,9 @@ mod tests {
         );
         for (i, a) in d.controls.iter().enumerate() {
             for b in &d.controls[i + 1..] {
+                if a.page != b.page && a.page != "*" && b.page != "*" {
+                    continue;
+                }
                 let x = (a.rect.x - b.rect.x).abs() - (a.rect.width + b.rect.width) / 2.0;
                 let y = (a.rect.y - b.rect.y).abs() - (a.rect.height + b.rect.height) / 2.0;
                 assert!(

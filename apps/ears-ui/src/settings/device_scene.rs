@@ -31,6 +31,12 @@ pub(super) fn choices(s: &mut Snapshot, id: &str, labels: &[String], current: us
     }
     text(s, id, format!("choice-{current}"));
 }
+/// Show or hide a list key; hidden keys are not drawn, focused or clickable.
+pub(super) fn show(s: &mut Snapshot, id: &str, visible: bool) {
+    let control = state(s, id);
+    control.visible = visible;
+    control.enabled = visible;
+}
 /// Keep a key in its grid place but make it unavailable (dimmed, unfocusable).
 pub(super) fn enable(s: &mut Snapshot, id: &str, enabled: bool) {
     let control = state(s, id);

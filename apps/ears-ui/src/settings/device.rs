@@ -43,6 +43,19 @@ const KEY_MODES: [(DictationHotkeyMode, &str); 3] = [
     (DictationHotkeyMode::Hybrid, "Hybrid"),
 ];
 const MESSAGE_FOR: Duration = Duration::from_secs(5);
+
+#[path = "device_pages.rs"]
+mod pages;
+use super::device_layout::{DICT_ROWS, PROFILE_ROWS};
+
+fn page_id(tab: Tab) -> &'static str {
+    match tab {
+        Tab::Dictation => "dictation",
+        Tab::Overlay => "overlay",
+        Tab::Dictionaries => "dictionaries",
+        Tab::Profiles => "profiles",
+    }
+}
 const PREVIEW_WORDS: &str = "This is a synthetic preview of how test words stream into the display";
 
 /// Requests the Settings host owns (navigation, live config edits, server restart).
@@ -67,7 +80,7 @@ pub(super) fn attach(
         window,
         |this, native, request: &Request, window, cx| match request {
             Request::Navigate(tab) => {
-                this.navigation_focus.focus(window);
+                // Keep the host's tab (and the remembered tab) in step with the device.
                 this.select_tab(*tab, window, cx);
             }
             Request::Live(setting, value) => {
@@ -118,6 +131,13 @@ pub(super) struct NativeSettings {
     test: TestCapture,
     pending_live: Option<&'static str>,
     editor: Option<super::layout_editor::LayoutEditor>,
+    page: Tab,
+    text: std::collections::BTreeMap<&'static str, Entity<crate::ui::text_input::TextInput>>,
+    dict_page: usize,
+    prof_page: usize,
+    dict_entries: Vec<(String, Vec<String>)>,
+    dict_file: Option<String>,
+    profile: pages::ProfileEdit,
 }
 impl EventEmitter<Request> for NativeSettings {}
 
@@ -131,6 +151,9 @@ impl NativeSettings {
             eprintln!("ears-ui: device fonts: {error:#}");
         }
         let mut snapshot = scene::initial();
+        let page = model.read(cx).settings_tab;
+        snapshot.state.active_page = page_id(page).into();
+        let text = Self::create_text_fields(cx);
         let editor = super::layout_editor::requested()
             .then(|| super::layout_editor::LayoutEditor::new(&mut snapshot));
         let device = cx.new(|cx| {
@@ -184,7 +207,15 @@ impl NativeSettings {
             test: TestCapture::default(),
             pending_live: None,
             editor,
+            page,
+            text,
+            dict_page: 0,
+            prof_page: 0,
+            dict_entries: Vec::new(),
+            dict_file: None,
+            profile: Default::default(),
         };
+        this.reload_entries(cx);
         this.refresh_inputs(cx);
         this
     }
@@ -302,6 +333,8 @@ impl NativeSettings {
         let listening = self.listening;
         let test_on = self.test.active;
         let editing = self.editor.as_ref().is_some_and(|e| e.active);
+        let pages = self.pages_view(cx);
+        let page = self.page;
         let (mic_choices, mic_active) = self.mic_choices(&model);
         let mic_labels: Vec<String> = mic_choices.iter().map(|c| c.label.clone()).collect();
         let mic_shown = self
@@ -320,6 +353,10 @@ impl NativeSettings {
                         scene::display_text(&message, cols, rows, newest),
                     );
                     scene::switch(s, "test", test_on);
+                    pages.write(s);
+                    for tab in Tab::ALL {
+                        scene::switch(s, &format!("nav.{}", page_id(tab)), tab == page);
+                    }
                     scene::choices(s, "mic", &mic_labels, mic_shown);
                     scene::enable(s, "mic.prev", mic_labels.len() > 1);
                     scene::enable(s, "mic.next", mic_labels.len() > 1);
@@ -448,6 +485,9 @@ impl NativeSettings {
             );
             return;
         }
+        if self.page_action(id, cx) {
+            return;
+        }
         match id {
             "mic.prev" => return self.step_mic(MicStep::By(-1), cx),
             "mic.next" => return self.step_mic(MicStep::By(1), cx),
@@ -477,10 +517,10 @@ impl NativeSettings {
                 self.stop_listening(cx);
                 window.remove_window();
             }
-            "nav.dictation" => self.sync(cx),
-            "nav.overlay" => cx.emit(Request::Navigate(Tab::Overlay)),
-            "nav.dictionaries" => cx.emit(Request::Navigate(Tab::Dictionaries)),
-            "nav.profiles" => cx.emit(Request::Navigate(Tab::Profiles)),
+            "nav.dictation" => self.set_page(Tab::Dictation, cx),
+            "nav.overlay" => self.set_page(Tab::Overlay, cx),
+            "nav.dictionaries" => self.set_page(Tab::Dictionaries, cx),
+            "nav.profiles" => self.set_page(Tab::Profiles, cx),
             "test" => self.toggle_test(cx),
             "shortcut.defaults" => {
                 let mut config = self.model.read(cx).core.hotkeys.clone();
@@ -854,6 +894,18 @@ impl NativeSettings {
         };
         self.say(message, cx);
     }
+    fn set_page(&mut self, tab: Tab, cx: &mut Context<Self>) {
+        self.page = tab;
+        self.help = None;
+        if tab == Tab::Dictionaries {
+            self.reload_entries(cx);
+        }
+        self.device.update(cx, |view, cx| {
+            view.edit_snapshot(|s| s.state.active_page = page_id(tab).into(), cx)
+        });
+        cx.emit(Request::Navigate(tab));
+        self.sync(cx);
+    }
     /// Copy only geometry from an editor result, so state revisions keep moving forward.
     fn apply_layout(&mut self, next: Snapshot, cx: &mut Context<Self>) {
         self.device.update(cx, |view, cx| {
@@ -1132,6 +1184,7 @@ impl Render for NativeSettings {
             .on_key_down(cx.listener(|this, event, window, cx| this.key(event, window, cx)))
             .on_key_up(cx.listener(|this, _, _, _| this.local_ready = true))
             .child(self.device.clone())
+            .children(self.text_overlays(cx))
             .when_some(self.editor.as_ref(), |root, editor| {
                 let device = self.device.read(cx);
                 let overlay = editor.overlay(device.projection(), device.snapshot());

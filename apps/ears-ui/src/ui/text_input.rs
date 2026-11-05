@@ -154,6 +154,9 @@ pub struct TextInput {
     last_bounds: Option<Bounds<Pixels>>,
     is_selecting: bool,
     mono: bool,
+    /// Device display style: no box of its own; font, size and colour inherit
+    /// from the host (the recessed glass it sits in).
+    bare: bool,
 }
 
 impl EventEmitter<TextInputEvent> for TextInput {}
@@ -171,7 +174,14 @@ impl TextInput {
             last_bounds: None,
             is_selecting: false,
             mono: false,
+            bare: false,
         }
+    }
+
+    /// Builder: render as text inside a host-drawn display (no background or border).
+    pub fn bare(mut self) -> Self {
+        self.bare = true;
+        self
     }
 
     /// Builder: initial content (cursor at the end).
@@ -644,11 +654,18 @@ impl Element for TextElement {
         cx: &mut App,
     ) -> Self::PrepaintState {
         let theme = cx.global::<Theme>();
-        let placeholder_color = theme.roles.muted_foreground;
-        let cursor_color = theme.roles.primary;
-        let selection_color = Theme::alpha(theme.roles.primary, 0.3);
-
         let input = self.input.read(cx);
+        let style_color = window.text_style().color;
+        let (placeholder_color, cursor_color, selection_color) = if input.bare {
+            (style_color.opacity(0.35), style_color, style_color.opacity(0.3))
+        } else {
+            (
+                theme.roles.muted_foreground,
+                theme.roles.primary,
+                Theme::alpha(theme.roles.primary, 0.3),
+            )
+        };
+
         let content = input.content.clone();
         let selected_range = input.selected_range.clone();
         let cursor = input.cursor_offset();
@@ -795,6 +812,7 @@ impl Render for TextInput {
         } else {
             theme.font_sans.clone()
         };
+        let bare = self.bare;
 
         div()
             .flex()
@@ -822,22 +840,27 @@ impl Render for TextInput {
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
-            .bg(theme.roles.input)
-            .border_1()
-            .border_color(border)
-            .when(focused, |this| this.shadow_sm())
-            .rounded(theme.radius.md())
-            .font_family(font)
-            .text_color(theme.roles.foreground)
-            .line_height(px(LINE_HEIGHT))
-            .text_size(px(FONT_MD))
+            .when(!bare, |this| {
+                this.bg(theme.roles.input)
+                    .border_1()
+                    .border_color(border)
+                    .when(focused, |this| this.shadow_sm())
+                    .rounded(theme.radius.md())
+                    .font_family(font)
+                    .text_color(theme.roles.foreground)
+                    .line_height(px(LINE_HEIGHT))
+                    .text_size(px(FONT_MD))
+            })
+            .when(bare, |this| this.size_full().items_center())
             .child(
                 div()
-                    .h(px(LINE_HEIGHT) + theme.space(1.0) * 2.0)
+                    .when(!bare, |this| {
+                        this.h(px(LINE_HEIGHT) + theme.space(1.0) * 2.0)
+                            .px(theme.space(2.0))
+                            .py(theme.space(1.0))
+                    })
                     .w_full()
                     .overflow_hidden()
-                    .px(theme.space(2.0))
-                    .py(theme.space(1.0))
                     .child(TextElement { input: cx.entity() }),
             )
     }
