@@ -56,6 +56,7 @@ impl Engine {
             {
                 continue;
             }
+            self.emit_audio_level(generation, &chunk);
             if let Some(err) = self
                 .auto_pause
                 .runtime
@@ -159,6 +160,23 @@ impl Engine {
 
     /// Own retention, activity scoring and its scalar progress as one observation.
     /// A replay has already passed these observers; it must not advance either clock twice.
+    /// Emit a scalar level for level displays, at most every 20 ms.
+    fn emit_audio_level(&mut self, generation: u64, pcm: &[f32]) {
+        let due = self
+            .last_level_at
+            .is_none_or(|at| at.elapsed() >= Duration::from_millis(20));
+        if !due || pcm.is_empty() {
+            return;
+        }
+        self.last_level_at = Some(Instant::now());
+        let (peak, rms) = audio_level(pcm);
+        self.shared.emit(DictationEvent::AudioLevel {
+            capture_generation: generation,
+            peak,
+            rms,
+        });
+    }
+
     fn observe_capture(
         &mut self,
         chunk: &[f32],
@@ -327,5 +345,41 @@ impl Engine {
         }
         eprintln!("auto-pause: local capture paused; ordered ASR finalization pending");
         Ok(None)
+    }
+}
+
+/// Peak and RMS of a PCM chunk as 0-255 bytes. Quiet input stays quiet; no
+/// gain, limiter or noise gate is applied, so the display shows what the
+/// engine actually hears.
+pub(crate) fn audio_level(pcm: &[f32]) -> (u8, u8) {
+    let mut peak = 0.0_f32;
+    let mut sum = 0.0_f64;
+    for sample in pcm {
+        let value = if sample.is_finite() { *sample } else { 0.0 };
+        peak = peak.max(value.abs());
+        sum += f64::from(value) * f64::from(value);
+    }
+    let rms = (sum / pcm.len() as f64).sqrt() as f32;
+    let byte = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+    (byte(peak), byte(rms))
+}
+
+#[cfg(test)]
+mod level_tests {
+    use super::audio_level;
+
+    #[test]
+    fn levels_are_scaled_without_gain_or_gating() {
+        assert_eq!(audio_level(&[]), (0, 0), "empty chunk is silent, not NaN");
+        assert_eq!(audio_level(&[0.0; 8]), (0, 0));
+        assert_eq!(audio_level(&[1.0, -1.0]), (255, 255));
+        // NaN counts as silence: the peak comes from the finite sample and the
+        // RMS is averaged over both.
+        let (peak, rms) = audio_level(&[f32::NAN, 0.5]);
+        assert_eq!((peak, rms), (128, 90));
+        // A quiet signal stays quiet: no implicit gain.
+        let (peak, rms) = audio_level(&[0.05, -0.05]);
+        assert_eq!(peak, 13);
+        assert!(rms <= peak, "RMS never exceeds peak");
     }
 }

@@ -227,6 +227,8 @@ struct Engine {
     ping_sent: Arc<Mutex<Option<Instant>>>,
     /// Opt-in utterance audio retention; `None` when disabled.
     history: Option<AudioHistory>,
+    /// Last scalar level emission, for the ~50 Hz display throttle.
+    last_level_at: Option<Instant>,
     /// The running microphone stream; dropped (stopped) with the engine.
     input: Arc<input::InputSlot>,
 }
@@ -388,6 +390,7 @@ pub(crate) async fn run(
         secure_input_reader: crate::frontmost::secure_input_protects,
         auto_pause,
         history,
+        last_level_at: None,
         input,
         router: {
             let mut router = Router::new(config.voice_commands.mode);
@@ -1633,6 +1636,7 @@ mod tests {
             just_finished: false,
             ping_sent: Arc::new(Mutex::new(None)),
             history: None,
+            last_level_at: None,
             input: Arc::new(input::InputSlot::detached()),
             config,
             options: DictationOptions::default(),
@@ -1713,6 +1717,7 @@ mod tests {
             just_finished: false,
             ping_sent: Arc::new(Mutex::new(None)),
             history: None,
+            last_level_at: None,
             input: Arc::new(input::InputSlot::detached()),
             config,
             options: DictationOptions::default(),
@@ -1885,6 +1890,7 @@ mod tests {
             just_finished: false,
             ping_sent: Arc::new(Mutex::new(None)),
             history,
+            last_level_at: None,
             input: Arc::new(input::InputSlot::detached()),
             config,
             options: DictationOptions::default(),

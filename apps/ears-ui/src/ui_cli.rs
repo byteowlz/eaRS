@@ -42,6 +42,7 @@ const OPTIONS: &[&str] = &[
     "--preview-oqtopus",
     "--preview-parametric-override",
     "--preview-parametric",
+    "--preview-waveform",
     "--preview-parametric-reduced",
     "--preview-floating",
     "--preview-click",

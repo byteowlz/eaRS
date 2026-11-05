@@ -38,7 +38,7 @@ use runtime::Runtime;
 
 fn print_help() {
     println!(
-        "ears-ui {}\n\nUsage: ears-ui [--settings] [--no-overlay] [--oqtopus-check] [--preview-synthetic|--preview-synthetic-expanded|--preview-placement|--preview-click|--preview-settings|--preview-floating|--preview-oqtopus|--preview-oqtopus-reduced|--preview-parametric|--preview-parametric-reduced|--preview-parametric-override] [--help]\n\n  --settings           open the settings window at launch\n  --setup              configure without starting the engine until Apply\n  --build-info         read-only compiled capabilities JSON\n  --input-devices      input-device metadata JSON; no recording\n  --linux-window-rules  Hyprland rules for the island and Settings; print only\n  --no-overlay         start with the floating island disabled\n  --preview-synthetic  display a synthetic notch fixture without starting dictation\n  --preview-synthetic-expanded  show the expanded synthetic fixture\n  --preview-placement  show a synthetic fixture at the actual screen anchor\n  --preview-click     show a clickable placement fixture without dictation\n  --preview-hit-test  show a centered clickable synthetic notch for native input tests\n  --preview-settings   show settings with synthetic state, without dictation\n  --preview-floating   show a synthetic bottom-anchored floating pill\n  --preview-word       synthetic fixed-width latest-word fixture (no dictation)\n  --preview-black / --preview-compact  synthetic skin/compact state\n  --preview-layout-report  synthetic numeric layout evidence, never text/pixels\n  --preview-settings-minimum / --preview-settings-light / --preview-settings-wide  synthetic layout variants\n  --preview-settings-appearance  synthetic Overlay tab scrolled to Appearance\n  --preview-settings-voice  synthetic Dictation tab scrolled to auto-pause and wake sliders\n  --preview-settings-mic-empty / --preview-settings-mic-missing  synthetic microphone states\n  --preview-subtitle   add synthetic passive subtitles\n  --preview-cursor     add a synthetic pointer-anchored bubble\n  --preview-recording-notch / --preview-recording-notch-active  passive recording silhouette fixtures; no engine\n  --preview-departure / --preview-jetbrains  synthetic overlay font choice\n  --overlay-config     print current overlay settings as JSON, no engine\n  --overlay-schema     print the ui.toml JSON schema, no engine\n  --oqtopus-check     validate the configured local vector pack without dictation\n  --preview-oqtopus   show the local Oqtopus pack without dictation\n  --preview-oqtopus-reduced   show its static reduced-motion rest frame\n  --preview-parametric-override  animate a synthetic icon despite reduced motion\n  --preview-parametric  show animated parametric bars in a synthetic notch\n  --preview-parametric-reduced  show the same fixture with reduced motion\n  --version            print the version\n\nConfig: {}",
+        "ears-ui {}\n\nUsage: ears-ui [--settings] [--no-overlay] [--oqtopus-check] [--preview-synthetic|--preview-synthetic-expanded|--preview-placement|--preview-click|--preview-settings|--preview-floating|--preview-oqtopus|--preview-oqtopus-reduced|--preview-parametric|--preview-parametric-reduced|--preview-parametric-override] [--help]\n\n  --settings           open the settings window at launch\n  --setup              configure without starting the engine until Apply\n  --build-info         read-only compiled capabilities JSON\n  --input-devices      input-device metadata JSON; no recording\n  --linux-window-rules  Hyprland rules for the island and Settings; print only\n  --no-overlay         start with the floating island disabled\n  --preview-synthetic  display a synthetic notch fixture without starting dictation\n  --preview-synthetic-expanded  show the expanded synthetic fixture\n  --preview-placement  show a synthetic fixture at the actual screen anchor\n  --preview-click     show a clickable placement fixture without dictation\n  --preview-hit-test  show a centered clickable synthetic notch for native input tests\n  --preview-settings   show settings with synthetic state, without dictation\n  --preview-floating   show a synthetic bottom-anchored floating pill\n  --preview-word       synthetic fixed-width latest-word fixture (no dictation)\n  --preview-black / --preview-compact  synthetic skin/compact state\n  --preview-layout-report  synthetic numeric layout evidence, never text/pixels\n  --preview-settings-minimum / --preview-settings-light / --preview-settings-wide  synthetic layout variants\n  --preview-settings-appearance  synthetic Overlay tab scrolled to Appearance\n  --preview-settings-voice  synthetic Dictation tab scrolled to auto-pause and wake sliders\n  --preview-waveform   synthetic dot-matrix level waveform; no engine\n  --preview-settings-mic-empty / --preview-settings-mic-missing  synthetic microphone states\n  --preview-subtitle   add synthetic passive subtitles\n  --preview-cursor     add a synthetic pointer-anchored bubble\n  --preview-recording-notch / --preview-recording-notch-active  passive recording silhouette fixtures; no engine\n  --preview-departure / --preview-jetbrains  synthetic overlay font choice\n  --overlay-config     print current overlay settings as JSON, no engine\n  --overlay-schema     print the ui.toml JSON schema, no engine\n  --oqtopus-check     validate the configured local vector pack without dictation\n  --preview-oqtopus   show the local Oqtopus pack without dictation\n  --preview-oqtopus-reduced   show its static reduced-motion rest frame\n  --preview-parametric-override  animate a synthetic icon despite reduced motion\n  --preview-parametric  show animated parametric bars in a synthetic notch\n  --preview-parametric-reduced  show the same fixture with reduced motion\n  --version            print the version\n\nConfig: {}",
         env!("CARGO_PKG_VERSION"),
         UiConfig::path().display()
     );
@@ -52,6 +52,7 @@ struct PreviewOptions {
     floating: bool,
     motion_override: bool,
     oqtopus: bool,
+    waveform: bool,
     clickable: bool,
     transcript: config::TranscriptStyle,
     preview: config::PreviewPlacement,
@@ -74,6 +75,9 @@ fn preview_ui(options: &PreviewOptions) -> UiConfig {
     ui.overlay.preview = options.preview;
     ui.overlay.font = options.font;
     ui.overlay.appearance = options.appearance;
+    if options.waveform {
+        ui.overlay.indicator = config::IndicatorStyle::Waveform;
+    }
     ui.overlay.show_details = options.expanded;
     ui.overlay.recording_notch = options.recording_notch;
     ui.overlay.animation = options.parametric || options.oqtopus;
@@ -120,6 +124,7 @@ fn preview_synthetic(options: PreviewOptions) {
         open_synthetic_overlay(&options, model.clone(), cx);
         if options.transcript == config::TranscriptStyle::Word
             || options.preview != config::PreviewPlacement::Inline
+            || options.waveform
         {
             animate_preview(model, cx);
         }
@@ -150,6 +155,13 @@ fn preview_step(model: &mut AppModel, step: u32) {
         "Quietly", "keep", "each", "word", "clear", "and", "leave", "room", "to", "breathe.",
     ];
     let i = (step / 3) as usize;
+    let level = ((step as f32 * 0.7).sin().abs() * 220.0 + 20.0) as u8;
+    model.levels.clear();
+    for n in 0..20u32 {
+        let value = (((step + n) as f32 * 0.55).sin().abs() * 230.0 + 15.0) as u8;
+        model.levels.push_back(value);
+    }
+    let _ = level;
     if i < words.len() {
         model.partial = words[..=i].join(" ");
     }
@@ -309,6 +321,7 @@ fn maybe_preview(args: &[String]) -> bool {
     let expanded = args.iter().any(|a| a == "--preview-synthetic-expanded");
     let oqtopus_reduced = args.iter().any(|a| a == "--preview-oqtopus-reduced");
     let oqtopus = oqtopus_reduced || args.iter().any(|a| a == "--preview-oqtopus");
+    let waveform = args.iter().any(|a| a == "--preview-waveform");
     let motion_override = args.iter().any(|a| a == "--preview-parametric-override");
     let presentation = ui_cli::PresentationArgs::parse(args);
     let animated = motion_override
@@ -329,6 +342,7 @@ fn maybe_preview(args: &[String]) -> bool {
             floating,
             motion_override,
             oqtopus,
+            waveform,
             clickable,
             transcript: presentation.transcript,
             preview: presentation.preview,

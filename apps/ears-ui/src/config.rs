@@ -66,6 +66,8 @@ pub enum IndicatorStyle {
     Ears,
     ParametricEars,
     Oqtopus,
+    /// Dot-matrix level waveform fed by the core's scalar audio envelope.
+    Waveform,
 }
 
 /// Floating appearance is independent of transcript content and hardware geometry.

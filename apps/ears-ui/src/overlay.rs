@@ -92,6 +92,9 @@ const MORPH_MS: u64 = 200;
 const ISLAND_MORPH_MS: u64 = 260;
 const CONTENT_MORPH_MS: u64 = 180;
 const DRAG_THRESHOLD: f32 = 4.0;
+/// Columns in the dot-matrix level waveform (newest at the right).
+pub(crate) const WAVE_LEVELS: usize = 32;
+
 /// Provisional outward throat, shared in shape with LostIsland's host.
 const THROAT: f32 = 12.0;
 
@@ -1292,6 +1295,7 @@ impl Render for IslandView {
         let dormant = compact;
         let indicator_width = match overlay.indicator {
             IndicatorStyle::Oqtopus => 36.0,
+            IndicatorStyle::Waveform => 40.0,
             IndicatorStyle::Ears | IndicatorStyle::ParametricEars => 24.0,
             IndicatorStyle::Dot => DOT_W,
         };
@@ -1495,6 +1499,14 @@ impl Render for IslandView {
                 animate,
             )
             .into_any_element()
+        } else if overlay.indicator == IndicatorStyle::Waveform
+            && content.phase != Phase::Finalizing
+        {
+            if animate {
+                window.request_animation_frame();
+            }
+            let levels: Vec<u8> = self.model.read(cx).levels.iter().copied().collect();
+            wave_mark(&levels, content.text_color, 22.0 * scale)
         } else if overlay.indicator == IndicatorStyle::Ears && content.phase != Phase::Finalizing {
             ears_mark::mark(
                 content.dot,
@@ -1822,4 +1834,104 @@ fn spinner(color: Hsla, animate: bool, scale: f32) -> Div {
         }
     }
     row
+}
+
+// ---------------------------------------------------------------------------
+// Dot-matrix level waveform
+// ---------------------------------------------------------------------------
+
+/// Bar height in dots for one 0-255 level. Silence keeps a single baseline dot,
+/// so the display never collapses to nothing; full scale fills the height.
+pub(crate) fn wave_dots(level: u8, max_dots: usize) -> usize {
+    let max_dots = max_dots.max(1);
+    1 + (usize::from(level) * (max_dots - 1) + 127) / 255
+}
+
+/// Column heights from a level history, oldest first. The newest levels sit at
+/// the right; a short history is right-aligned so the wave grows from the edge.
+pub(crate) fn wave_columns(levels: &[u8], columns: usize, max_dots: usize) -> Vec<usize> {
+    let mut out = vec![0; columns];
+    let start = columns.saturating_sub(levels.len());
+    for (index, level) in levels.iter().rev().take(columns).enumerate() {
+        out[columns - 1 - index] = wave_dots(*level, max_dots);
+    }
+    if levels.is_empty() {
+        out[columns - 1] = 1;
+    }
+    let _ = start;
+    out
+}
+
+/// Draw the waveform as a dot grid: one dot pitch for the whole indicator (as
+/// the greyrot dot-matrix rule requires), mirrored around a centre line, no
+/// curve smoothing — the grid is the display.
+fn wave_mark(levels: &[u8], color: Hsla, size: f32) -> gpui::AnyElement {
+    let columns = 12;
+    let max_dots = 5; // per side; a coarse dot pitch reads at 1x
+    let pitch = size / (max_dots as f32 * 2.0 + 1.0);
+    let dot = (pitch * 0.62).max(1.0);
+    let heights = wave_columns(levels, columns, max_dots);
+    let width = pitch * columns as f32;
+    let centre = size / 2.0;
+    let mut grid = div().relative().w(px(width)).h(px(size)).flex_shrink_0();
+    for (column, dots) in heights.iter().enumerate() {
+        let x = column as f32 * pitch + (pitch - dot) / 2.0;
+        // A bar centred on the baseline: the same dot count above and below.
+        for side in [-1.0_f32, 1.0] {
+            for dot_index in 0..*dots {
+                let y = centre + side * (dot_index as f32) * pitch - dot / 2.0;
+                grid = grid.child(
+                    div()
+                        .absolute()
+                        .left(px(x))
+                        .top(px(y))
+                        .w(px(dot))
+                        .h(px(dot))
+                        .rounded_full()
+                        .bg(if dot_index == 0 {
+                            color
+                        } else {
+                            color.opacity(0.75)
+                        }),
+                );
+            }
+        }
+    }
+    grid.into_any_element()
+}
+
+#[cfg(test)]
+mod wave_tests {
+    use super::*;
+
+    #[test]
+    fn levels_map_to_dot_counts_without_collapsing_to_zero() {
+        assert_eq!(wave_dots(0, 7), 1, "silence keeps a baseline dot");
+        assert_eq!(wave_dots(255, 7), 7);
+        assert!(wave_dots(128, 7) > 1 && wave_dots(128, 7) < 7);
+        assert_eq!(
+            wave_dots(200, 0),
+            1,
+            "degenerate height still shows one dot"
+        );
+        // Monotonic: louder never draws fewer dots.
+        let mut previous = 0;
+        for level in 0..=255 {
+            let dots = wave_dots(level, 7);
+            assert!(dots >= previous);
+            previous = dots;
+        }
+    }
+
+    #[test]
+    fn newest_levels_sit_at_the_right_edge_and_short_history_is_right_aligned() {
+        let columns = wave_columns(&[0, 255], 4, 7);
+        assert_eq!(columns, vec![0, 0, 1, 7], "oldest left, newest right");
+        let short = wave_columns(&[255], 4, 7);
+        assert_eq!(short, vec![0, 0, 0, 7]);
+        let empty = wave_columns(&[], 4, 7);
+        assert_eq!(empty, vec![0, 0, 0, 1], "idle shows the baseline dot");
+        // More history than columns keeps the newest and ignores the rest.
+        assert_eq!(wave_columns(&[9; 40], 4, 7), vec![1; 4]);
+    }
 }

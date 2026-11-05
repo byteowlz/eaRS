@@ -81,6 +81,8 @@ pub struct AppModel {
     pub(crate) settings_tab: crate::settings::Tab,
     /// Latest actual scored capture-clock sample; never extrapolated by wall time.
     pub idle_progress: Option<ears::dictation::AutoPauseProgress>,
+    /// Recent scalar levels for the waveform indicator (newest last).
+    pub levels: std::collections::VecDeque<u8>,
     pub finalizing_since: Option<Instant>,
     pub error: Option<UiError>,
     pub profile: Option<String>,
@@ -135,6 +137,7 @@ impl AppModel {
             preview_status: crate::transcript_preview::PreviewStatus::Inactive,
             settings_tab: crate::settings::Tab::Dictation,
             idle_progress: None,
+            levels: Default::default(),
             finalizing_since: None,
             error: None,
             profile: None,
@@ -257,6 +260,7 @@ impl AppModel {
                 self.state = state;
                 self.idle_progress = None;
                 if state == DictationState::Listening {
+                    self.levels.clear();
                     self.partial.clear();
                     self.speech_active = false;
                     self.finalizing_since = None;
@@ -312,6 +316,20 @@ impl AppModel {
                 }
                 self.partial.clear();
                 self.touch();
+            }
+            DictationEvent::AudioLevel {
+                capture_generation,
+                peak,
+                rms,
+            } => {
+                // Display only: the loudest of peak and RMS keeps quiet speech visible.
+                if self.capture_generation() == Some(capture_generation) && self.is_capturing() {
+                    self.levels.push_back(peak.max(rms));
+                    while self.levels.len() > crate::overlay::WAVE_LEVELS {
+                        self.levels.pop_front();
+                    }
+                    self.touch();
+                }
             }
             DictationEvent::Speech { active } => {
                 self.speech_active = active;

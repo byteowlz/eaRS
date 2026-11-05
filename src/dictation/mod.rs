@@ -224,6 +224,15 @@ pub enum DictationEvent {
     /// A wake detector reported a mapped phrase and dictation was started.
     /// Evidence only: the same effect as the toggle hotkey.
     Wake { phrase: String, score: f32 },
+    /// Scalar audio envelope while capturing: no samples, text or identity.
+    /// Sent at most ~50 times a second, for level displays only.
+    AudioLevel {
+        capture_generation: u64,
+        /// 0-255 scaled absolute peak of the chunk.
+        peak: u8,
+        /// 0-255 scaled RMS of the chunk.
+        rms: u8,
+    },
     /// Microphone in use. `requested` is the saved choice (`None` = system
     /// default); a failed switch carries `error` and the still-active input.
     InputDevice {

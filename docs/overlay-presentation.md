@@ -34,6 +34,17 @@ recording_notch = false   # macOS software camera silhouette; opt-in
   Latest received word, no growing
   text entrance. Camera mode retains the existing centered continuous silhouette,
   cubic throats and hardware gap between logo/content. It does not draw three slabs.
+- **Waveform indicator** (`IndicatorStyle::Waveform`, Settings → Overlay →
+  Indicator → *Waveform*): a dot-matrix level display in the island, as its own
+  choice; the Dot, Standing wave and Animated bars indicators are unchanged.
+  The core sends a scalar envelope (peak and RMS as 0-255 bytes, at most ~50
+  times a second, no samples or text) only while capturing; the island keeps the
+  newest 32 values and draws 12 columns of round dots mirrored on the centre
+  line, newest at the right. One dot pitch is used for the whole display, dots
+  are never shrunk to fit, and the level is the loudest of peak and RMS with no
+  gain or gating. Silence keeps a single baseline dot. Reduced motion stops the
+  per-frame animation. Inspired by the voxtype OSD's scrolling peak waveform,
+  rendered in the greyrot dot-matrix manner rather than as smooth bars.
 - **Meter:** retain the selected indicator without top text.
 - **Hidden:** hide the top indicator; independently enabled passive previews and
   Recording notch may remain visible. The tray still provides Settings. Disabling
