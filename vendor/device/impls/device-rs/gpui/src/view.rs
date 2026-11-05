@@ -20,7 +20,11 @@ pub struct DeviceView {
     ui_font: SharedString,
     keyboard_enabled: bool,
     font_overrides: std::collections::HashMap<String, SharedString>,
+    hovered: Option<String>,
 }
+/// The control under the pointer changed (host-owned help; no app effect).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Hover(pub Option<String>);
 impl DeviceView {
     pub fn new(
         snapshot: Snapshot,
@@ -74,6 +78,7 @@ impl DeviceView {
             ui_font,
             keyboard_enabled: true,
             font_overrides: Default::default(),
+            hovered: None,
         };
         this.resize(window, cx);
         this
@@ -263,6 +268,21 @@ impl DeviceView {
     }
 }
 impl gpui::EventEmitter<Action> for DeviceView {}
+impl gpui::EventEmitter<Hover> for DeviceView {}
+impl DeviceView {
+    fn hover(&mut self, x: f32, y: f32, cx: &mut Context<Self>) {
+        let id = self.slot.current().and_then(|p| {
+            (p.snapshot.snapshot() == &self.snapshot)
+                .then(|| p.frame.hit_test(x as f64, y as f64))
+                .flatten()
+                .map(str::to_owned)
+        });
+        if id != self.hovered {
+            self.hovered = id.clone();
+            cx.emit(Hover(id));
+        }
+    }
+}
 impl DeviceView {
     // Native print/fallback and exact-value tooltips; matrix ink is already in GPU pixels.
     fn label_element(
@@ -280,18 +300,23 @@ impl DeviceView {
             | ((label.color[1] as u32) << 8)
             | label.color[2] as u32;
         // Native sharp text: projected centre/extent, but no perspective warp in this proof.
-        let tooltip_text = if label.raster == device_render_wgpu::TextRaster::UnicodeFallback {
-            format!("Native glyph fallback: {}", label.text)
-        } else {
-            label.text.clone()
+        // Exact-value inspection only where the device cannot show it all.
+        let tooltip_text = match label.raster {
+            device_render_wgpu::TextRaster::UnicodeFallback => {
+                Some(format!("Native glyph fallback: {}", label.text))
+            }
+            device_render_wgpu::TextRaster::MatrixClipped => Some(label.text.trim().to_owned()),
+            _ => None,
         };
         let tooltip_font = self.ui_font.clone();
         Some(
             div()
                 .id(("device-readout", label_index))
-                .tooltip(move |_, cx| {
-                    cx.new(|_| ReadoutTooltip(tooltip_text.clone(), tooltip_font.clone()))
-                        .into()
+                .when_some(tooltip_text, |element, text| {
+                    element.tooltip(move |_, cx| {
+                        cx.new(|_| ReadoutTooltip(text.clone(), tooltip_font.clone()))
+                            .into()
+                    })
                 })
                 .absolute()
                 .left(px(center[0] as f32 - width / 2.0))
@@ -300,8 +325,15 @@ impl DeviceView {
                 .h(px(height))
                 .flex()
                 .items_center()
-                .justify_center()
+                .when(label.align == device_render_wgpu::TextAlign::Center, |e| {
+                    e.justify_center()
+                })
+                .when(label.align == device_render_wgpu::TextAlign::Start, |e| {
+                    e.justify_start()
+                })
                 .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
                 .text_color(rgb(color))
                 .font_family(
                     label
@@ -317,9 +349,8 @@ impl DeviceView {
                             }
                         }),
                 )
-                .text_size(px((height * 0.75)
-                    .min(width / (label.text.chars().count().max(1) as f32 * 0.62))
-                    .clamp(5.0, 24.0)))
+                // Size follows the legend's role (its height), never the string length.
+                .text_size(px((height * 0.72).clamp(5.0, 28.0)))
                 .when(!label.raster.is_matrix(), |element| {
                     element.child(label.text.clone())
                 }),
@@ -339,6 +370,14 @@ impl Render for DeviceView {
             })
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event, _, cx| this.key(event, cx)))
+            .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, _, cx| {
+                this.hover(event.position.x.into(), event.position.y.into(), cx)
+            }))
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if !hovered && this.hovered.take().is_some() {
+                    cx.emit(Hover(None));
+                }
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {

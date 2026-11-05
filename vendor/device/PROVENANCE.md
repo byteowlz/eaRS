@@ -1,6 +1,6 @@
 # Pinned native device renderer
 
-Source: byteowlz/design-system, commit `ecbdc4f738bc5c15a2c07a0b52bf7eb3bebdb776`.
+Source: byteowlz/design-system, commit `18296bb07ff9a0f7fb4ee4187fb4dbc3cc616367`.
 Imported unchanged via `git archive`: `impls/device-rs`, the device-scene v1
 specification/schema and its three fixtures. MIT-licensed crate manifests.
 

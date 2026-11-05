@@ -1,75 +1,125 @@
-//! eaRS adapter for the shared native device. The renderer never owns app effects.
+//! eaRS adapter for the shared receiver: one page, immediate apply, top display.
+//! The renderer never owns app effects; every change goes through AppModel here.
 use super::{
-    Tab, device_scene as scene, microphone,
+    Tab, device_scene as scene,
+    live_settings::LiveSetting,
+    microphone,
     shortcuts::{self, Binding},
 };
 use crate::app::AppModel;
-use device_gpui::DeviceView;
-use device_scene::{Action, OptionItem, Source};
+use device_gpui::{DeviceView, Hover};
+use device_scene::{Action, Snapshot};
 use ears::{
     audio::InputDevices,
-    config::HotkeyConfig,
-    dictation::hotkeys::{HotkeyRecording, validate_hotkeys},
+    config::{DictationHotkeyMode, HotkeyConfig},
+    dictation::{
+        DictationCommand, InsertionMode,
+        hotkeys::{HotkeyRecording, validate_hotkeys},
+    },
 };
 use gpui::{Context, Entity, EventEmitter, KeyDownEvent, Window, div, prelude::*};
-use std::{borrow::Cow, time::Duration};
+use std::{
+    borrow::Cow,
+    time::{Duration, Instant},
+};
+
+const LANGUAGES: [(&str, &str); 7] = [
+    ("auto", "Auto"),
+    ("en", "English"),
+    ("de", "German"),
+    ("fr", "French"),
+    ("es", "Spanish"),
+    ("it", "Italian"),
+    ("ja", "Japanese"),
+];
+const INSERT: [(InsertionMode, &str); 3] = [
+    (InsertionMode::InsertAtCursor, "At cursor"),
+    (InsertionMode::Clipboard, "Clipboard"),
+    (InsertionMode::SendAsPrompt, "Prompt"),
+];
+const KEY_MODES: [(DictationHotkeyMode, &str); 3] = [
+    (DictationHotkeyMode::Toggle, "Toggle"),
+    (DictationHotkeyMode::PushToTalk, "Hold"),
+    (DictationHotkeyMode::Hybrid, "Hybrid"),
+];
+const MESSAGE_FOR: Duration = Duration::from_secs(5);
+const PREVIEW_WORDS: &str = "This is a synthetic preview of how test words stream into the display";
+
+/// Requests the Settings host owns (navigation, live config edits, server restart).
+#[derive(Clone, Debug)]
+pub(super) enum Request {
+    Navigate(Tab),
+    Live(LiveSetting, f32),
+    Server(String),
+}
 
 pub(super) fn attach(
     model: Entity<AppModel>,
     window: &mut Window,
     cx: &mut Context<super::SettingsView>,
 ) -> Option<Entity<NativeSettings>> {
-    let native_enabled = !model.read(cx).configuration_is_preview
-        || std::env::args().any(|a| {
-            matches!(
-                a.as_str(),
-                "--preview-settings-device" | "--preview-settings-shortcuts"
-            )
-        });
-    let native =
-        native_enabled.then(|| cx.new(|cx| NativeSettings::new(model.clone(), window, cx)));
-    if let Some(native) = &native {
-        cx.subscribe_in(native, window, |this, _, event: &Navigate, window, cx| {
-            this.native_active = false;
-            this.navigation_focus.focus(window);
-            this.tab = event.0;
-            this.model.update(cx, |m, _| m.settings_tab = event.0);
-            cx.notify();
-        })
-        .detach();
-    }
-    native
+    let enabled = !model.read(cx).configuration_is_preview
+        || std::env::args().any(|a| a.starts_with("--preview-settings-"));
+    let native = enabled.then(|| cx.new(|cx| NativeSettings::new(model.clone(), window, cx)))?;
+    cx.subscribe_in(
+        &native,
+        window,
+        |this, native, request: &Request, window, cx| match request {
+            Request::Navigate(tab) => {
+                this.navigation_focus.focus(window);
+                this.select_tab(*tab, window, cx);
+            }
+            Request::Live(setting, value) => {
+                this.commit_live(*setting, *value, cx);
+                let error = this.live_error.clone();
+                native.update(cx, |native, cx| native.live_result(error, cx));
+            }
+            Request::Server(alias) => {
+                let alias = alias.clone();
+                this.server
+                    .update(cx, |field, cx| field.set_text(&alias, cx));
+                this.apply_server(cx);
+            }
+        },
+    )
+    .detach();
+    Some(native)
 }
 
-#[derive(Clone, Copy)]
-pub(super) struct Navigate(pub Tab);
-struct Draft {
-    before: HotkeyConfig,
-    config: HotkeyConfig,
-    selected: Binding,
+#[derive(Default)]
+struct TestCapture {
+    active: bool,
+    started: Option<Instant>,
+    capturing_seen: bool,
+    seen_utterance: Option<String>,
+    words: String,
+    preview_index: usize,
+}
+struct Message {
+    text: String,
+    until: Option<Instant>,
 }
 pub(super) struct NativeSettings {
     model: Entity<AppModel>,
     device: Entity<DeviceView>,
     drag: super::window::Drag,
-    draft: Option<Draft>,
+    listening: Option<Binding>,
     recording: Option<HotkeyRecording>,
-    listening: bool,
     local_ready: bool,
     capture_generation: u64,
     catalog: Option<InputDevices>,
-    loading: bool,
-    input_draft: Option<Option<String>>,
-    waiting_input: bool,
-    status: String,
+    mic_page: usize,
+    waiting_input: Option<Option<String>>,
+    server_choice: Option<String>,
+    help: Option<String>,
+    message: Option<Message>,
+    test: TestCapture,
+    pending_live: Option<&'static str>,
 }
-impl EventEmitter<Navigate> for NativeSettings {}
+impl EventEmitter<Request> for NativeSettings {}
+
 impl NativeSettings {
-    pub(super) fn new(
-        model: Entity<AppModel>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    fn new(model: Entity<AppModel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         // Host typography, never font paths supplied by a scene.
         if let Err(error) = cx.text_system().add_fonts(vec![
             Cow::Borrowed(include_bytes!("../../assets/fonts/Michroma-Regular.ttf")),
@@ -77,13 +127,9 @@ impl NativeSettings {
         ]) {
             eprintln!("ears-ui: device fonts: {error:#}");
         }
-        let mut snapshot = scene::initial();
-        if std::env::args().any(|a| a == "--preview-settings-shortcuts") {
-            snapshot.state.active_page = scene::SHORTCUTS.into();
-        }
         let device = cx.new(|cx| {
             let mut view = DeviceView::new(
-                snapshot,
+                scene::initial(),
                 "Michroma".into(),
                 crate::theme::FONT_SANS.into(),
                 window,
@@ -96,188 +142,235 @@ impl NativeSettings {
             this.action(action, window, cx)
         })
         .detach();
-        cx.observe(&model, |this, _, cx| this.sync(cx)).detach();
-        cx.observe_window_activation(window, |this, window, cx| {
-            if !window.is_window_active() {
-                this.deactivate(cx);
+        cx.subscribe(&device, |this, _, hover: &Hover, cx| {
+            let help = hover.0.as_deref().and_then(|id| this.help_for(id, cx));
+            if help != this.help {
+                this.help = help;
+                this.sync(cx);
             }
         })
         .detach();
-        let catalog = model
-            .read(cx)
-            .configuration_is_preview
-            .then(microphone::fixture);
+        cx.observe(&model, |this, _, cx| this.sync(cx)).detach();
+        cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() {
+                this.refresh_inputs(cx);
+            } else {
+                this.drag.end();
+                this.stop_listening(cx);
+            }
+        })
+        .detach();
         let mut this = Self {
             model,
             device,
             drag: Default::default(),
-            draft: None,
+            listening: None,
             recording: None,
-            listening: false,
             local_ready: true,
             capture_generation: 0,
-            catalog,
-            loading: false,
-            input_draft: None,
-            waiting_input: false,
-            status: String::new(),
+            catalog: None,
+            mic_page: 0,
+            waiting_input: None,
+            server_choice: None,
+            help: None,
+            message: None,
+            test: TestCapture::default(),
+            pending_live: None,
         };
-        let page = this.device.read(cx).snapshot().state.active_page.clone();
-        this.page(&page, cx);
+        this.refresh_inputs(cx);
         this
-    }
-    fn deactivate(&mut self, cx: &mut Context<Self>) {
-        self.drag.end();
-        if self.draft.is_some() {
-            self.cancel(cx);
-        }
     }
     pub(super) fn focus(&self, window: &mut Window, cx: &gpui::App) {
         self.device.read(cx).focus(window);
     }
-    pub(super) fn cancel(&mut self, cx: &mut Context<Self>) {
-        self.capture_generation += 1;
-        self.listening = false;
-        self.recording = None;
-        self.draft = None;
-        self.status = "Edit cancelled; saved shortcuts unchanged.".into();
+    pub(super) fn renderer_available(&self, cx: &gpui::App) -> bool {
+        self.device.read(cx).error().is_none()
+    }
+    fn help_for(&self, id: &str, cx: &gpui::App) -> Option<String> {
+        if id == "display" {
+            return None;
+        }
+        let snapshot = self.device.read(cx).snapshot();
+        let (_, control, _) = snapshot.control(id)?;
+        let help = control.description.trim();
+        (!help.is_empty() && help != control.label).then(|| help.to_owned())
+    }
+    /// Show a short confirmation or error, then return to help/idle text.
+    fn note(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {
+        self.message = Some(Message {
+            text: text.into(),
+            until: Some(Instant::now() + MESSAGE_FOR),
+        });
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(MESSAGE_FOR).await;
+            let _ = this.update(cx, |this, cx| this.sync(cx));
+        })
+        .detach();
+    }
+    fn say(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {
+        self.note(text, cx);
         self.sync(cx);
     }
-    fn sync(&mut self, cx: &mut Context<Self>) {
-        let model = self.model.read(cx);
-        let config = self
-            .draft
-            .as_ref()
-            .map(|d| &d.config)
-            .unwrap_or(&model.core.hotkeys)
-            .clone();
-        let selected = self.draft.as_ref().map(|d| d.selected);
-        let has_draft = self.draft.is_some();
-        let saved = model.core.dictation.input_device.clone();
-        let requested = self.input_draft.as_ref().unwrap_or(&saved).clone();
-        let pending = model.input_pending.is_some();
-        if self.waiting_input && !pending {
-            self.waiting_input = false;
-            self.status = if model.input_error.is_none() {
-                "Input confirmed and saved."
-            } else {
-                "Input switch failed; previous saved input retained."
+    pub(super) fn live_result(&mut self, error: Option<String>, cx: &mut Context<Self>) {
+        let label = self.pending_live.take().unwrap_or("Setting");
+        match error {
+            Some(error) => self.say(error, cx),
+            None => self.say(format!("{label} saved."), cx),
+        }
+    }
+    fn observe_input(&mut self, model: &ModelView, cx: &mut Context<Self>) {
+        if self.waiting_input.is_some() && model.input_pending.is_none() {
+            let requested = self.waiting_input.take().flatten();
+            let name = requested.as_deref().unwrap_or("System default");
+            match &model.input_error {
+                Some(error) => self.note(format!("Microphone not changed: {error}"), cx),
+                None => self.note(format!("Using {name}."), cx),
             }
-            .into();
         }
-        let status = if let Some(error) = &model.input_error {
-            format!("Input error: {error}")
-        } else if pending {
-            "Switching microphone; waiting for engine confirmation.".into()
-        } else {
-            self.status.clone()
-        };
-        let mut choices = microphone::choices(self.catalog.as_ref())
-            .into_iter()
-            .filter(|c| c.selectable)
-            .collect::<Vec<_>>();
-        let missing = !choices.iter().any(|c| c.name == requested);
-        if missing {
-            choices.push(microphone::Choice {
-                name: requested.clone(),
-                label: format!(
-                    "Unavailable: {}",
-                    requested.as_deref().unwrap_or("System default")
+    }
+
+    // ---- display -------------------------------------------------------
+
+    fn display_message(&mut self, model: &ModelView) -> (String, bool) {
+        if let Some(binding) = self.listening {
+            return (
+                format!(
+                    "Press the new {} shortcut. Esc cancels.",
+                    binding.label().to_lowercase()
                 ),
-                selectable: false,
-            });
+                false,
+            );
         }
-        let options = choices
-            .iter()
-            .enumerate()
-            .map(|(i, c)| OptionItem {
-                id: format!("input-{i}"),
-                label: c.label.clone(),
-            })
-            .collect::<Vec<_>>();
-        let current = choices
-            .iter()
-            .position(|c| c.name == requested)
-            .unwrap_or(0);
-        let can_apply = self.input_draft.is_some() && !pending && !missing;
-        let loading = self.loading;
+        if self.test.active {
+            let mut words = self.test.words.clone();
+            let partial = model.partial.trim();
+            if !partial.is_empty() {
+                if !words.is_empty() {
+                    words.push(' ');
+                }
+                words.push_str(partial);
+            }
+            if words.is_empty() {
+                return (
+                    "Listening… speak now. Press Test again to stop.".into(),
+                    false,
+                );
+            }
+            return (words, true);
+        }
+        if let Some(message) = &self.message {
+            if message.until.is_none_or(|until| Instant::now() < until) {
+                return (message.text.clone(), false);
+            }
+            self.message = None;
+        }
+        if let Some(help) = &self.help {
+            return (help.clone(), false);
+        }
+        let start = scene::shortcut_text(Some(&model.hotkeys.toggle));
+        let idle = if model.setup_mode {
+            "Choose a server below and press Use to start dictation.".to_owned()
+        } else {
+            match model.connection {
+                ears::dictation::ConnectionState::Connected => {
+                    format!("Ready. Press {start} to dictate, or Test to try it here.")
+                }
+                ears::dictation::ConnectionState::Connecting => "Connecting to the server…".into(),
+                ears::dictation::ConnectionState::Disconnected => {
+                    "The server is offline. Check Server below.".into()
+                }
+            }
+        };
+        (idle, false)
+    }
+
+    // ---- sync ------------------------------------------------------------
+
+    fn sync(&mut self, cx: &mut Context<Self>) {
+        self.observe_test(cx);
+        let model = self.model.read(cx).clone_view();
+        self.observe_input(&model, cx);
+        let (message, newest) = self.display_message(&model);
         let listening = self.listening;
+        let test_on = self.test.active;
+        let mics = self.mic_slots(&model);
+        let server_choice = self.server_choice.clone().unwrap_or(model.server.clone());
         self.device.update(cx, |view, cx| {
-            view.set_keyboard_enabled(!listening);
+            view.set_keyboard_enabled(listening.is_none());
             view.edit_snapshot(
-                |snapshot| {
-                    scene::bindings(snapshot, &config, selected, has_draft);
-                    let control = snapshot.scene.devices[0]
-                        .controls
-                        .iter_mut()
-                        .find(|c| c.id == "input.device")
-                        .unwrap();
-                    control.options = Some(options);
-                    scene::text(snapshot, "input.device", format!("input-{current}"));
+                |s| {
+                    let (cols, rows) = scene::capacity(s, "display");
                     scene::text(
-                        snapshot,
-                        "input.saved",
-                        format!("Saved: {}", saved.as_deref().unwrap_or("System default")),
+                        s,
+                        "display",
+                        scene::display_text(&message, cols, rows, newest),
                     );
-                    scene::text(snapshot, "status", status);
-                    for id in ["input.device", "input.refresh"] {
-                        snapshot.state.controls.get_mut(id).unwrap().enabled = !pending && !loading;
-                    }
-                    snapshot
-                        .state
-                        .controls
-                        .get_mut("input.apply")
-                        .unwrap()
-                        .enabled = can_apply;
-                    snapshot
-                        .state
-                        .controls
-                        .get_mut("input.cancel")
-                        .unwrap()
-                        .enabled = self.input_draft.is_some() && !pending;
+                    scene::switch(s, "test", test_on);
+                    write_mics(s, &mics);
+                    write_shortcuts(s, &model.hotkeys, listening);
+                    write_settings(s, &model, &server_choice);
                 },
                 cx,
             );
         });
         cx.notify();
     }
-    fn refresh(&mut self, cx: &mut Context<Self>) {
-        if self.loading {
-            return;
-        }
-        if self.model.read(cx).configuration_is_preview {
-            self.catalog = Some(microphone::fixture());
-            self.sync(cx);
-            return;
-        }
-        self.loading = true;
-        self.status = "Listing microphones; no capture started.".into();
-        self.sync(cx);
-        let task = cx
-            .background_executor()
-            .spawn(async { ears::audio::input_devices() });
-        cx.spawn(async move |this, cx| {
-            let result = task.await;
-            let _ = this.update(cx, |this, cx| {
-                this.loading = false;
-                match result {
-                    Ok(catalog) => {
-                        this.catalog = Some(catalog);
-                        this.status = "Click the microphone to select; Apply confirms.".into();
-                    }
-                    Err(error) => this.status = format!("Cannot list microphones: {error}"),
-                }
-                this.sync(cx);
+    fn mic_slots(&mut self, model: &ModelView) -> Vec<Option<MicSlot>> {
+        let saved = &model.input_device;
+        let active = model.input_pending.clone().unwrap_or_else(|| saved.clone());
+        let mut choices: Vec<_> = microphone::choices(self.catalog.as_ref())
+            .into_iter()
+            .filter(|c| c.selectable)
+            .collect();
+        if !choices.iter().any(|c| &c.name == saved) {
+            choices.push(microphone::Choice {
+                label: format!(
+                    "{} (not connected)",
+                    saved.as_deref().unwrap_or("System default")
+                ),
+                name: saved.clone(),
+                selectable: false,
             });
-        })
-        .detach();
+        }
+        let paged = choices.len() > scene::MIC_SLOTS;
+        let per_page = if paged {
+            scene::MIC_SLOTS - 1
+        } else {
+            scene::MIC_SLOTS
+        };
+        let pages = choices.len().div_ceil(per_page).max(1);
+        self.mic_page %= pages;
+        let mut slots: Vec<Option<MicSlot>> = choices
+            .iter()
+            .skip(self.mic_page * per_page)
+            .take(per_page)
+            .map(|c| {
+                Some(MicSlot {
+                    label: c.label.clone(),
+                    name: Some(c.name.clone()),
+                    on: c.name == active,
+                })
+            })
+            .collect();
+        slots.resize(per_page, None);
+        if paged {
+            slots.push(Some(MicSlot {
+                label: format!("More inputs  {}/{}", self.mic_page + 1, pages),
+                name: None,
+                on: false,
+            }));
+        }
+        slots
     }
+
+    // ---- actions ---------------------------------------------------------
+
     fn action(&mut self, action: &Action, window: &mut Window, cx: &mut Context<Self>) {
         if !scene::accepts(action, self.device.read(cx).snapshot()) {
             return;
         }
         if action.phase == device_scene::Phase::Cancel {
-            self.cancel(cx);
+            self.stop_listening(cx);
             return;
         }
         let id = action.control_id.as_str();
@@ -288,179 +381,356 @@ impl NativeSettings {
             self.begin(binding, action.source, cx);
             return;
         }
+        if let Some(binding) = Binding::ALL
+            .into_iter()
+            .find(|b| id == format!("shortcut.{}.clear", b.id()))
+        {
+            let mut config = self.model.read(cx).core.hotkeys.clone();
+            binding.set(&mut config, String::new());
+            self.commit_shortcuts(
+                config,
+                &format!("{} shortcut removed.", binding.label()),
+                cx,
+            );
+            return;
+        }
+        if let Some(slot) = id
+            .strip_prefix("mic.")
+            .and_then(|s| s.parse::<usize>().ok())
+        {
+            self.choose_mic(slot, cx);
+            return;
+        }
+        let step = |id: &str, base: &str| -> Option<isize> {
+            id.strip_prefix(base).and_then(|rest| match rest {
+                ".prev" => Some(-1),
+                ".next" => Some(1),
+                _ => None,
+            })
+        };
         match id {
             "window.close" => {
-                self.cancel(cx);
+                self.stop_listening(cx);
                 window.remove_window();
             }
-            "nav.dictation" | "nav.overlay" | "nav.dictionaries" | "nav.profiles"
-            | "dictation.general" => self.navigate(id, cx),
-            scene::INPUT | scene::SHORTCUTS => {
-                self.cancel(cx);
-                self.page(id, cx);
+            "nav.dictation" => self.sync(cx),
+            "nav.overlay" => cx.emit(Request::Navigate(Tab::Overlay)),
+            "nav.dictionaries" => cx.emit(Request::Navigate(Tab::Dictionaries)),
+            "nav.profiles" => cx.emit(Request::Navigate(Tab::Profiles)),
+            "test" => self.toggle_test(cx),
+            "shortcut.defaults" => {
+                let mut config = self.model.read(cx).core.hotkeys.clone();
+                let defaults = HotkeyConfig::default();
+                for b in Binding::ALL {
+                    b.set(&mut config, b.get(&defaults).unwrap_or("").into());
+                }
+                self.commit_shortcuts(config, "Default shortcuts restored.", cx);
             }
-            "input.refresh" => self.refresh(cx),
-            "input.device" => self.select_input(action, cx),
-            "input.cancel" => {
-                self.input_draft = None;
-                self.status = "Input selection cancelled.".into();
-                self.sync(cx);
+            "escape" => {
+                let on = !self.model.read(cx).ui.dictation.escape_cancels;
+                self.model.update(cx, |m, cx| {
+                    m.update_ui(cx, |ui| ui.dictation.escape_cancels = on);
+                    m.send(DictationCommand::SetEscapeCancels(on));
+                });
+                self.say(
+                    if on {
+                        "Esc now discards pending words."
+                    } else {
+                        "Esc now pauses dictation."
+                    },
+                    cx,
+                );
             }
-            "input.apply" => self.apply_input(cx),
-            "shortcut.cancel" => self.cancel(cx),
-            "shortcut.save" => self.save(cx),
-            "shortcut.defaults" => self.defaults(cx),
-            "shortcut.modifier" => {
-                if let Some(key) = action.value.string().filter(|key| *key != "choose") {
-                    self.device.update(cx, |view, cx| {
-                        view.edit_snapshot(|s| scene::text(s, "shortcut.modifier", key), cx)
-                    });
-                    self.candidate(key.into(), cx);
+            "profiles" => {
+                let on = !self.model.read(cx).ui.dictation.profiles;
+                self.model
+                    .update(cx, |m, cx| m.update_ui(cx, |ui| ui.dictation.profiles = on));
+                self.say(
+                    if on {
+                        "Context profiles on."
+                    } else {
+                        "Context profiles off."
+                    },
+                    cx,
+                );
+            }
+            "server.use" => {
+                let choice = self
+                    .server_choice
+                    .take()
+                    .unwrap_or_else(|| self.model.read(cx).ui.dictation.server.clone());
+                self.say(format!("Connecting to {choice}…"), cx);
+                cx.emit(Request::Server(choice));
+            }
+            _ => {
+                if let Some(delta) = step(id, "keymode") {
+                    let current = self.model.read(cx).hotkey_mode;
+                    let (mode, label) = cycle(&KEY_MODES, |(m, _)| *m == current, delta);
+                    self.model.update(cx, |m, cx| m.set_hotkey_mode(mode, cx));
+                    self.say(format!("Key mode: {label}."), cx);
+                } else if let Some(delta) = step(id, "language") {
+                    let current = self
+                        .model
+                        .read(cx)
+                        .language
+                        .clone()
+                        .unwrap_or_else(|| "auto".into());
+                    let (code, _) = cycle(&LANGUAGES, |(c, _)| *c == current, delta);
+                    self.model
+                        .update(cx, |m, cx| m.set_language(code.into(), cx));
+                    self.sync(cx);
+                } else if let Some(delta) = step(id, "insert") {
+                    let current = self.model.read(cx).insertion_mode;
+                    let (mode, _) = cycle(&INSERT, |(m, _)| *m == current, delta);
+                    self.model
+                        .update(cx, |m, cx| m.set_insertion_mode(mode, cx));
+                    self.sync(cx);
+                } else if let Some(delta) = step(id, "server") {
+                    let model = self.model.read(cx);
+                    let mut aliases: Vec<String> =
+                        model.core.dictation.servers.keys().cloned().collect();
+                    aliases.sort();
+                    let current = self
+                        .server_choice
+                        .clone()
+                        .unwrap_or_else(|| model.ui.dictation.server.clone());
+                    if !aliases.is_empty() {
+                        let index = aliases.iter().position(|a| *a == current);
+                        let next = match index {
+                            Some(i) => {
+                                (i as isize + delta).rem_euclid(aliases.len() as isize) as usize
+                            }
+                            None => 0,
+                        };
+                        let saved = model.ui.dictation.server.clone();
+                        self.server_choice =
+                            (aliases[next] != saved).then(|| aliases[next].clone());
+                        self.sync(cx);
+                    }
+                } else if let Some((setting, delta)) = live_step(id) {
+                    self.step_live(setting, delta, cx);
                 }
             }
-            "shortcut.clear" => self.clear_binding(cx),
-            _ => {}
         }
     }
-    fn navigate(&mut self, id: &str, cx: &mut Context<Self>) {
-        let tab = match id {
-            "nav.overlay" => Tab::Overlay,
-            "nav.dictionaries" => Tab::Dictionaries,
-            "nav.profiles" => Tab::Profiles,
-            _ => Tab::Dictation,
+    fn step_live(&mut self, setting: LiveSetting, direction: f32, cx: &mut Context<Self>) {
+        let core = &self.model.read(cx).core;
+        let current = setting.current(core);
+        let (step, min, max) = match setting {
+            LiveSetting::PauseAfterSilence => (0.5, 0.5, 60.0),
+            LiveSetting::SpeechThreshold => (0.05, 0.05, 0.95),
+            LiveSetting::WakeSensitivity => {
+                let floor = ears::dictation::wake::report_floor(&core.dictation.wake.command)
+                    .unwrap_or(0.05);
+                (0.05, floor.max(0.05), 0.95)
+            }
         };
-        self.cancel(cx);
-        if id == "nav.dictation" {
-            self.page(scene::INPUT, cx);
-        } else {
-            cx.emit(Navigate(tab));
+        let next = ((current / step).round() * step + direction * step).clamp(min, max);
+        let next = (next * 100.0).round() / 100.0;
+        if (next - current).abs() > f32::EPSILON {
+            self.pending_live = Some(match setting {
+                LiveSetting::PauseAfterSilence => "Auto-pause",
+                LiveSetting::SpeechThreshold => "Speech threshold",
+                LiveSetting::WakeSensitivity => "Wake sensitivity",
+            });
+            cx.emit(Request::Live(setting, next));
         }
     }
-    fn select_input(&mut self, action: &Action, cx: &mut Context<Self>) {
-        let index = action
-            .value
-            .string()
-            .and_then(|s| s.strip_prefix("input-"))
-            .and_then(|s| s.parse::<usize>().ok());
-        let choices = microphone::choices(self.catalog.as_ref())
-            .into_iter()
-            .filter(|c| c.selectable)
-            .collect::<Vec<_>>();
-        if let Some(choice) = index.and_then(|i| choices.get(i)) {
-            self.input_draft = Some(choice.name.clone());
-            self.status = "Input selected; Apply to switch, Cancel to keep current input.".into();
-            self.sync(cx);
-        }
-    }
-    fn apply_input(&mut self, cx: &mut Context<Self>) {
-        let Some(name) = self.input_draft.clone() else {
+    fn choose_mic(&mut self, slot: usize, cx: &mut Context<Self>) {
+        let model = self.model.read(cx).clone_view();
+        let Some(Some(choice)) = self.mic_slots(&model).get(slot).cloned() else {
             return;
         };
-        let running = self.model.read(cx).engine_running();
-        let preview = self.model.read(cx).configuration_is_preview;
+        let Some(name) = choice.name else {
+            self.mic_page += 1;
+            self.sync(cx);
+            return;
+        };
+        if choice.on || choice.label.ends_with("(not connected)") {
+            return;
+        }
+        let running = model.engine_running;
+        let preview = model.preview;
         match self
             .model
-            .update(cx, |model, cx| microphone::apply(model, name, cx))
+            .update(cx, |m, cx| microphone::apply(m, name.clone(), cx))
         {
-            Ok(()) => {
-                self.input_draft = None;
-                self.waiting_input = running;
-                self.status = if preview {
-                    "Preview only; input selection simulated."
-                } else if running {
-                    "Switch requested; waiting for confirmation."
-                } else {
-                    "Input preference saved for the next engine start."
-                }
-                .into();
+            Ok(()) if running && !preview => {
+                self.waiting_input = Some(name);
+                self.say(format!("Switching to {}…", choice.label), cx);
             }
-            Err(error) => self.status = format!("Input not changed: {error:#}"),
+            Ok(()) if preview => self.say("Preview: microphone switch simulated.", cx),
+            Ok(()) => self.say(
+                format!("{} will be used when dictation starts.", choice.label),
+                cx,
+            ),
+            Err(error) => self.say(format!("Microphone not changed: {error:#}"), cx),
         }
-        self.sync(cx);
     }
-    fn defaults(&mut self, cx: &mut Context<Self>) {
-        self.stop_listening();
-        let before = self.model.read(cx).core.hotkeys.clone();
-        let mut config = before.clone();
-        let defaults = HotkeyConfig::default();
-        for b in Binding::ALL {
-            b.set(&mut config, b.get(&defaults).unwrap_or("").into());
-        }
-        self.draft = Some(Draft {
-            before,
-            config,
-            selected: Binding::Toggle,
-        });
-        self.status = "Defaults staged; Save applies them, Cancel keeps existing shortcuts.".into();
-        self.sync(cx);
-    }
-    fn clear_binding(&mut self, cx: &mut Context<Self>) {
-        self.stop_listening();
-        if let Some(d) = &mut self.draft
-            && d.selected != Binding::Toggle
-        {
-            d.selected.set(&mut d.config, String::new());
-        }
-        self.status = "Binding cleared in draft; Save to apply.".into();
-        self.sync(cx);
-    }
-    fn page(&mut self, page: &str, cx: &mut Context<Self>) {
-        self.status = if page == scene::SHORTCUTS {
-            "Select a shortcut to record. Esc cancels. Save applies."
-        } else {
-            "Click microphone to select; Apply switches. Refresh lists inputs."
-        }
-        .into();
-        self.device.update(cx, |view, cx| {
-            view.edit_snapshot(|s| s.state.active_page = page.into(), cx)
-        });
-        self.sync(cx);
-    }
-    fn stop_listening(&mut self) {
-        self.listening = false;
-        self.capture_generation += 1;
-    }
-    fn begin(&mut self, binding: Binding, source: Source, cx: &mut Context<Self>) {
-        self.stop_listening();
-        self.recording = None;
-        let model = self.model.read(cx);
-        let control = model.engine.as_ref().and_then(|e| e.hotkey_controller());
-        if model.engine_running() && control.is_none() {
-            self.status = "Recorder unavailable; check the engine hotkey listener.".into();
+    fn refresh_inputs(&mut self, cx: &mut Context<Self>) {
+        if self.model.read(cx).configuration_is_preview {
+            self.catalog = Some(microphone::fixture());
             self.sync(cx);
             return;
         }
+        // Metadata only: listing inputs never opens a microphone.
+        let task = cx
+            .background_executor()
+            .spawn(async { ears::audio::input_devices() });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(catalog) => {
+                    this.catalog = Some(catalog);
+                    this.sync(cx);
+                }
+                Err(error) => this.say(format!("Cannot list microphones: {error}"), cx),
+            });
+        })
+        .detach();
+    }
+
+    // ---- test capture ------------------------------------------------------
+
+    fn toggle_test(&mut self, cx: &mut Context<Self>) {
+        let model = self.model.read(cx);
+        if self.test.active {
+            if !model.configuration_is_preview {
+                model.send(DictationCommand::SetTestCapture(false));
+            }
+            self.finish_test(cx);
+            return;
+        }
+        self.stop_listening(cx);
+        let model = self.model.read(cx);
+        if model.configuration_is_preview {
+            self.test = TestCapture {
+                active: true,
+                started: Some(Instant::now()),
+                ..Default::default()
+            };
+            self.run_preview_test(cx);
+            self.sync(cx);
+            return;
+        }
+        if !model.engine_running() {
+            self.say("Start dictation first: choose a server and press Use.", cx);
+            return;
+        }
+        if model.is_capturing() {
+            self.say("Stop dictation before testing.", cx);
+            return;
+        }
+        self.test = TestCapture {
+            active: true,
+            started: Some(Instant::now()),
+            seen_utterance: model.last_utterance.clone(),
+            ..Default::default()
+        };
+        model.send(DictationCommand::SetTestCapture(true));
+        self.sync(cx);
+    }
+    fn observe_test(&mut self, cx: &mut Context<Self>) {
+        if !self.test.active || self.model.read(cx).configuration_is_preview {
+            return;
+        }
+        let model = self.model.read(cx);
+        let capturing = model.is_capturing();
+        if model.last_utterance != self.test.seen_utterance {
+            self.test.seen_utterance = model.last_utterance.clone();
+            if let Some(text) = &model.last_utterance {
+                if !self.test.words.is_empty() {
+                    self.test.words.push(' ');
+                }
+                self.test.words.push_str(text.trim());
+            }
+        }
+        if capturing {
+            self.test.capturing_seen = true;
+        } else if self.test.capturing_seen
+            || self
+                .test
+                .started
+                .is_some_and(|t| t.elapsed() > Duration::from_secs(3))
+        {
+            // Auto-pause, a hotkey or an error ended the capture.
+            self.finish_test(cx);
+        }
+    }
+    fn finish_test(&mut self, cx: &mut Context<Self>) {
+        let preview = self.model.read(cx).configuration_is_preview;
+        let words = std::mem::take(&mut self.test).words;
+        let result = if words.trim().is_empty() {
+            "No words recognised. Check the microphone and try again.".to_owned()
+        } else if preview {
+            format!("Preview only, no microphone used: {words}")
+        } else {
+            words
+        };
+        self.message = Some(Message {
+            text: result,
+            until: None,
+        });
+        self.sync(cx);
+    }
+    fn run_preview_test(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(220))
+                    .await;
+                let more = this
+                    .update(cx, |this, cx| {
+                        if !this.test.active {
+                            return false;
+                        }
+                        let words: Vec<_> = PREVIEW_WORDS.split(' ').collect();
+                        if this.test.preview_index >= words.len() {
+                            this.finish_test(cx);
+                            return false;
+                        }
+                        if !this.test.words.is_empty() {
+                            this.test.words.push(' ');
+                        }
+                        this.test.words.push_str(words[this.test.preview_index]);
+                        this.test.preview_index += 1;
+                        this.sync(cx);
+                        true
+                    })
+                    .unwrap_or(false);
+                if !more {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    // ---- shortcuts -------------------------------------------------------
+
+    fn stop_listening(&mut self, cx: &mut Context<Self>) {
+        if self.listening.take().is_some() {
+            self.capture_generation += 1;
+            self.recording = None;
+            self.sync(cx);
+        }
+    }
+    fn begin(&mut self, binding: Binding, source: device_scene::Source, cx: &mut Context<Self>) {
+        self.stop_listening(cx);
+        let model = self.model.read(cx);
+        let control = model.engine.as_ref().and_then(|e| e.hotkey_controller());
         if let Some(control) = control.filter(|_| model.engine_running()) {
             match control.record() {
                 Ok(recording) => self.recording = Some(recording),
                 Err(error) => {
-                    self.status = error.to_string();
-                    self.sync(cx);
+                    self.say(error.to_string(), cx);
                     return;
                 }
             }
         }
-        if let Some(draft) = &mut self.draft {
-            draft.selected = binding;
-        } else {
-            let config = model.core.hotkeys.clone();
-            self.draft = Some(Draft {
-                before: config.clone(),
-                config,
-                selected: binding,
-            });
-        }
-        self.device.update(cx, |view, cx| {
-            view.edit_snapshot(|s| scene::text(s, "shortcut.modifier", "choose"), cx)
-        });
-        self.listening = true;
-        self.local_ready = source != Source::Keyboard;
-        self.status = if self.recording.is_some() {
-            "Press a shortcut (modifier sides supported); release it, then Save."
-        } else {
-            "Press a chord, or choose a modifier key preset. Esc cancels."
-        }
-        .into();
+        self.message = None;
+        self.listening = Some(binding);
+        self.local_ready = source != device_scene::Source::Keyboard;
         self.sync(cx);
         if self.recording.is_some() {
             self.poll_recording(cx);
@@ -475,7 +745,7 @@ impl NativeSettings {
                     .await;
                 let active = this
                     .update(cx, |this, cx| {
-                        if !this.listening || this.capture_generation != generation {
+                        if this.listening.is_none() || this.capture_generation != generation {
                             return false;
                         }
                         if let Some(candidate) = this.recording.as_ref().and_then(|r| r.candidate())
@@ -494,34 +764,23 @@ impl NativeSettings {
         .detach();
     }
     fn candidate(&mut self, text: String, cx: &mut Context<Self>) {
-        if let Some(draft) = &mut self.draft {
-            draft.selected.set(&mut draft.config, text);
-            let mut effective = draft.config.clone();
-            if let Some(control) = self
-                .model
-                .read(cx)
-                .engine
-                .as_ref()
-                .and_then(|e| e.hotkey_controller())
-            {
-                effective.escape_cancels = control.config().escape_cancels;
-            }
-            self.status = match validate_hotkeys(&effective) {
-                Ok(()) => {
-                    "Shortcut captured. Save applies it; Cancel keeps the old binding.".into()
-                }
-                Err(error) => format!("Not valid: {error}. Choose another shortcut or Cancel."),
-            };
-        }
-        self.stop_listening();
-        self.sync(cx);
-    }
-    fn save(&mut self, cx: &mut Context<Self>) {
-        let Some(draft) = &self.draft else {
+        let Some(binding) = self.listening else {
             return;
         };
-        let candidate = draft.config.clone();
+        let mut config = self.model.read(cx).core.hotkeys.clone();
+        binding.set(&mut config, text.clone());
+        // Keep the recorder guard until the save and live apply have finished.
+        let label = scene::shortcut_text(Some(&text));
+        self.commit_shortcuts(config, &format!("{} is now {label}.", binding.label()), cx);
+        self.listening = None;
+        self.capture_generation += 1;
+        self.recording = None;
+        self.sync(cx);
+    }
+    /// Validate, save atomically, then apply live. A failure changes nothing.
+    fn commit_shortcuts(&mut self, candidate: HotkeyConfig, done: &str, cx: &mut Context<Self>) {
         let model = self.model.read(cx);
+        let before = model.core.hotkeys.clone();
         let preview = model.configuration_is_preview;
         let control = model
             .engine
@@ -538,55 +797,48 @@ impl NativeSettings {
             } else {
                 shortcuts::persist_then(
                     &ears::config::AppConfig::path()?,
-                    &draft.before,
+                    &before,
                     &candidate,
                     || control.as_ref().map(|c| c.reconfigure(&candidate)),
                 )
             }
         });
-        let applied = match result {
-            Ok(applied) => applied,
-            Err(error) => {
-                self.status = format!("Not saved: {error:#}");
-                self.sync(cx);
-                return;
-            }
-        };
-        self.model.update(cx, |m, cx| {
-            for b in Binding::ALL {
-                b.set(&mut m.core.hotkeys, b.get(&candidate).unwrap_or("").into());
-            }
-            cx.notify();
-        });
-        self.stop_listening();
-        self.recording = None;
-        self.draft = None;
-        self.status = if preview {
-            "Preview only; no configuration written.".into()
-        } else {
-            match applied {
-                Some(Ok(())) => {
-                    "Saved and applied; shortcuts rearm after held keys are released.".into()
+        let message = match result {
+            Err(error) => format!("Not changed: {error:#}"),
+            Ok(applied) => {
+                self.model.update(cx, |m, cx| {
+                    for b in Binding::ALL {
+                        b.set(&mut m.core.hotkeys, b.get(&candidate).unwrap_or("").into());
+                    }
+                    cx.notify();
+                });
+                match applied {
+                    Some(Err(e)) => format!("Saved, but not active yet: {e}"),
+                    _ if preview => format!("Preview: {done}"),
+                    _ => done.to_owned(),
                 }
-                Some(Err(e)) => format!("Saved, not active: {e}. Restart the engine to apply."),
-                None => "Saved; applies when the engine starts.".into(),
             }
         };
-        self.sync(cx);
+        self.say(message, cx);
     }
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.listening && super::window::close_key(event) {
-            self.cancel(cx);
+        if self.listening.is_none() && super::window::close_key(event) {
             window.remove_window();
             cx.stop_propagation();
             return;
         }
-        if event.keystroke.key == "escape" && self.draft.is_some() {
-            self.cancel(cx);
-            cx.stop_propagation();
+        if event.keystroke.key == "escape" {
+            if self.listening.is_some() {
+                self.stop_listening(cx);
+                self.say("Shortcut unchanged.", cx);
+                cx.stop_propagation();
+            } else if self.test.active {
+                self.toggle_test(cx);
+                cx.stop_propagation();
+            }
             return;
         }
-        if self.listening {
+        if self.listening.is_some() {
             if self.recording.is_none()
                 && self.local_ready
                 && !event.is_held
@@ -598,6 +850,191 @@ impl NativeSettings {
         }
     }
 }
+
+fn cycle<T: Copy>(
+    items: &[(T, &'static str)],
+    is_current: impl Fn(&(T, &'static str)) -> bool,
+    delta: isize,
+) -> (T, &'static str) {
+    let index = items.iter().position(is_current).unwrap_or(0) as isize;
+    items[(index + delta).rem_euclid(items.len() as isize) as usize]
+}
+fn live_step(id: &str) -> Option<(LiveSetting, f32)> {
+    let (base, direction) = id.rsplit_once('.')?;
+    let direction = match direction {
+        "prev" => -1.0,
+        "next" => 1.0,
+        _ => return None,
+    };
+    let setting = match base {
+        "pause" => LiveSetting::PauseAfterSilence,
+        "threshold" => LiveSetting::SpeechThreshold,
+        "wake" => LiveSetting::WakeSensitivity,
+        _ => return None,
+    };
+    Some((setting, direction))
+}
+
+#[derive(Clone)]
+struct MicSlot {
+    label: String,
+    /// `None` for the paging key; `Some(None)` is the system default input.
+    name: Option<Option<String>>,
+    on: bool,
+}
+
+/// The model fields the device shows, copied once per sync.
+struct ModelView {
+    preview: bool,
+    engine_running: bool,
+    hotkeys: HotkeyConfig,
+    input_device: Option<String>,
+    input_pending: Option<Option<String>>,
+    input_error: Option<String>,
+    hotkey_mode: DictationHotkeyMode,
+    escape_cancels: bool,
+    profiles: bool,
+    language: String,
+    insertion: InsertionMode,
+    pause_ms: u32,
+    threshold: f32,
+    wake: Option<f32>,
+    server: String,
+    servers: usize,
+    setup_mode: bool,
+    connection: ears::dictation::ConnectionState,
+    partial: String,
+}
+impl AppModel {
+    fn clone_view(&self) -> ModelView {
+        let wake = &self.core.dictation.wake;
+        ModelView {
+            preview: self.configuration_is_preview,
+            engine_running: self.engine_running(),
+            hotkeys: self.core.hotkeys.clone(),
+            input_device: self.core.dictation.input_device.clone(),
+            input_pending: self.input_pending.clone(),
+            input_error: self.input_error.clone(),
+            hotkey_mode: self.hotkey_mode,
+            escape_cancels: self.ui.dictation.escape_cancels,
+            profiles: self.ui.dictation.profiles,
+            language: self.language.clone().unwrap_or_else(|| "auto".into()),
+            insertion: self.insertion_mode,
+            pause_ms: self.core.dictation.auto_pause.idle_ms,
+            threshold: self.core.dictation.auto_pause.speech_threshold,
+            wake: (wake.enabled && !wake.command.is_empty()).then(|| wake.threshold.unwrap_or(0.5)),
+            server: self.ui.dictation.server.clone(),
+            servers: self.core.dictation.servers.len(),
+            setup_mode: self.setup_mode,
+            connection: self.connection,
+            partial: self.partial.clone(),
+        }
+    }
+}
+
+fn write_mics(s: &mut Snapshot, slots: &[Option<MicSlot>]) {
+    for i in 0..scene::MIC_SLOTS {
+        let id = format!("mic.{i}");
+        match slots.get(i).cloned().flatten() {
+            Some(slot) => {
+                scene::show(s, &id, true);
+                scene::label(s, &id, &slot.label);
+                scene::switch(s, &id, slot.on);
+            }
+            None => scene::show(s, &id, false),
+        }
+    }
+}
+fn write_shortcuts(s: &mut Snapshot, hotkeys: &HotkeyConfig, listening: Option<Binding>) {
+    for binding in Binding::ALL {
+        let id = format!("shortcut.{}", binding.id());
+        let value = binding.get(hotkeys).filter(|v| !v.trim().is_empty());
+        let text = if listening == Some(binding) {
+            "Press keys".to_owned()
+        } else {
+            scene::shortcut_text(value)
+        };
+        scene::text(s, &id, text);
+        // Every row keeps its clear key; it is available only when it can act.
+        scene::enable(
+            s,
+            &format!("{id}.clear"),
+            binding != Binding::Toggle && value.is_some() && listening.is_none(),
+        );
+    }
+}
+fn write_settings(s: &mut Snapshot, model: &ModelView, server_choice: &str) {
+    let name = |items: &[(&str, &'static str)], key: &str| {
+        items
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map_or(key.to_owned(), |(_, n)| (*n).to_owned())
+    };
+    let mode = KEY_MODES
+        .iter()
+        .find(|(m, _)| *m == model.hotkey_mode)
+        .map_or("Toggle", |(_, n)| n);
+    scene::text(s, "keymode", mode);
+    let insert = INSERT
+        .iter()
+        .find(|(m, _)| *m == model.insertion)
+        .map_or("At cursor", |(_, n)| n);
+    scene::text(s, "insert", insert);
+    scene::text(s, "language", name(&LANGUAGES, &model.language));
+    for (id, on) in [
+        ("escape", model.escape_cancels),
+        ("profiles", model.profiles),
+    ] {
+        scene::switch(s, id, on);
+        scene::label(s, id, if on { "On" } else { "Off" });
+    }
+    let pause_on = model.pause_ms > 0;
+    scene::text(
+        s,
+        "pause",
+        if pause_on {
+            format!("{:.1} s", model.pause_ms as f32 / 1000.0)
+        } else {
+            "Off".into()
+        },
+    );
+    scene::text(s, "threshold", format!("{:.2}", model.threshold));
+    scene::text(
+        s,
+        "wake",
+        model.wake.map_or("Off".into(), |v| format!("{v:.2}")),
+    );
+    for (id, on) in [
+        ("pause", pause_on),
+        ("wake", model.wake.is_some()),
+        ("server", model.servers > 0),
+    ] {
+        scene::enable(s, &format!("{id}.prev"), on);
+        scene::enable(s, &format!("{id}.next"), on);
+    }
+    let server = if server_choice.is_empty() {
+        "Default"
+    } else {
+        server_choice
+    };
+    scene::text(s, "server", server);
+    let pending = server_choice != model.server;
+    let status = if pending {
+        "Not in use"
+    } else if model.setup_mode {
+        "Not started"
+    } else {
+        match model.connection {
+            ears::dictation::ConnectionState::Connected => "Connected",
+            ears::dictation::ConnectionState::Connecting => "Connecting",
+            ears::dictation::ConnectionState::Disconnected => "Offline",
+        }
+    };
+    scene::text(s, "connection", status);
+    scene::enable(s, "server.use", pending || model.setup_mode);
+    let _ = (model.preview, model.engine_running, &model.input_device);
+}
+
 impl Render for NativeSettings {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let error = self.device.read(cx).error().map(str::to_owned);
@@ -614,11 +1051,7 @@ impl Render for NativeSettings {
                         .bg(gpui::rgb(0x22262a))
                         .text_color(gpui::rgb(0xffffff))
                         .p(gpui::px(12.0))
-                        .cursor_pointer()
-                        .on_click(cx.listener(|_, _, _, cx| cx.emit(Navigate(Tab::Dictation))))
-                        .child(format!(
-                            "Renderer unavailable: {error}. Open standard settings"
-                        )),
+                        .child(format!("Renderer unavailable: {error}")),
                 )
             })
             .on_mouse_down(

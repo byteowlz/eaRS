@@ -616,6 +616,7 @@ impl SettingsView {
     fn view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         if self.native_active
             && let Some(native) = &self.native
+            && native.read(cx).renderer_available(cx)
         {
             return native.clone().into_any_element();
         }

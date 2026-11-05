@@ -1,61 +1,50 @@
 # Native receiver Settings
 
-Dictation now opens the native hi-fi **Input / Shortcuts** slice. The four
-primary destinations remain Dictation, Overlay, Dictionaries and Profiles.
-**General** opens the existing dictation controls; the other destinations retain
-their existing panes and drafts. Select Dictation again to return to the device.
-This is an incremental implementation, not a completed whole-app redesign.
+Settings has **one navigation level**: Dictation, Overlay, Dictionaries, Profiles.
+Dictation is a single receiver page; there are no sub-pages. Overlay, Dictionaries
+and Profiles still use the earlier native panes until they are converted.
+
+## Layout
+
+- **Top display** (centered dot matrix): help for the control under the pointer,
+  confirmations and errors, recording prompts, and Test transcripts. When idle it
+  shows readiness and the start shortcut.
+- **Test** streams your words into the top display. Nothing is typed, copied,
+  kept in audio history or written to transcript logs; Test again or Esc stops it.
+  Auto-pause ends a test like a dictation. Refused while dictation is running.
+  The engine command is `SetTestCapture`; output targets stay a sink until the
+  capture ends, even if a context profile changes the insertion mode meanwhile.
+- **Tabs** line up with the two columns; the selected tab's lamp is lit.
+- **Microphone**: one latching key per input, lamp on the active one. Selecting
+  switches immediately (opened muted, swapped on success, saved after the engine
+  confirms). Listing inputs on open is metadata only. More than four inputs page.
+- **Shortcuts**: Start / stop, Hold to talk, Next profile, Key mode, Esc cancels,
+  Restore defaults. Click a display, press the keys; it saves and applies at once.
+  Esc cancels recording. × removes an optional shortcut. Physical left/right
+  modifiers are recorded through the running engine's listener.
+- **Speech**: Language, Auto-pause, Speech threshold. **Wake word**: Sensitivity.
+  **Text**: Insert as, Context profiles. **Server**: choose with ◀ ▶, then Use
+  (restarts dictation); Status shows the connection.
+
+Changes apply immediately; there are no Save, Apply or Cancel rows. Unavailable
+keys keep their place, dimmed (for example Auto-pause when `idle_ms = 0`).
+Custom server URLs and enabling auto-pause or the wake word remain config.toml
+edits, as before.
+
+## Grid
+
+`settings/device_layout.rs` defines it: both columns are stacks of 2.4-unit slots
+(headings take a slot), so rows line up across the device and both columns end
+together. Row labels align to the column edge, keys to the control column, and
+every display to the inner value column. Spacing uses 0.4 / 0.8 / 1.2 units;
+every display uses the same 0.16-unit dot pitch. Geometry never depends on values;
+legend size follows the legend's role, not its length. Tests check edges, the
+shared grid, pitch and non-overlap.
 
 ## Window
 
-The device has no OS title bar, frame or opaque stage. Drag unused chassis metal
-to move it; controls and empty transparent space are not drag handles. The top
-right × closes Settings without applying drafts; Command-W on macOS (Control-W
-elsewhere) also closes, except while actively recording that chord. Escape cancels
-a draft. Existing non-device panes retain a Close button and header-padding drag
-area. Opening Settings again uses the normal tray entry.
-
-GPUI's titlebar setting alone does not remove macOS chrome: the Settings-only
-AppKit setup removes the titled/full-content mask and native shadow before the
-focused view is constructed. The shared view honors the transparent viewport;
-microphone capture, overlays and permissions are unchanged.
-
-## Input
-
-Refresh enumerates device metadata without opening a microphone. Activate the
-microphone display to cycle available choices, then Apply to confirm. A running
-engine opens the new device muted, swaps only on success, and confirms before the
-preference is saved. A stopped engine saves the next-start preference. Duplicate
-names are not selectable; a missing saved device stays visible rather than being
-silently replaced. Opening Settings never starts capture or performs a mic test.
-
-## Shortcuts
-
-Select Dictation, Hold to talk or Next profile, press a chord, then Save. With the
-engine running, recording uses its existing physical-key listener and distinguishes
-left/right modifiers and Fn. Without that listener, focused window chords work;
-the Modifier key selector supplies explicit side-only presets without starting an
-engine or asking for input permission. Function-key prefixes are not arbitrary
-modifier combinations: unsupported bindings are refused rather than guessed.
-
-- Defaults stages the default bindings; it does not save immediately.
-- Clear disables an optional binding, never the required dictation binding.
-- Escape, Cancel, leaving the page, losing window activation or closing the
-  window discards the shortcut draft and releases its suspension guard.
-- eaRS shortcut actions are suspended during capture/editing. Physical key-up
-  drains before rearming. OS shortcuts remain OS shortcuts; no keyboard grab or
-  security-policy change is attempted.
-- Validation rejects unsupported keys, duplicate bindings and Escape when the
-  running engine reserves it. Conflicts with other applications are not detectable.
-- A narrow atomic save preserves comments, symlinks, permissions and unrelated
-  configuration. Concurrent shortcut edits refuse the save. Persistence succeeds
-  before live reconfiguration; if the listener stops, the UI says saved but not
-  active instead of claiming success. Mode and runtime Escape overrides are not
-  overwritten by binding edits.
-
-Recorder cancellation is generation-fenced through the engine queue, so a delayed
-hotkey-owned discard cannot stop or erase a newer wake/externally started capture.
-Existing permissive startup syntax remains supported; editor validation is strict.
+No OS title bar, frame or opaque stage. Drag unused chassis metal to move it.
+× (top right) or Command-W closes; Esc cancels a recording or a test.
 
 ## Headless use
 
@@ -85,23 +74,18 @@ word boundaries and show an ellipsis if still too long; hovering shows the full,
 unchanged value. Unsupported Unicode uses a disclosed native-shaped fallback.
 Overlay rendering is unchanged.
 
-`settings/device_layout.rs` defines the common row tracks, column edges, gutters
-and padding. Shortcut labels and fields share baselines; action keys have equal
-widths and gutters; Input/Shortcuts share the same outer edges and footer. Geometry
-tests check all visible pairs for overlap and every orange display for matrix
-presentation. A wider string never changes item geometry or dot size.
-
-Synthetic, non-persisting previews:
+Synthetic, non-persisting preview (Test streams a labelled synthetic sentence;
+no microphone is opened and no config is written):
 
 ```sh
 just --command cargo run --locked -p ears-ui -- --preview-settings-device
-just --command cargo run --locked -p ears-ui -- --preview-settings-shortcuts
 ```
 
-Verification includes core recorder/generation regressions, scene/action-phase
-validation, compare-and-save and CLI tests, plus actual native VM rendering and
-pointer/keyboard interaction for selection, conflicting shortcuts, cancellation,
-capture, preview Save and return to General. The shared renderer additionally has
+Verification includes the engine test-capture regression, core recorder and
+generation regressions, layout/grid tests, scene/action-phase validation,
+compare-and-save and CLI tests, plus actual native VM rendering and pointer and
+keyboard interaction: hover help, Test streaming, F6 recording, microphone
+selection, threshold steps, Overlay and back. The shared renderer additionally has
 actual Metal readback/hit tests at 1x/2x. This is not physical global-hotkey,
 high-refresh, accessibility-tree, Linux/Windows or IME acceptance. Shared material
 fidelity and perspective-warped printed labels remain incomplete; other settings panes are not

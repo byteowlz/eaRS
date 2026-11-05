@@ -3,7 +3,7 @@ mod matrix;
 mod mesh;
 use bytemuck::{Pod, Zeroable};
 use device_scene::*;
-pub use mesh::{HitTriangle, Label, TextRaster};
+pub use mesh::{HitTriangle, Label, TextAlign, TextRaster};
 use mesh::{Mesh, Vertex};
 use std::sync::mpsc;
 use std::time::Duration;

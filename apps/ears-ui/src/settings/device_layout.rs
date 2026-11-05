@@ -1,396 +1,718 @@
-//! Receiver grid: 0.2-unit spacing, common row tracks, fixed 0.16-unit phosphor pitch.
-//! Geometry is independent of current values. This module owns no app effects.
-use super::{
-    device_scene::{INPUT, SHORTCUTS},
-    shortcuts::Binding,
-};
+//! Receiver geometry for Settings: one navigation level, then labelled sections.
+//!
+//! One baseline grid: both columns are stacks of 2.4-unit slots (a heading takes
+//! a slot too), so every row lines up across the device. Physical keys align to
+//! the control column edges; every display aligns to the inner value column.
+//! Spacing scale 0.4/0.8/1.2; one 0.16 dot pitch. Geometry never depends on values.
+use super::shortcuts::Binding;
 use device_scene::Snapshot;
 use serde_json::{Value as Json, json};
 
 const BASE: &str =
     include_str!("../../../../vendor/device/spec/fixtures/device-scene-v1/ears-input.json");
-const PITCH: f64 = 0.16;
+pub(super) const PAGE: &str = "dictation";
+pub(super) const MIC_SLOTS: usize = 4;
+pub(super) const PITCH: f64 = 0.16;
+const INNER: f64 = 0.4;
 const GAP: f64 = 0.8;
-const LEFT: f64 = -30.4;
-const RIGHT: f64 = 30.4;
-const CONTENT_LEFT: f64 = -17.2;
-const CONTENT_RIGHT: f64 = 29.2;
-const ROWS: [f64; 4] = [4.4, 1.2, -2.0, -5.2];
-const KEY_HEIGHT: f64 = 1.6;
+const PAD: f64 = 1.2;
+const ROW: f64 = 1.6;
+const SLOT: f64 = 2.4;
+const HEADING: f64 = 1.2;
+const LABEL_WIDTH: f64 = 10.4;
+const SIDE_KEY: f64 = 2.4;
+const SWITCH_KEY: f64 = 6.0;
+const EDGE: f64 = 30.4;
+const HEIGHT: f64 = 46.0;
+const SLOTS: usize = 12;
 
-#[derive(Clone, Copy)]
-struct Slot {
-    left: f64,
-    right: f64,
-    y: f64,
-    height: f64,
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Span {
+    pub left: f64,
+    pub right: f64,
 }
-fn slot(left: f64, right: f64, y: f64) -> Slot {
-    Slot {
-        left,
-        right,
-        y,
-        height: KEY_HEIGHT,
+impl Span {
+    fn width(self) -> f64 {
+        self.right - self.left
+    }
+    fn inset(self, amount: f64) -> Span {
+        Span {
+            left: self.left + amount,
+            right: self.right - amount,
+        }
+    }
+    fn first(self, width: f64) -> Span {
+        Span {
+            left: self.left,
+            right: self.left + width,
+        }
+    }
+    fn last(self, width: f64) -> Span {
+        Span {
+            left: self.right - width,
+            right: self.right,
+        }
+    }
+    fn tracks(self, count: usize, gap: f64) -> Vec<Span> {
+        let width = (self.width() - gap * (count - 1) as f64) / count as f64;
+        (0..count)
+            .map(|i| {
+                let left = self.left + i as f64 * (width + gap);
+                Span {
+                    left,
+                    right: left + width,
+                }
+            })
+            .collect()
     }
 }
-fn track(left: f64, right: f64, count: usize, index: usize, y: f64) -> Slot {
-    let width = (right - left - GAP * (count - 1) as f64) / count as f64;
-    let start = left + index as f64 * (width + GAP);
-    slot(start, start + width, y)
+
+fn rows_for(height: f64) -> u32 {
+    (1..=8)
+        .rev()
+        .find(|r| ((r - 1) * 8 + 7) as f64 * PITCH <= height - 0.4)
+        .unwrap_or(1)
 }
-fn descriptor(id: &str, page: &str, kind: &str, label: &str, slot: Slot) -> Json {
-    let width = slot.right - slot.left;
-    let mut value = json!({"id":id,"module_id":"ears.front","page":page,"kind":kind,
-        "rect":{"x":(slot.left+slot.right)/2.0,"y":slot.y,"z":0.8,"width":width,"height":slot.height,"depth":0.15},
-        "material":if kind=="button" {"key"} else {"glass"},"label":label,
-        "accessible_name":label,"description":label,"tab_index":0,"action":id,
-        "presentation":if kind=="button" {"printed"} else {"matrix"}});
-    if kind != "button" {
-        let cols = ((width - 0.8 + PITCH) / (6.0 * PITCH)).floor() as u32;
-        let rows = if slot.height >= 2.8 { 2 } else { 1 };
-        let grid_width = (cols * 6 - 1) as f64 * PITCH;
-        let grid_height = ((rows - 1) * 8 + 7) as f64 * PITCH;
-        value["matrix"] = json!({"cols":cols,"rows":rows,"glyph_width":5,"glyph_height":7,
-            "cell_width":6,"cell_height":8,"pitch":PITCH,
-            "padding_x":(width-grid_width)/2.0,"padding_y":(slot.height-grid_height)/2.0});
-    }
-    value
-}
-fn printed(mut value: Json) -> Json {
-    value["presentation"] = json!("printed");
-    value["material"] = json!("face");
-    value.as_object_mut().unwrap().remove("matrix");
-    value
-}
-#[derive(Default)]
-struct Controls {
-    descriptors: Vec<Json>,
+struct Builder {
+    controls: Vec<Json>,
     states: serde_json::Map<String, Json>,
 }
-impl Controls {
-    fn add(&mut self, mut descriptor: Json, value: Json) {
-        let id = descriptor["id"].as_str().unwrap().to_owned();
-        let enabled = descriptor["kind"] != "readout";
-        descriptor["tab_index"] = json!(if enabled {
-            self.descriptors.len() as i32
+impl Builder {
+    #[allow(clippy::too_many_arguments)]
+    fn add(
+        &mut self,
+        id: &str,
+        module: &str,
+        kind: &str,
+        label: &str,
+        help: &str,
+        span: Span,
+        y: f64,
+        height: f64,
+        value: Json,
+    ) {
+        let (material, presentation) = match kind {
+            "button" | "toggle" => ("key", "printed"),
+            "legend" => ("face", "printed"),
+            "heading" => ("caption", "printed"),
+            _ => ("glass", "matrix"),
+        };
+        let kind_name = match kind {
+            "legend" | "heading" => "readout",
+            other => other,
+        };
+        let mut control = json!({"id":id,"module_id":module,"page":"*","kind":kind_name,
+            "rect":{"x":(span.left+span.right)/2.0,"y":y,"z":0.8,"width":span.width(),"height":height,"depth":0.15},
+            "material":material,"label":label,"accessible_name":label,"description":help,
+            "tab_index":-1,"action":id,"presentation":presentation});
+        if presentation == "matrix" {
+            let cols = ((span.width() - 0.8 + PITCH) / (6.0 * PITCH)).floor() as u32;
+            let rows = rows_for(height);
+            control["matrix"] = json!({"cols":cols,"rows":rows,"glyph_width":5,"glyph_height":7,
+                "cell_width":6,"cell_height":8,"pitch":PITCH,
+                "padding_x":(span.width() - (cols * 6 - 1) as f64 * PITCH) / 2.0,
+                "padding_y":(height - ((rows - 1) * 8 + 7) as f64 * PITCH) / 2.0});
+        }
+        let interactive = matches!(kind, "button" | "toggle" | "shortcut");
+        if interactive {
+            control["tab_index"] = json!(self.controls.len());
         } else {
-            -1
-        });
-        if !enabled {
-            descriptor["action"] = json!("none");
+            control["action"] = json!("none");
         }
         self.states.insert(
-            id,
-            json!({"value":value,"enabled":enabled,"visible":true,
+            id.into(),
+            json!({"value":value,"enabled":interactive,"visible":true,
             "pressed":false,"focused":false,"busy":false,"error":""}),
         );
-        self.descriptors.push(descriptor);
+        self.controls.push(control);
     }
-    fn navigation(&mut self) {
-        for (i, (id, label)) in [
-            ("dictation", "Dictation"),
-            ("overlay", "Overlay"),
-            ("dictionaries", "Dictionaries"),
-            ("profiles", "Profiles"),
-        ]
-        .iter()
-        .enumerate()
-        {
-            self.add(
-                descriptor(
-                    &format!("nav.{id}"),
-                    "*",
-                    "button",
-                    label,
-                    track(LEFT, RIGHT - 3.2, 4, i, 9.4),
-                ),
-                json!(id),
-            );
+}
+
+/// One column of slots inside a module.
+struct Column<'a> {
+    b: &'a mut Builder,
+    module: &'static str,
+    full: Span,
+    label: Span,
+    /// Physical keys align to these edges.
+    control: Span,
+    /// Every display aligns to these edges.
+    value: Span,
+    top: f64,
+}
+impl<'a> Column<'a> {
+    fn new(b: &'a mut Builder, module: &'static str, full: Span, top: f64) -> Self {
+        let label = full.first(LABEL_WIDTH);
+        let control = Span {
+            left: label.right + GAP,
+            right: full.right,
+        };
+        let value = control.inset(SIDE_KEY + INNER);
+        Self {
+            b,
+            module,
+            full,
+            label,
+            control,
+            value,
+            top,
         }
-        let mut close = descriptor(
-            "window.close",
-            "*",
+    }
+    fn slot(&mut self) -> f64 {
+        let top = self.top;
+        self.top -= SLOT;
+        top
+    }
+    /// A heading sits low in its slot: near its own rows, far from the previous section.
+    fn heading(&mut self, id: &str, text: &str) {
+        let top = self.slot();
+        let y = top - 0.8 - HEADING / 2.0;
+        self.b.add(
+            id,
+            self.module,
+            "heading",
+            text,
+            text,
+            self.full,
+            y,
+            HEADING,
+            json!(text),
+        );
+    }
+    fn next_row(&mut self) -> f64 {
+        self.slot() - ROW / 2.0
+    }
+    fn legend(&mut self, id: &str, text: &str, help: &str, y: f64) {
+        self.b.add(
+            &format!("label.{id}"),
+            self.module,
+            "legend",
+            text,
+            help,
+            self.label,
+            y,
+            ROW,
+            json!(text),
+        );
+    }
+    fn display(&mut self, id: &str, text: &str, help: &str, y: f64) {
+        self.b.add(
+            id,
+            self.module,
+            "readout",
+            text,
+            help,
+            self.value,
+            y,
+            ROW,
+            json!(""),
+        );
+    }
+    /// Label, then [◀] display [▶].
+    fn stepper(&mut self, id: &str, text: &str, help: &str, keys: (&str, &str)) {
+        let y = self.next_row();
+        self.legend(id, text, help, y);
+        self.b.add(
+            &format!("{id}.prev"),
+            self.module,
             "button",
-            "×",
-            slot(RIGHT - 2.4, RIGHT, 9.4),
-        );
-        close["accessible_name"] = json!("Close settings");
-        close["description"] = json!("Close settings without applying drafts");
-        self.add(close, Json::Null);
-        for (i, (id, label)) in [
-            (INPUT, "Input"),
-            (SHORTCUTS, "Shortcuts"),
-            ("dictation.general", "General"),
-        ]
-        .iter()
-        .enumerate()
-        {
-            self.add(
-                descriptor(
-                    id,
-                    "dictation.*",
-                    "button",
-                    label,
-                    slot(-29.6, -20.8, ROWS[i]),
-                ),
-                json!(id),
-            );
-        }
-    }
-    fn input(&mut self) {
-        let mut input = descriptor(
-            "input.device",
-            INPUT,
-            "select",
-            "Microphone",
-            slot(CONTENT_LEFT, CONTENT_RIGHT, ROWS[0]),
-        );
-        input["options"] = json!([{"id":"default","label":"System default"}]);
-        self.add(input, json!("default"));
-        self.add(
-            descriptor(
-                "input.saved",
-                INPUT,
-                "readout",
-                "Saved microphone",
-                slot(CONTENT_LEFT, CONTENT_RIGHT, ROWS[1]),
-            ),
-            json!("System default"),
-        );
-        let first = track(CONTENT_LEFT, CONTENT_RIGHT, 4, 0, ROWS[3]);
-        let second = track(CONTENT_LEFT, CONTENT_RIGHT, 4, 1, ROWS[3]);
-        self.add(
-            descriptor(
-                "input.refresh",
-                INPUT,
-                "button",
-                "Refresh inputs",
-                slot(first.left, second.right, ROWS[3]),
-            ),
+            keys.0,
+            help,
+            self.control.first(SIDE_KEY),
+            y,
+            ROW,
             Json::Null,
         );
-        for (index, id, label) in [
-            (2, "input.apply", "Apply input"),
-            (3, "input.cancel", "Cancel"),
-        ] {
-            self.add(
-                descriptor(
-                    id,
-                    INPUT,
-                    "button",
-                    label,
-                    track(CONTENT_LEFT, CONTENT_RIGHT, 4, index, ROWS[3]),
-                ),
-                Json::Null,
-            );
-        }
-    }
-    fn shortcuts(&mut self) {
-        for (i, binding) in Binding::ALL.iter().enumerate() {
-            self.add(
-                printed(descriptor(
-                    &format!("title.{}", binding.id()),
-                    SHORTCUTS,
-                    "readout",
-                    binding.label(),
-                    slot(CONTENT_LEFT, -5.2, ROWS[i]),
-                )),
-                json!(binding.label()),
-            );
-            self.add(
-                descriptor(
-                    &format!("shortcut.{}", binding.id()),
-                    SHORTCUTS,
-                    "shortcut",
-                    binding.label(),
-                    slot(-4.4, CONTENT_RIGHT, ROWS[i]),
-                ),
-                json!(""),
-            );
-        }
-        let mut modifier = descriptor(
-            "shortcut.modifier",
-            SHORTCUTS,
-            "select",
-            "Modifier key preset",
-            Slot {
-                height: 2.8,
-                ..slot(-29.6, -20.8, ROWS[3])
-            },
+        self.display(id, text, help, y);
+        self.b.add(
+            &format!("{id}.next"),
+            self.module,
+            "button",
+            keys.1,
+            help,
+            self.control.last(SIDE_KEY),
+            y,
+            ROW,
+            Json::Null,
         );
-        modifier["options"] = json!([
-            {"id":"choose","label":"Modifier key"},{"id":"right_option","label":"Right Option"},
-            {"id":"right_cmd","label":"Right Cmd"},{"id":"fn","label":"Fn"},
-            {"id":"left_option","label":"Left Option"},{"id":"left_cmd","label":"Left Cmd"},
-            {"id":"right_ctrl","label":"Right Ctrl"},{"id":"left_ctrl","label":"Left Ctrl"},
-            {"id":"right_shift","label":"Right Shift"},{"id":"left_shift","label":"Left Shift"}]);
-        self.add(modifier, json!("choose"));
-        for (i, (id, label)) in [
-            ("defaults", "Defaults"),
-            ("clear", "Clear"),
-            ("save", "Save"),
-            ("cancel", "Cancel"),
-        ]
-        .iter()
-        .enumerate()
-        {
-            self.add(
-                descriptor(
-                    &format!("shortcut.{id}"),
-                    SHORTCUTS,
-                    "button",
-                    label,
-                    track(CONTENT_LEFT, CONTENT_RIGHT, 4, i, ROWS[3]),
-                ),
-                Json::Null,
-            );
-        }
     }
-    fn footer(&mut self) {
-        self.add(
-            descriptor(
-                "status",
-                "*",
-                "readout",
-                "Settings status",
-                Slot {
-                    height: 2.8,
-                    ..slot(LEFT, 20.8, -8.8)
-                },
-            ),
-            json!("Choose a setting"),
+    /// Label, then a latching key with a lamp.
+    fn switch(&mut self, id: &str, text: &str, help: &str) {
+        let y = self.next_row();
+        self.legend(id, text, help, y);
+        self.b.add(
+            id,
+            self.module,
+            "toggle",
+            "Off",
+            help,
+            self.control.first(SWITCH_KEY),
+            y,
+            ROW,
+            json!(false),
         );
-        self.add(
-            printed(descriptor(
-                "brand",
-                "*",
-                "readout",
-                "eaRS",
-                Slot {
-                    height: 2.8,
-                    ..slot(22.4, RIGHT, -8.8)
-                },
-            )),
-            json!("eaRS"),
+    }
+    fn shortcut(&mut self, binding: Binding, text: &str, help: &str) {
+        let y = self.next_row();
+        let id = format!("shortcut.{}", binding.id());
+        self.legend(&id, text, help, y);
+        self.b.add(
+            &id,
+            self.module,
+            "shortcut",
+            text,
+            help,
+            self.value,
+            y,
+            ROW,
+            json!(""),
+        );
+        self.b.add(
+            &format!("{id}.clear"),
+            self.module,
+            "button",
+            "×",
+            "Remove this shortcut",
+            self.control.last(SIDE_KEY),
+            y,
+            ROW,
+            Json::Null,
+        );
+    }
+    fn status_with_key(
+        &mut self,
+        id: &str,
+        text: &str,
+        help: &str,
+        key_id: &str,
+        key: &str,
+        key_help: &str,
+    ) {
+        let y = self.next_row();
+        self.legend(id, text, help, y);
+        self.display(id, text, help, y);
+        self.b.add(
+            key_id,
+            self.module,
+            "button",
+            key,
+            key_help,
+            self.control.last(SIDE_KEY),
+            y,
+            ROW,
+            Json::Null,
+        );
+    }
+    fn action(&mut self, id: &str, text: &str, help: &str) {
+        let y = self.next_row();
+        self.b.add(
+            id,
+            self.module,
+            "button",
+            text,
+            help,
+            self.control,
+            y,
+            ROW,
+            Json::Null,
+        );
+    }
+    fn wide_switch(&mut self, id: &str, help: &str) {
+        let y = self.next_row();
+        self.b.add(
+            id,
+            self.module,
+            "toggle",
+            "",
+            help,
+            self.full,
+            y,
+            ROW,
+            json!(false),
         );
     }
 }
+
+fn module(id: &str, left: f64, right: f64, bottom: f64, top: f64) -> Json {
+    json!({"id":id,"rect":{"x":(left+right)/2.0,"y":(bottom+top)/2.0,"z":0.66,
+        "width":right-left,"height":top-bottom,"depth":0.1},
+        "surface":"module","material":"module","label":"","page":"*"})
+}
+
 pub(super) fn initial() -> Snapshot {
     let mut base: Json = serde_json::from_str(BASE).expect("pinned base scene");
-    base["scene"]["id"] = json!("ears.settings.live");
-    base["scene"]["camera"]["yaw_deg"] = json!(0);
-    base["scene"]["camera"]["pitch_deg"] = json!(0);
-    base["scene"]["camera"]["target"] = json!([0, 0, -2]);
-    base["scene"]["camera"]["distance"] = json!(115);
-    base["scene"]["devices"][0]["chassis"]["height"] = json!(22);
-    let panels = base["scene"]["devices"][0]["panels"]
-        .as_array_mut()
-        .unwrap();
-    panels[0]["rect"]["height"] = json!(22);
-    for panel in panels.iter_mut() {
-        panel["label"] = json!("");
+    let scene = &mut base["scene"];
+    scene["id"] = json!("ears.settings.receiver");
+    scene["camera"] = json!({"projection":"perspective","fov_y_deg":25,"yaw_deg":0,
+        "pitch_deg":0,"target":[0,-0.5,-2],"distance":118});
+    scene["materials"]["module"] = json!({"base":"#272b30","ink":"#d4d7dc","emissive":"#000000",
+        "roughness":0.62,"metalness":0.45,"finish":"brushed"});
+    scene["materials"]["caption"] = json!({"base":"#272b30","ink":"#aab0b8","emissive":"#000000",
+        "roughness":0.62,"metalness":0.45,"finish":"brushed"});
+    let device = &mut scene["devices"][0];
+    device["chassis"]["height"] = json!(HEIGHT);
+    let inner = HEIGHT / 2.0 - 1.6;
+    let top_bottom = inner - (PAD + 4.4 + GAP + ROW + PAD);
+    let mid_top = top_bottom - GAP;
+    let column_top = mid_top - (PAD - GAP / 2.0);
+    let mid_bottom = column_top - (SLOTS as f64 - 1.0) * SLOT - ROW - PAD;
+    device["panels"] = json!([
+        {"id":"ears.front","rect":{"x":0,"y":0,"z":0,"width":64,"height":HEIGHT,"depth":0.65},
+         "surface":"faceplate","material":"face","label":"","page":"*"},
+        module("ears.top", -EDGE, EDGE, top_bottom, inner),
+        module("ears.left", -EDGE, -GAP / 2.0, mid_bottom, mid_top),
+        module("ears.right", GAP / 2.0, EDGE, mid_bottom, mid_top),
+    ]);
+    let mut b = Builder {
+        controls: Vec::new(),
+        states: Default::default(),
+    };
+
+    let left_full = Span {
+        left: -EDGE + PAD,
+        right: -GAP / 2.0 - PAD,
+    };
+    let right_full = Span {
+        left: GAP / 2.0 + PAD,
+        right: EDGE - PAD,
+    };
+    let band = Span {
+        left: left_full.left,
+        right: right_full.right,
+    };
+
+    // Top module: main display, Test and Close; then the only navigation row,
+    // whose keys line up with the two columns below.
+    let display_top = inner - PAD;
+    let close = band.last(SIDE_KEY);
+    let test = Span {
+        left: close.left - GAP - 6.4,
+        right: close.left - GAP,
+    };
+    let display = Span {
+        left: band.left,
+        right: test.left - GAP,
+    };
+    b.add(
+        "display",
+        "ears.top",
+        "readout",
+        "Display",
+        "Help, status and test transcripts",
+        display,
+        display_top - 2.2,
+        4.4,
+        json!(""),
+    );
+    b.add(
+        "test",
+        "ears.top",
+        "toggle",
+        "Test",
+        "Speak to see your words here. Nothing is typed or saved.",
+        test,
+        display_top - 2.2,
+        4.4,
+        json!(false),
+    );
+    b.add(
+        "window.close",
+        "ears.top",
+        "button",
+        "×",
+        "Close settings",
+        close,
+        display_top - ROW / 2.0,
+        ROW,
+        Json::Null,
+    );
+    let nav_y = display_top - 4.4 - GAP - ROW / 2.0;
+    let tabs = left_full
+        .tracks(2, GAP)
+        .into_iter()
+        .chain(right_full.tracks(2, GAP));
+    for (span, (id, label)) in tabs.zip([
+        ("dictation", "Dictation"),
+        ("overlay", "Overlay"),
+        ("dictionaries", "Dictionaries"),
+        ("profiles", "Profiles"),
+    ]) {
+        b.add(
+            &format!("nav.{id}"),
+            "ears.top",
+            "toggle",
+            label,
+            &format!("{label} settings"),
+            span,
+            nav_y,
+            ROW,
+            json!(id == "dictation"),
+        );
     }
-    for (panel, left, right) in [(1, -30.4, -20.0), (2, -18.4, 30.4)] {
-        panels[panel]["rect"]["x"] = json!((left + right) / 2.0);
-        panels[panel]["rect"]["y"] = json!(-0.2);
-        panels[panel]["rect"]["width"] = json!(right - left);
-        panels[panel]["rect"]["height"] = json!(13.2);
+
+    {
+        let mut c = Column::new(&mut b, "ears.left", left_full, column_top);
+        c.heading("head.mic", "MICROPHONE");
+        for slot in 0..MIC_SLOTS {
+            c.wide_switch(&format!("mic.{slot}"), "Use this microphone");
+        }
+        c.heading("head.shortcuts", "SHORTCUTS");
+        c.shortcut(
+            Binding::Toggle,
+            "Start / stop",
+            "Starts and stops dictation. Click, then press keys.",
+        );
+        c.shortcut(
+            Binding::PushToTalk,
+            "Hold to talk",
+            "Dictates while held. Click, then press keys.",
+        );
+        c.shortcut(
+            Binding::Profile,
+            "Next profile",
+            "Switches to the next context profile.",
+        );
+        c.stepper(
+            "keymode",
+            "Key mode",
+            "Toggle: press to start and stop. Hold: talk while held. Hybrid: both.",
+            ("◀", "▶"),
+        );
+        c.switch(
+            "escape",
+            "Esc cancels",
+            "Escape discards pending words instead of pausing.",
+        );
+        c.action(
+            "shortcut.defaults",
+            "Restore defaults",
+            "Restore the default shortcuts",
+        );
     }
-    let mut controls = Controls::default();
-    controls.navigation();
-    controls.input();
-    controls.shortcuts();
-    controls.footer();
-    base["scene"]["devices"][0]["controls"] = json!(controls.descriptors);
-    base["state"]["controls"] = json!(controls.states);
-    base["state"]["active_page"] = json!(INPUT);
+    {
+        let mut c = Column::new(&mut b, "ears.right", right_full, column_top);
+        c.heading("head.speech", "SPEECH");
+        c.stepper("language", "Language", "Transcription language", ("◀", "▶"));
+        c.stepper(
+            "pause",
+            "Auto-pause",
+            "Silence before dictation pauses itself",
+            ("−", "+"),
+        );
+        c.stepper(
+            "threshold",
+            "Speech threshold",
+            "Higher ignores more noise but may cut quiet speech",
+            ("−", "+"),
+        );
+        c.heading("head.wake", "WAKE WORD");
+        c.stepper(
+            "wake",
+            "Sensitivity",
+            "Higher wakes more easily but triggers falsely more often",
+            ("−", "+"),
+        );
+        c.heading("head.text", "TEXT");
+        c.stepper(
+            "insert",
+            "Insert as",
+            "Where finished text goes",
+            ("◀", "▶"),
+        );
+        c.switch(
+            "profiles",
+            "Context profiles",
+            "Use per-app dictionaries and settings",
+        );
+        c.heading("head.server", "SERVER");
+        c.stepper(
+            "server",
+            "Server",
+            "Transcription server from config.toml",
+            ("◀", "▶"),
+        );
+        c.status_with_key(
+            "connection",
+            "Status",
+            "Server connection",
+            "server.use",
+            "Use",
+            "Connect to the chosen server (restarts dictation)",
+        );
+    }
+    b.add(
+        "brand",
+        "ears.front",
+        "legend",
+        "eaRS",
+        "eaRS",
+        left_full.first(8.0),
+        (mid_bottom - inner) / 2.0,
+        2.0,
+        json!("eaRS"),
+    );
+
+    device["controls"] = json!(b.controls);
+    base["state"]["controls"] = json!(b.states);
+    base["state"]["active_page"] = json!(PAGE);
     Snapshot::parse(&serde_json::to_string(&base).unwrap())
-        .expect("receiver grid validates")
+        .expect("receiver layout validates")
         .into_inner()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn edges(snapshot: &Snapshot, id: &str) -> (f64, f64, f64) {
-        let r = &snapshot.control(id).unwrap().1.rect;
-        (r.x - r.width / 2.0, r.x + r.width / 2.0, r.y)
+    use device_scene::{Kind, Presentation};
+    fn rect(s: &Snapshot, id: &str) -> device_scene::Rect {
+        s.control(id)
+            .unwrap_or_else(|| panic!("{id}"))
+            .1
+            .rect
+            .clone()
     }
-    fn equal(a: f64, b: f64) {
-        assert!((a - b).abs() < 1e-8, "{a} != {b}");
+    fn left(r: &device_scene::Rect) -> f64 {
+        r.x - r.width / 2.0
+    }
+    fn right(r: &device_scene::Rect) -> f64 {
+        r.x + r.width / 2.0
+    }
+    fn equal(a: f64, b: f64, what: &str) {
+        assert!((a - b).abs() < 1e-8, "{what}: {a} != {b}");
     }
     #[test]
-    fn receiver_rows_edges_gutters_and_matrix_pitch_are_content_independent() {
+    fn one_navigation_level_and_every_dictation_setting_on_one_page() {
         let s = initial();
-        for (i, binding) in Binding::ALL.iter().enumerate() {
-            let title = edges(&s, &format!("title.{}", binding.id()));
-            let field = edges(&s, &format!("shortcut.{}", binding.id()));
-            equal(title.0, CONTENT_LEFT);
-            equal(field.1, CONTENT_RIGHT);
-            equal(field.0 - title.1, GAP);
-            equal(title.2, ROWS[i]);
-            equal(field.2, ROWS[i]);
-        }
-        let mut last = None;
+        s.validate().unwrap();
+        let ids: Vec<_> = s.scene.devices[0]
+            .controls
+            .iter()
+            .map(|c| c.id.as_str())
+            .collect();
         for id in [
-            "shortcut.defaults",
-            "shortcut.clear",
-            "shortcut.save",
-            "shortcut.cancel",
+            "nav.dictation",
+            "nav.overlay",
+            "nav.dictionaries",
+            "nav.profiles",
+            "test",
+            "display",
+            "mic.0",
+            "shortcut.toggle",
+            "shortcut.push_to_talk",
+            "shortcut.profile_cycle",
+            "keymode",
+            "escape",
+            "language",
+            "pause",
+            "threshold",
+            "wake",
+            "insert",
+            "profiles",
+            "server",
+            "connection",
         ] {
-            let (l, r, y) = edges(&s, id);
-            equal(y, ROWS[3]);
-            equal(r - l, 11.0);
-            if let Some(end) = last {
-                equal(l - end, GAP);
-            }
-            last = Some(r);
+            assert!(ids.contains(&id), "{id}");
         }
-        for c in &s.scene.devices[0].controls {
-            if let Some(m) = &c.matrix {
-                equal(m.pitch, PITCH);
-                assert_eq!(m.cell_width, 6);
+        assert!(
+            !ids.iter().any(|id| id.starts_with("dictation.")),
+            "no second navigation level"
+        );
+        assert!(s.scene.devices[0].controls.iter().all(|c| c.page == "*"));
+    }
+    #[test]
+    fn columns_rows_and_compound_controls_share_edges() {
+        let s = initial();
+        // Every row label starts at its column edge; every control ends at the column edge.
+        for (labels, controls) in [
+            (
+                vec!["label.shortcut.toggle", "label.keymode", "label.escape"],
+                vec!["shortcut.toggle.clear", "keymode.next", "shortcut.defaults"],
+            ),
+            (
+                vec![
+                    "label.language",
+                    "label.wake",
+                    "label.insert",
+                    "label.server",
+                ],
+                vec!["language.next", "wake.next", "insert.next", "server.use"],
+            ),
+        ] {
+            let edge = left(&rect(&s, labels[0]));
+            for id in &labels {
+                equal(left(&rect(&s, id)), edge, id);
+            }
+            let end = right(&rect(&s, controls[0]));
+            for id in &controls {
+                equal(right(&rect(&s, id)), end, id);
             }
         }
-        equal(edges(&s, "input.device").0, CONTENT_LEFT);
-        equal(edges(&s, "input.saved").1, CONTENT_RIGHT);
-        assert!(s.viewport.transparent);
-        let scene_before = s.scene.clone();
-        let mut long = s.clone();
-        long.state.controls.get_mut("status").unwrap().value =
-            device_scene::Value(json!("A long synthetic status ".repeat(16)));
-        long.validate().unwrap();
-        assert_eq!(
-            long.scene, scene_before,
-            "values cannot resize dots or controls"
+        // Label and its control share a centre line.
+        for (label, control) in [
+            ("label.pause", "pause"),
+            ("label.shortcut.toggle", "shortcut.toggle"),
+            ("label.escape", "escape"),
+        ] {
+            equal(rect(&s, label).y, rect(&s, control).y, label);
+        }
+        // All steppers have identical displays; shortcut displays match each other.
+        let width = rect(&s, "language").width;
+        for id in ["pause", "threshold", "wake", "insert", "server", "keymode"] {
+            equal(rect(&s, id).width, width, id);
+        }
+        // Both columns start their first section on the same line.
+        equal(
+            rect(&s, "head.mic").y,
+            rect(&s, "head.speech").y,
+            "section tops",
+        );
+        // Equal navigation tabs.
+        let tab = rect(&s, "nav.dictation").width;
+        for id in ["nav.overlay", "nav.dictionaries", "nav.profiles"] {
+            equal(rect(&s, id).width, tab, id);
+        }
+        // Display and Test share the top band.
+        equal(rect(&s, "display").y, rect(&s, "test").y, "top band");
+        equal(
+            rect(&s, "display").y + rect(&s, "display").height / 2.0,
+            rect(&s, "window.close").y + rect(&s, "window.close").height / 2.0,
+            "top edge",
         );
     }
     #[test]
-    fn visible_controls_never_overlap_and_every_orange_display_is_matrix() {
-        let mut s = initial();
-        for page in [INPUT, SHORTCUTS] {
-            s.state.active_page = page.into();
-            s.validate().unwrap();
-            let d = &s.scene.devices[0];
-            let visible: Vec<_> = d
-                .controls
+    fn displays_use_one_pitch_and_nothing_overlaps() {
+        let s = initial();
+        let d = &s.scene.devices[0];
+        for c in &d.controls {
+            if c.material == "glass" {
+                assert_eq!(c.presentation, Presentation::Matrix, "{}", c.id);
+                equal(c.matrix.as_ref().unwrap().pitch, PITCH, &c.id);
+            }
+            if c.presentation == Presentation::Printed && c.kind == Kind::Readout {
+                assert!(c.action == "none");
+            }
+        }
+        assert!(
+            d.controls
                 .iter()
-                .filter(|c| c.page == "*" || c.page == page || c.page == "dictation.*")
-                .collect();
-            for (i, a) in visible.iter().enumerate() {
-                if a.material == "glass" {
-                    assert_eq!(a.presentation, device_scene::Presentation::Matrix);
-                }
-                for b in &visible[i + 1..] {
-                    let x = (a.rect.x - b.rect.x).abs() - (a.rect.width + b.rect.width) / 2.0;
-                    let y = (a.rect.y - b.rect.y).abs() - (a.rect.height + b.rect.height) / 2.0;
-                    assert!(
-                        x >= 0.2 - 1e-8 || y >= 0.2 - 1e-8,
-                        "{} overlaps {}",
-                        a.id,
-                        b.id
-                    );
-                }
+                .find(|c| c.id == "display")
+                .unwrap()
+                .matrix
+                .as_ref()
+                .unwrap()
+                .rows
+                >= 3
+        );
+        for (i, a) in d.controls.iter().enumerate() {
+            for b in &d.controls[i + 1..] {
+                let x = (a.rect.x - b.rect.x).abs() - (a.rect.width + b.rect.width) / 2.0;
+                let y = (a.rect.y - b.rect.y).abs() - (a.rect.height + b.rect.height) / 2.0;
+                assert!(
+                    x >= INNER - 1e-8 || y >= INNER - 1e-8,
+                    "{} overlaps {}",
+                    a.id,
+                    b.id
+                );
             }
         }
     }

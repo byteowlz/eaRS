@@ -29,7 +29,7 @@ impl Tab {
     }
 }
 impl SettingsView {
-    fn select_tab(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn select_tab(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
         self.tab = tab;
         self.native_active = tab == Tab::Dictation && self.native.is_some();
         if self.native_active

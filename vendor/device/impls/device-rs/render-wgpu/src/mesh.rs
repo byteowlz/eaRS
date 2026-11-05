@@ -22,6 +22,12 @@ pub struct HitTriangle {
     pub vertices: [DVec3; 3],
     pub control_id: Option<String>,
 }
+/// Printed row legends align to their column edge; keys and displays centre.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextAlign {
+    Start,
+    Center,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextRaster {
     Native,
@@ -43,6 +49,7 @@ pub struct Label {
     pub color: [u8; 3],
     pub printed: bool,
     pub raster: TextRaster,
+    pub align: TextAlign,
     pub control_id: Option<String>,
 }
 #[derive(Default)]
@@ -327,7 +334,7 @@ impl Mesh {
     fn panel(&mut self, d: &Device, p: &Panel, s: &Snapshot) -> Result<(), RenderError> {
         let mut pieces = vec![p.rect.clone()];
         for c in &d.controls {
-            if c.module_id != p.id || !s.control_visible(d, c) {
+            if c.module_id != p.id || !s.control_visible(d, c) || is_legend(c) {
                 continue;
             }
             // Every physical key and display gets an actual aperture through its parent plate.
@@ -369,16 +376,42 @@ impl Mesh {
                 color: color_bytes(&s.scene.materials[&p.material].ink),
                 printed: true,
                 raster: TextRaster::Native,
+                align: TextAlign::Center,
                 control_id: None,
             });
         }
         Ok(())
     }
+    /// A printed, non-interactive legend: ink on the plate, with no key, well or aperture.
+    fn legend(&mut self, d: &Device, c: &Control, s: &Snapshot) {
+        let state = &s.state.controls[&c.id];
+        let r = &c.rect;
+        self.labels.push(Label {
+            text: state.value.string().unwrap_or(&c.label).to_owned(),
+            center: DVec3::new(
+                r.x + d.origin[0],
+                r.y + d.origin[1],
+                r.z + d.origin[2] + 0.01,
+            ),
+            width: r.width,
+            height: r.height * 0.65,
+            color: color_bytes(&s.scene.materials[&c.material].ink),
+            printed: true,
+            raster: TextRaster::Native,
+            align: TextAlign::Start,
+            control_id: Some(c.id.clone()),
+        });
+    }
     fn control(&mut self, d: &Device, c: &Control, s: &Snapshot) -> Result<(), RenderError> {
+        if is_legend(c) {
+            self.legend(d, c, s);
+            return Ok(());
+        }
         let state = &s.state.controls[&c.id];
         let mat = &s.scene.materials[&c.material];
         let mut r = c.rect.clone();
         let control = Some(c.id.as_str());
+        let latched = c.kind == Kind::Toggle && state.value.boolean() == Some(true);
         let well = Rect {
             width: r.width + 0.16,
             height: r.height + 0.16,
@@ -452,8 +485,14 @@ impl Mesh {
             Kind::Button | Kind::Toggle => {
                 if state.pressed {
                     r.z -= r.depth.min(0.12) * 0.65;
+                } else if latched {
+                    // A latched key rests part-way down, like a hi-fi source selector.
+                    r.z -= r.depth.min(0.12) * 0.35;
                 }
                 self.bevel(&r, d.origin, mat, control)?;
+                if c.kind == Kind::Toggle {
+                    self.lamp(&r, d.origin, latched, control)?;
+                }
             }
             Kind::Indicator => {
                 let m = if state.value.boolean() == Some(true) {
@@ -546,23 +585,71 @@ impl Mesh {
             } else {
                 TextRaster::Native
             };
+            // Toggle legends sit right of the lamp; everything else centres on the key.
+            let lamp_offset = if c.kind == Kind::Toggle {
+                LAMP_INSET
+            } else {
+                0.0
+            };
             self.labels.push(Label {
                 text,
                 center: DVec3::new(
-                    r.x + d.origin[0],
+                    r.x + lamp_offset / 2.0 + d.origin[0],
                     r.y + d.origin[1],
                     r.z + d.origin[2] + 0.025,
                 ),
-                width: r.width * 0.90,
+                width: r.width * 0.90 - lamp_offset,
                 height: r.height * 0.65,
-                color: color_bytes(&mat.ink),
+                // Disabled keys keep their place in the grid but read as unavailable.
+                color: {
+                    let ink = color_bytes(&mat.ink);
+                    if state.enabled
+                        || matches!(c.kind, Kind::Readout | Kind::Meter | Kind::Indicator)
+                    {
+                        ink
+                    } else {
+                        ink.map(|v| (v as f32 * 0.38) as u8)
+                    }
+                },
                 printed: c.presentation == Presentation::Printed,
                 raster,
+                align: TextAlign::Center,
                 control_id: Some(c.id.clone()),
             });
         }
         Ok(())
     }
+}
+const LAMP_INSET: f64 = 0.9;
+impl Mesh {
+    /// Indicator lamp on a latching key: lit accent when on, dark glass when off.
+    fn lamp(
+        &mut self,
+        key: &Rect,
+        origin: [f64; 3],
+        lit: bool,
+        control: Option<&str>,
+    ) -> Result<(), RenderError> {
+        let lamp = Rect {
+            x: key.x - key.width / 2.0 + LAMP_INSET / 2.0 + 0.1,
+            y: key.y,
+            z: key.z + 0.012,
+            width: 0.28,
+            height: 0.28,
+            depth: 0.01,
+        };
+        let colour = if lit { "#ff8a3d" } else { "#2a1f19" };
+        let mat = Material {
+            base: colour.into(),
+            emissive: colour.into(),
+            finish: Finish::Glass,
+            ..dark()
+        };
+        self.cylinder(&lamp, origin, &mat, control)
+    }
+}
+fn is_legend(c: &Control) -> bool {
+    c.kind == Kind::Readout && c.presentation == Presentation::Printed
 }
 fn fraction(c: &Control, s: &ControlState) -> f64 {
     c.range
