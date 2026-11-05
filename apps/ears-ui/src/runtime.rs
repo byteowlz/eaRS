@@ -32,7 +32,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 use std::time::Instant;
 
-pub const SETTINGS_SIZE: (f32, f32) = (780.0, 560.0);
+pub const SETTINGS_SIZE: (f32, f32) = (1100.0, 700.0);
 
 pub struct Runtime {
     #[allow(dead_code)]

@@ -27,9 +27,14 @@ const OPTIONS: &[&str] = &[
     "--linux-window-rules",
     "--input-devices",
     "--settings",
+    "--shortcuts",
+    "--set-shortcuts",
+    "--shortcuts-schema",
     "--setup",
     "--no-overlay",
     "--preview-settings",
+    "--preview-settings-device",
+    "--preview-settings-shortcuts",
     "--preview-settings-mic-empty",
     "--preview-settings-mic-missing",
     "--preview-settings-appearance",
@@ -73,6 +78,9 @@ pub fn handle(args: &[String]) -> bool {
     if let Some(arg) = unknown(args) {
         eprintln!("ears-ui: unknown option {arg}; use --help");
         std::process::exit(2);
+    }
+    if crate::settings::shortcuts_cli(args) {
+        return true;
     }
     if args.iter().any(|a| a == "--build-info") {
         let mut info = ears::build_info::json();

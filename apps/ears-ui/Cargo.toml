@@ -20,6 +20,8 @@ experimental-overlays = []
 ears = { path = "../..", package = "eaRS", features = ["client-vad"] }
 motion-core = { path = "../../vendor/motion-core" }
 motion-render = { path = "../../vendor/motion-render" }
+device-scene = { path = "../../vendor/device/impls/device-rs/scene" }
+device-gpui = { path = "../../vendor/device/impls/device-rs/gpui" }
 gpui = "0.2.2"
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }

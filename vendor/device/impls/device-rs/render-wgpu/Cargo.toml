@@ -1,0 +1,17 @@
+[package]
+name = "device-render-wgpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+device-scene.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+glam.workspace = true
+bytemuck.workspace = true
+image.workspace = true
+pollster = "0.4"
+wgpu = { version = "=30.0.1", default-features = false, features = ["std", "parking_lot", "metal", "vulkan", "dx12", "gles", "wgsl"] }

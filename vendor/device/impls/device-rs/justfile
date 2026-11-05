@@ -1,0 +1,21 @@
+check:
+    cargo check --workspace --all-targets --locked
+
+test:
+    cargo test --workspace --locked
+
+lint:
+    cargo clippy --workspace --all-targets --locked -- -D warnings
+
+# Requires a native GPU; never silently skips a missing adapter.
+gpu-test:
+    cargo test -p device-render-wgpu --test native_gpu --locked -- --ignored --nocapture
+
+build-proof:
+    cargo build --locked -p device-gpui --example specimen
+
+render fixture output:
+    cargo run --locked -p device-render-wgpu --bin device-render -- "{{fixture}}" "{{output}}"
+
+proof fixture:
+    cargo run --locked -p device-gpui --example specimen -- "{{fixture}}"

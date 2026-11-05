@@ -1,0 +1,16 @@
+[package]
+name = "device-gpui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+device-scene.workspace = true
+device-render-wgpu.workspace = true
+gpui = "=0.2.2"
+image.workspace = true
+glam.workspace = true
+serde_json.workspace = true
+async-channel = "2"
+pollster = "0.4"

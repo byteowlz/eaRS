@@ -1,13 +1,16 @@
 # Native Settings layout
 
-This is an incumbent-theme refinement, not the proposed global Calm Look or the
-unselected six-page/sidebar study. The four existing destinations remain intact.
+Dictation now opens the [native receiver Input/Shortcuts slice](hifi-settings.md).
+The four existing destinations remain intact; General and the remaining panes
+retain the incumbent controls described below. This is not the global Calm Look
+or the unselected six-page/sidebar study.
 
 - Equal-width, 32 px-high top tabs fill the available navigation row. Navigation
   stays in a fixed header while only pane content scrolls. Arrow keys and Home/End
   select panes when navigation is focused; Tab/Shift-Tab keep the existing focus cycle.
 - The duplicate app heading and implementation-detail footer are removed. The
-  native window title remains. Existing780×560 default and640×420 minimum are unchanged.
+  native window title remains. The receiver slice uses a1100×700 default window;
+  the640×420 minimum is retained.
 - Each pane retains its own scroll handle across selection changes. The last
   selected pane is remembered while the app runs. Existing field/profile draft
   entities are not reconstructed when changing tabs.

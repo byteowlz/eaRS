@@ -13,7 +13,7 @@ members = ["apps/ears-ui"]
 # simple_gui (Tauri) has its own lockfile/toolchain and is deprecated in favor
 # of apps/ears-ui; keep it out of the workspace so `cargo` in that directory
 # does not try to join this one.
-exclude = ["apps/simple_gui/src-tauri"]
+exclude = ["apps/simple_gui/src-tauri", "vendor/device/impls/device-rs"]
 
 [build-dependencies]
 pkg-config = "0.3"

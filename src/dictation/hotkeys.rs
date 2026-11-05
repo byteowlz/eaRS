@@ -12,6 +12,12 @@ use crate::config::DictationHotkeyMode;
 use crate::config::HotkeyConfig;
 use rdev::EventType;
 use std::sync::Arc;
+
+#[path = "hotkey_edit.rs"]
+mod edit;
+pub use edit::{
+    HotkeyController, HotkeyRecording, HotkeySuspension, parse_combo_checked, validate_hotkeys,
+};
 use std::thread;
 use std::time::Instant;
 
@@ -62,7 +68,9 @@ fn is_modifier(key: rdev::Key) -> bool {
     )
 }
 
-/// Parse a combo such as `ctrl+shift+v`, `cmd+space`, or `right_option`.
+/// Legacy permissive config parser. Preserve token order, ignored unknown words
+/// and aggregate left-side prefixes for existing configs; editor input must use
+/// [`parse_combo_checked`] instead. An absent trigger remains `Unknown(0)`.
 pub fn parse_combo(s: &str) -> Combo {
     let mut combo = Combo {
         ctrl: false,
@@ -72,7 +80,14 @@ pub fn parse_combo(s: &str) -> Combo {
         key: rdev::Key::Unknown(0),
     };
     for part in s.to_lowercase().split('+') {
-        let part = part.trim();
+        // Historically these aliases only set a flag, even after a trigger.
+        let part = match part.trim() {
+            "left_ctrl" => "ctrl",
+            "left_shift" => "shift",
+            "left_alt" | "left_option" => "alt",
+            "left_cmd" | "left_meta" => "cmd",
+            part => part,
+        };
         if apply_modifier(part, &mut combo) {
             continue;
         }
@@ -83,26 +98,48 @@ pub fn parse_combo(s: &str) -> Combo {
     combo
 }
 
+/// Prefer the editor's explicit-side bindings, falling back to legacy syntax
+/// at startup instead of silently disabling a previously accepted shortcut.
+fn runtime_combo(input: &str) -> Combo {
+    parse_combo_checked(input).unwrap_or_else(|_| parse_combo(input))
+}
+
 /// Aggregate modifier words. Right-hand bindings also set their flag, so a
 /// `right_option` hold matches with Option held.
 fn apply_modifier(part: &str, combo: &mut Combo) -> bool {
     match part {
-        "ctrl" | "control" | "left_ctrl" => combo.ctrl = true,
+        "ctrl" | "control" => combo.ctrl = true,
+        "left_ctrl" => {
+            combo.ctrl = true;
+            combo.key = rdev::Key::ControlLeft;
+        }
         "right_ctrl" => {
             combo.ctrl = true;
             combo.key = rdev::Key::ControlRight;
         }
-        "shift" | "left_shift" => combo.shift = true,
+        "shift" => combo.shift = true,
+        "left_shift" => {
+            combo.shift = true;
+            combo.key = rdev::Key::ShiftLeft;
+        }
         "right_shift" => {
             combo.shift = true;
             combo.key = rdev::Key::ShiftRight;
         }
-        "alt" | "option" | "left_alt" | "left_option" => combo.alt = true,
+        "alt" | "option" => combo.alt = true,
+        "left_alt" | "left_option" => {
+            combo.alt = true;
+            combo.key = rdev::Key::Alt;
+        }
         "right_alt" | "right_option" | "roption" => {
             combo.alt = true;
             combo.key = rdev::Key::AltGr;
         }
-        "cmd" | "command" | "meta" | "super" | "left_cmd" => combo.meta = true,
+        "cmd" | "command" | "meta" | "super" => combo.meta = true,
+        "left_cmd" | "left_meta" => {
+            combo.meta = true;
+            combo.key = rdev::Key::MetaLeft;
+        }
         "right_cmd" | "right_meta" => {
             combo.meta = true;
             combo.key = rdev::Key::MetaRight;
@@ -272,7 +309,13 @@ pub(crate) struct Listener {
     alt: bool,
     meta: bool,
     toggle_down: Option<Instant>,
+    profile_down: bool,
+    /// Physical sides are tracked separately; releasing left must not clear right.
+    down: Vec<rdev::Key>,
     held_from_paused: bool,
+    /// A hold owns only its captured generation, never a later wake/restart.
+    toggle_generation: Option<u64>,
+    ptt_generation: Option<u64>,
     ptt: PushToTalk,
 }
 
@@ -282,10 +325,10 @@ impl Listener {
             s.as_deref()
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
-                .map(parse_combo)
+                .map(runtime_combo)
         };
         Self {
-            toggle: parse_combo(&config.toggle),
+            toggle: runtime_combo(&config.toggle),
             profile_cycle: combo(&config.profile_cycle),
             push_to_talk: combo(&config.push_to_talk),
             ctrl: false,
@@ -293,33 +336,92 @@ impl Listener {
             alt: false,
             meta: false,
             toggle_down: None,
+            profile_down: false,
+            down: Vec::new(),
             held_from_paused: false,
+            toggle_generation: None,
+            ptt_generation: None,
             ptt: PushToTalk::default(),
         }
     }
 
-    fn track_modifier(&mut self, key: rdev::Key, down: bool) -> bool {
-        let slot = match key {
-            rdev::Key::ControlLeft | rdev::Key::ControlRight => &mut self.ctrl,
-            rdev::Key::ShiftLeft | rdev::Key::ShiftRight => &mut self.shift,
-            rdev::Key::Alt | rdev::Key::AltGr => &mut self.alt,
-            rdev::Key::MetaLeft | rdev::Key::MetaRight => &mut self.meta,
-            _ => return false,
-        };
-        *slot = down;
+    /// Returns false for repeats/unpaired releases. Also used while suspended.
+    fn track_key(&mut self, key: rdev::Key, down: bool) -> bool {
+        let was_down = self.down.contains(&key);
+        if was_down == down {
+            return false;
+        }
+        if down {
+            self.down.push(key);
+        } else {
+            self.down.retain(|held| *held != key);
+        }
+        self.ctrl = self.down.contains(&rdev::Key::ControlLeft)
+            || self.down.contains(&rdev::Key::ControlRight);
+        self.shift =
+            self.down.contains(&rdev::Key::ShiftLeft) || self.down.contains(&rdev::Key::ShiftRight);
+        self.alt = self.down.contains(&rdev::Key::Alt) || self.down.contains(&rdev::Key::AltGr);
+        self.meta =
+            self.down.contains(&rdev::Key::MetaLeft) || self.down.contains(&rdev::Key::MetaRight);
         true
     }
 
-    /// A key or modifier went down. `escape` is handled by the caller.
+    /// Clear armed actions without forgetting keys still physically held.
+    fn disarm(&mut self, shared: &Shared) {
+        if self.ptt.started_capture
+            && let Some(generation) = self.ptt_generation
+        {
+            shared.end_hotkey_capture(generation, true);
+        }
+        if self.held_from_paused
+            && let Some(generation) = self.toggle_generation
+        {
+            shared.end_hotkey_capture(generation, true);
+        }
+        shared.set_ptt_held(false);
+        self.toggle_down = None;
+        self.profile_down = false;
+        self.held_from_paused = false;
+        self.toggle_generation = None;
+        self.ptt_generation = None;
+        self.ptt = PushToTalk::default();
+    }
+
+    /// Modifier-only shortcuts must not fire after they become a typing chord.
+    fn disarm_chorded_shortcuts(&mut self, key: rdev::Key, shared: &Shared) {
+        // Modifier-only shortcuts are not ordinary typing chords. Once another
+        // key joins, don't toggle/cycle on the trailing modifier release.
+        if self.toggle.modifier_only() && key != self.toggle.key && self.toggle_down.is_some() {
+            if self.held_from_paused
+                && let Some(generation) = self.toggle_generation
+            {
+                shared.end_hotkey_capture(generation, true);
+                shared.set_ptt_held(false);
+            }
+            self.toggle_down = None;
+            self.held_from_paused = false;
+            self.toggle_generation = None;
+        }
+        if self
+            .profile_cycle
+            .is_some_and(|combo| combo.modifier_only() && combo.key != key)
+        {
+            self.profile_down = false;
+        }
+    }
+
+    /// A key or modifier went down. `escape` and physical state are handled by
+    /// the caller, before matching (modifier-only PTT includes its own flag).
     pub(crate) fn press(&mut self, key: rdev::Key, shared: &Shared) {
+        self.disarm_chorded_shortcuts(key, shared);
         // The hold starts before anything else can be read as a chord.
         if let Some(combo) = self.push_to_talk
             && combo.matches(self.ctrl, self.shift, self.alt, self.meta, key)
         {
-            let started = self.ptt.pressed(Instant::now(), shared.is_capturing());
-            shared.set_ptt_held(true);
+            let (generation, started) = shared.begin_hotkey_hold();
+            self.ptt_generation = Some(generation);
+            self.ptt.pressed(Instant::now(), !started);
             if started {
-                shared.set_capturing(true);
                 vlog!("Audio capture started (push to talk)");
             }
             return;
@@ -329,8 +431,14 @@ impl Listener {
         if self.ptt.held() && self.push_to_talk.is_some_and(|c| c.modifier_only()) {
             self.ptt.other_key();
         }
-        if self.track_modifier(key, true) && !self.is_binding_modifier(key) {
+        if is_modifier(key) && !self.is_binding_modifier(key) {
             return;
+        }
+        if self
+            .profile_cycle
+            .is_some_and(|combo| combo.matches(self.ctrl, self.shift, self.alt, self.meta, key))
+        {
+            self.profile_down = true;
         }
         if self
             .toggle
@@ -341,8 +449,9 @@ impl Listener {
                 shared.hotkey_mode(),
                 DictationHotkeyMode::PushToTalk | DictationHotkeyMode::Hybrid
             ) {
-                shared.set_ptt_held(true);
-                self.held_from_paused = shared.set_capturing(true);
+                let (generation, started) = shared.begin_hotkey_hold();
+                self.toggle_generation = Some(generation);
+                self.held_from_paused = started;
                 vlog!(
                     "Audio capture {} (hold)",
                     if self.held_from_paused {
@@ -363,20 +472,15 @@ impl Listener {
     }
 
     pub(crate) fn release(&mut self, key: rdev::Key, shared: &Shared) {
-        self.track_modifier(key, false);
         if self.ptt.held() && self.push_to_talk.is_some_and(|c| c.key == key) {
             shared.set_ptt_held(false);
-            match self.ptt.released(Instant::now()) {
-                PttRelease::Discard => {
-                    shared.command(DictationCommand::Cancel);
-                    vlog!("Audio capture discarded (push-to-talk tap or chord)");
-                }
-                PttRelease::Finish => {
-                    if shared.set_capturing(false) {
-                        vlog!("Audio capture stopped (push-to-talk release)");
-                    }
-                }
-                PttRelease::Leave => {}
+            let release = self.ptt.released(Instant::now());
+            let generation = self.ptt_generation.take();
+            if let Some(generation) = generation
+                && release != PttRelease::Leave
+            {
+                let applied = shared.end_hotkey_capture(generation, release == PttRelease::Discard);
+                vlog!("Push-to-talk release: {release:?}, applied={applied}");
             }
             return;
         }
@@ -384,30 +488,28 @@ impl Listener {
         if key == self.toggle.key {
             shared.set_ptt_held(false);
         }
-        if let Some(cycle) = self.profile_cycle
-            && cycle.matches(self.ctrl, self.shift, self.alt, self.meta, key)
-        {
+        if self.profile_down && self.profile_cycle.is_some_and(|cycle| cycle.key == key) {
+            self.profile_down = false;
             shared.command(DictationCommand::CycleProfile);
             return;
         }
-        if !self
-            .toggle
-            .matches(self.ctrl, self.shift, self.alt, self.meta, key)
-        {
+        if key != self.toggle.key {
             return;
         }
-        let press_duration_ms = self
-            .toggle_down
-            .take()
-            .map(|ts| ts.elapsed().as_millis())
-            .unwrap_or(0);
+        let Some(pressed_at) = self.toggle_down.take() else {
+            return;
+        };
+        let press_duration_ms = pressed_at.elapsed().as_millis();
+        let generation = self.toggle_generation.take();
         match shared.hotkey_mode() {
             DictationHotkeyMode::Toggle => {
                 shared.toggle();
             }
             DictationHotkeyMode::PushToTalk => {
-                if self.held_from_paused {
-                    shared.set_capturing(false);
+                if self.held_from_paused
+                    && let Some(generation) = generation
+                {
+                    shared.end_hotkey_capture(generation, false);
                 }
                 self.held_from_paused = false;
             }
@@ -415,11 +517,13 @@ impl Listener {
                 if self.held_from_paused {
                     if press_duration_ms <= TAP_THRESHOLD_MS {
                         vlog!("Audio capture latched on (tap)");
-                    } else if shared.set_capturing(false) {
+                    } else if let Some(generation) = generation
+                        && shared.end_hotkey_capture(generation, false)
+                    {
                         vlog!("Audio capture stopped (hold release)");
                     }
-                } else {
-                    shared.set_capturing(false);
+                } else if let Some(generation) = generation {
+                    shared.end_hotkey_capture(generation, false);
                     vlog!("Audio capture stopped (toggle off)");
                 }
                 self.held_from_paused = false;
@@ -444,45 +548,77 @@ impl Listener {
 }
 
 /// Start the listener thread.
-pub(crate) fn spawn_listener(config: HotkeyConfig, escape_cancels: bool, shared: Arc<Shared>) {
-    let _ = escape_cancels; // kept for signature stability; flag lives on Shared
+pub(crate) fn spawn_listener(
+    mut config: HotkeyConfig,
+    escape_cancels: bool,
+    shared: Arc<Shared>,
+) -> HotkeyController {
+    config.escape_cancels = escape_cancels;
     vlog!("Initializing hotkey listener for: {}", config.toggle);
+    let controller = HotkeyController::new(config.clone(), &shared);
+    let events = controller.clone();
+    let lifecycle = controller.clone();
     thread::Builder::new()
         .name("ears-hotkeys".to_string())
         .spawn(move || {
-            let mut listener = Listener::new(&config);
             vlog!(
                 "hotkey listener ready: toggle={:?} mode={:?} push_to_talk={:?}",
                 config.toggle,
                 shared.hotkey_mode(),
                 config.push_to_talk
             );
+            let callback_shared = shared.clone();
             let result = listen_events(move |event| match event {
                 EventType::KeyPress(key) | EventType::KeyRelease(key) => {
-                    if !shared.is_running() {
+                    if !callback_shared.is_running() {
                         return;
                     }
-                    if matches!(event, EventType::KeyPress(_)) {
-                        if key == rdev::Key::Escape && listener.escape(&shared) {
-                            return;
-                        }
-                        listener.press(key, &shared);
-                    } else {
-                        listener.release(key, &shared);
-                    }
+                    events.event(
+                        key,
+                        matches!(event, EventType::KeyPress(_)),
+                        &callback_shared,
+                    );
                 }
                 _ => {}
             });
             if let Err(e) = result {
                 eprintln!("Hotkey listener error: {:?}", e);
+                lifecycle.listener_failed(e, &shared);
+            } else {
+                lifecycle.listener_failed("event loop stopped".into(), &shared);
             }
         })
         .expect("failed to spawn hotkey listener thread");
+    controller
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_parser_keeps_prefixes_order_and_permissive_defaults() {
+        for (legacy, ordinary) in [
+            ("left_ctrl+v", "ctrl+v"),
+            ("left_option+e", "option+e"),
+            ("left_shift+v", "shift+v"),
+            ("left_cmd+space", "cmd+space"),
+            ("v+ctrl", "ctrl+v"),
+            ("v+left_ctrl", "ctrl+v"),
+            ("ctrl+ctrl+v", "ctrl+v"),
+            ("ctrl+ignored_name+v", "ctrl+v"),
+            ("ctrl++v", "ctrl+v"),
+        ] {
+            assert_eq!(parse_combo(legacy), parse_combo(ordinary), "{legacy}");
+        }
+        assert_eq!(parse_combo("").key, rdev::Key::Unknown(0));
+        assert_eq!(parse_combo("ctrl").key, rdev::Key::Unknown(0));
+        assert!(parse_combo("ctrl").ctrl);
+        assert_eq!(parse_combo("left_ctrl").key, rdev::Key::Unknown(0));
+        assert_eq!(parse_combo("v+b").key, rdev::Key::KeyB);
+        assert_eq!(parse_combo("ctrl+v+f13").key, rdev::Key::Unknown(0));
+        assert!(parse_combo("ctrl+v+f13").ctrl);
+    }
 
     #[test]
     fn parses_modifier_only_command_and_function_bindings() {

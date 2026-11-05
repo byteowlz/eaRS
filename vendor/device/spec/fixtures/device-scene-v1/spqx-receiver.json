@@ -1,0 +1,410 @@
+{
+  "schema_version": 1,
+  "scene": {
+    "id": "spqx.receiver",
+    "revision": 1,
+    "materials": {
+      "face": {
+        "base": "#1f2226",
+        "ink": "#d4d7dc",
+        "emissive": "#000000",
+        "roughness": 0.62,
+        "metalness": 0.45,
+        "finish": "brushed"
+      },
+      "body": {
+        "base": "#191b1e",
+        "ink": "#a9aeb5",
+        "emissive": "#000000",
+        "roughness": 0.75,
+        "metalness": 0.5,
+        "finish": "matte"
+      },
+      "key": {
+        "base": "#212428",
+        "ink": "#f2f3f5",
+        "emissive": "#000000",
+        "roughness": 0.7,
+        "metalness": 0,
+        "finish": "matte"
+      },
+      "accent": {
+        "base": "#e8762f",
+        "ink": "#141412",
+        "emissive": "#000000",
+        "roughness": 0.7,
+        "metalness": 0,
+        "finish": "matte"
+      },
+      "glass": {
+        "base": "#070a0b",
+        "ink": "#ff9e52",
+        "emissive": "#ff9e52",
+        "roughness": 1,
+        "metalness": 0,
+        "finish": "glass"
+      }
+    },
+    "camera": {
+      "projection": "perspective",
+      "fov_y_deg": 25,
+      "yaw_deg": -18,
+      "pitch_deg": 16,
+      "target": [
+        0,
+        -0.5,
+        -6
+      ],
+      "distance": 115
+    },
+    "light": {
+      "azimuth_deg": 1,
+      "elevation_deg": 30,
+      "intensity": 1,
+      "ambient": 1.3
+    },
+    "devices": [
+      {
+        "id": "spqx",
+        "origin": [
+          0,
+          0,
+          0
+        ],
+        "chassis": {
+          "width": 64,
+          "height": 16,
+          "depth": 24,
+          "front_thickness": 0.65,
+          "feet_height": 1,
+          "material": "body",
+          "vents": true
+        },
+        "panels": [
+          {
+            "id": "spqx.front",
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "z": 0,
+              "width": 64,
+              "height": 16,
+              "depth": 0.65
+            },
+            "surface": "faceplate",
+            "material": "face",
+            "label": "SPQX",
+            "page": "*"
+          }
+        ],
+        "controls": [
+          {
+            "id": "spqx.manuscript",
+            "module_id": "spqx.front",
+            "page": "*",
+            "kind": "text",
+            "rect": {
+              "x": 0,
+              "y": 1,
+              "z": 0.22,
+              "width": 42,
+              "height": 8,
+              "depth": 0.1
+            },
+            "material": "glass",
+            "label": "Manuscript",
+            "accessible_name": "Manuscript",
+            "description": "SPQX synthetic receiver specimen",
+            "tab_index": 0,
+            "action": "spqx.manuscript",
+            "presentation": "matrix",
+            "matrix": {
+              "cols": 40,
+              "rows": 4,
+              "glyph_width": 5,
+              "glyph_height": 8,
+              "cell_width": 6,
+              "cell_height": 10,
+              "pitch": 0.164,
+              "padding_x": 1.32,
+              "padding_y": 0.72
+            }
+          },
+          {
+            "id": "spqx.voice",
+            "module_id": "spqx.front",
+            "page": "*",
+            "kind": "knob",
+            "rect": {
+              "x": -26,
+              "y": 0.5,
+              "z": 0.65,
+              "width": 4.2,
+              "height": 4.2,
+              "depth": 1.65
+            },
+            "material": "key",
+            "label": "Voice",
+            "accessible_name": "Voice",
+            "description": "SPQX synthetic receiver specimen",
+            "tab_index": 1,
+            "action": "spqx.voice",
+            "presentation": "printed",
+            "range": {
+              "min": 0,
+              "max": 5,
+              "step": 1
+            }
+          },
+          {
+            "id": "spqx.volume",
+            "module_id": "spqx.front",
+            "page": "*",
+            "kind": "knob",
+            "rect": {
+              "x": 26,
+              "y": 0.5,
+              "z": 0.65,
+              "width": 5.2,
+              "height": 5.2,
+              "depth": 1.65
+            },
+            "material": "key",
+            "label": "Volume",
+            "accessible_name": "Volume",
+            "description": "SPQX synthetic receiver specimen",
+            "tab_index": 2,
+            "action": "spqx.volume",
+            "presentation": "printed",
+            "unit": "percent",
+            "range": {
+              "min": 0,
+              "max": 100,
+              "step": 5
+            }
+          },
+          {
+            "id": "spqx.say",
+            "module_id": "spqx.front",
+            "page": "*",
+            "kind": "button",
+            "rect": {
+              "x": -17.5,
+              "y": -5,
+              "z": 0.2,
+              "width": 5.8,
+              "height": 1.6,
+              "depth": 0.7
+            },
+            "material": "accent",
+            "label": "SAY",
+            "accessible_name": "SAY",
+            "description": "SPQX synthetic receiver specimen",
+            "tab_index": 3,
+            "action": "spqx.say",
+            "presentation": "printed"
+          },
+          {
+            "id": "spqx.play",
+            "module_id": "spqx.front",
+            "page": "*",
+            "kind": "button",
+            "rect": {
+              "x": -10.5,
+              "y": -5,
+              "z": 0.2,
+              "width": 5.8,
+              "height": 1.6,
+              "depth": 0.7
+            },
+            "material": "key",
+            "label": "PLAY",
+            "accessible_name": "PLAY",
+            "description": "SPQX synthetic receiver specimen",
+            "tab_index": 4,
+            "action": "spqx.play",
+            "presentation": "printed"
+          },
+          {
+            "id": "spqx.stop",
+            "module_id": "spqx.front",
+            "page": "*",
+            "kind": "button",
+            "rect": {
+              "x": -3.5,
+              "y": -5,
+              "z": 0.2,
+              "width": 5.8,
+              "height": 1.6,
+              "depth": 0.7
+            },
+            "material": "key",
+            "label": "STOP",
+            "accessible_name": "STOP",
+            "description": "SPQX synthetic receiver specimen",
+            "tab_index": 5,
+            "action": "spqx.stop",
+            "presentation": "printed"
+          },
+          {
+            "id": "spqx.save",
+            "module_id": "spqx.front",
+            "page": "*",
+            "kind": "button",
+            "rect": {
+              "x": 3.5,
+              "y": -5,
+              "z": 0.2,
+              "width": 5.8,
+              "height": 1.6,
+              "depth": 0.7
+            },
+            "material": "key",
+            "label": "SAVE",
+            "accessible_name": "SAVE",
+            "description": "SPQX synthetic receiver specimen",
+            "tab_index": 6,
+            "action": "spqx.save",
+            "presentation": "printed"
+          },
+          {
+            "id": "spqx.text",
+            "module_id": "spqx.front",
+            "page": "*",
+            "kind": "button",
+            "rect": {
+              "x": 10.5,
+              "y": -5,
+              "z": 0.2,
+              "width": 5.8,
+              "height": 1.6,
+              "depth": 0.7
+            },
+            "material": "key",
+            "label": "TEXT",
+            "accessible_name": "TEXT",
+            "description": "SPQX synthetic receiver specimen",
+            "tab_index": 7,
+            "action": "spqx.text",
+            "presentation": "printed"
+          },
+          {
+            "id": "spqx.settings",
+            "module_id": "spqx.front",
+            "page": "*",
+            "kind": "button",
+            "rect": {
+              "x": 17.5,
+              "y": -5,
+              "z": 0.2,
+              "width": 5.8,
+              "height": 1.6,
+              "depth": 0.7
+            },
+            "material": "key",
+            "label": "SETTINGS",
+            "accessible_name": "SETTINGS",
+            "description": "SPQX synthetic receiver specimen",
+            "tab_index": 8,
+            "action": "spqx.settings",
+            "presentation": "printed"
+          }
+        ]
+      }
+    ]
+  },
+  "state": {
+    "revision": 1,
+    "active_page": "text",
+    "controls": {
+      "spqx.manuscript": {
+        "value": "Heute probieren wir eine neue Stimme aus.",
+        "enabled": true,
+        "visible": true,
+        "pressed": false,
+        "focused": false,
+        "busy": false,
+        "error": ""
+      },
+      "spqx.voice": {
+        "value": 0,
+        "enabled": true,
+        "visible": true,
+        "pressed": false,
+        "focused": false,
+        "busy": false,
+        "error": ""
+      },
+      "spqx.volume": {
+        "value": 80,
+        "enabled": true,
+        "visible": true,
+        "pressed": false,
+        "focused": false,
+        "busy": false,
+        "error": ""
+      },
+      "spqx.say": {
+        "value": null,
+        "enabled": true,
+        "visible": true,
+        "pressed": false,
+        "focused": false,
+        "busy": false,
+        "error": ""
+      },
+      "spqx.play": {
+        "value": null,
+        "enabled": true,
+        "visible": true,
+        "pressed": false,
+        "focused": false,
+        "busy": false,
+        "error": ""
+      },
+      "spqx.stop": {
+        "value": null,
+        "enabled": true,
+        "visible": true,
+        "pressed": false,
+        "focused": false,
+        "busy": false,
+        "error": ""
+      },
+      "spqx.save": {
+        "value": null,
+        "enabled": true,
+        "visible": true,
+        "pressed": false,
+        "focused": false,
+        "busy": false,
+        "error": ""
+      },
+      "spqx.text": {
+        "value": null,
+        "enabled": true,
+        "visible": true,
+        "pressed": false,
+        "focused": false,
+        "busy": false,
+        "error": ""
+      },
+      "spqx.settings": {
+        "value": null,
+        "enabled": true,
+        "visible": true,
+        "pressed": false,
+        "focused": false,
+        "busy": false,
+        "error": ""
+      }
+    }
+  },
+  "viewport": {
+    "width_dip": 1280,
+    "height_dip": 720,
+    "scale_factor": 2,
+    "pixel_cap": 4194304,
+    "transparent": true
+  }
+}

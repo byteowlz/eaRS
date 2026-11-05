@@ -295,7 +295,10 @@ pub(crate) async fn run(
         || config.voice_commands.speaker_policy.mode != crate::speaker_gate::Mode::Disabled;
     shared.set_escape_cancels(escape_cancels);
     if hotkeys_enabled {
-        hotkeys::spawn_listener(config.hotkeys.clone(), escape_cancels, shared.clone());
+        let mut hotkey_config = config.hotkeys.clone();
+        hotkey_config.enable_internal = true; // honor an explicit runtime override
+        let controller = hotkeys::spawn_listener(hotkey_config, escape_cancels, shared.clone());
+        *shared.hotkey_controller.lock().unwrap() = Some(controller);
     }
 
     let starts_listening = !config.dictation.start_paused;
@@ -953,6 +956,9 @@ impl Engine {
             DictationCommand::Toggle => {
                 self.shared.toggle();
             }
+            DictationCommand::CancelHotkey { generation } => {
+                self.cancel_hotkey_generation(generation)?;
+            }
             DictationCommand::Cancel => {
                 self.buffer.discard();
                 self.router.cancel();
@@ -965,6 +971,7 @@ impl Engine {
                     status: self.router.status(),
                 });
                 self.shared.set_capturing(false);
+                self.acknowledge_hotkey_cancel()?;
             }
             DictationCommand::SetVoiceMode(mode) => {
                 self.buffer.discard();
@@ -1093,6 +1100,47 @@ impl Engine {
         Ok(Flow::Continue)
     }
 
+    fn cancel_hotkey_generation(&mut self, generation: u64) -> Result<()> {
+        if !self.shared.hotkey_cancel_pending.load(Ordering::SeqCst)
+            || self.shared.hotkey_cancel_generation.load(Ordering::SeqCst) != generation
+        {
+            return Ok(());
+        }
+        if self.shared.capture_generation() == generation {
+            self.handle_command(DictationCommand::Cancel)?;
+            return Ok(());
+        }
+        // A wake or another source may already have started a new capture while
+        // this message was queued. Clean up only the engine's older session;
+        // never stop or discard a session that has observed the newer token.
+        if self
+            .auto_pause
+            .capture_generation
+            .is_none_or(|seen| seen < generation)
+        {
+            self.on_capture_edge(false)?;
+        }
+        self.shared
+            .hotkey_cancel_pending
+            .store(false, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// Settle a recorder-interrupted hold before allowing another hotkey press,
+    /// regardless of whether the capture edge or queued Cancel arrived first.
+    fn acknowledge_hotkey_cancel(&mut self) -> Result<()> {
+        if !self.shared.hotkey_cancel_pending.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        if self.was_capturing {
+            self.on_capture_edge(false)?;
+        }
+        self.shared
+            .hotkey_cancel_pending
+            .store(false, Ordering::SeqCst);
+        Ok(())
+    }
+
     fn sync_escape_policy(&self) {
         let configured = self
             .options
@@ -1104,6 +1152,19 @@ impl Engine {
     }
 
     fn on_capture_edge(&mut self, capturing: bool) -> Result<()> {
+        // A shortcut recorder synchronously cuts its own PTT hold. The command
+        // queue may lag that edge: discard before any pause finalization flush.
+        let recorder_cancelled = !capturing
+            && self.shared.hotkey_cancel_pending.load(Ordering::SeqCst)
+            && self.auto_pause.capture_generation.is_none_or(|seen| {
+                seen < self.shared.hotkey_cancel_generation.load(Ordering::SeqCst)
+            });
+        if recorder_cancelled {
+            self.buffer.discard();
+            self.router.discard_pending();
+            self.utterance.clear();
+            self.discard_history();
+        }
         self.was_capturing = capturing;
         self.auto_pause.capture_generation = Some(self.shared.capture_generation());
         if capturing {
@@ -1120,7 +1181,9 @@ impl Engine {
             self.last_profile_eval = None;
             self.evaluate_profiles(true)?;
         } else {
-            self.finish_capture_session(self.auto_pause.local_pause.is_none())?;
+            self.finish_capture_session(
+                !recorder_cancelled && self.auto_pause.local_pause.is_none(),
+            )?;
         }
         Ok(())
     }
@@ -2006,6 +2069,66 @@ mod tests {
             assert!(out.join(&record.audio_path).exists());
         }
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn queued_hotkey_cancel_never_stops_or_discards_a_newer_capture() {
+        let mut config = AppConfig::default();
+        config.replacement.enabled = false;
+        config.transcripts.enabled = false;
+        config.dictation.notifications.enabled = false;
+        let (mut engine, typed) = retention_engine(config, None);
+        engine
+            .shared
+            .end_hotkey_capture(engine.shared.capture_generation(), true);
+        let cancelled = engine.shared.capture_generation();
+        engine.shared.set_capturing(true);
+        engine.on_capture_edge(true).unwrap();
+        engine.buffer.push("new capture".into());
+        engine.utterance.push("new capture".into());
+        engine
+            .handle_command(DictationCommand::CancelHotkey {
+                generation: cancelled,
+            })
+            .unwrap();
+        assert!(engine.shared.is_capturing());
+        assert!(engine.was_capturing);
+        assert!(!engine.buffer.chunks.is_empty());
+        assert!(!engine.utterance.is_empty());
+        assert!(typed.lock().unwrap().is_empty());
+        assert!(!engine.shared.hotkey_cancel_pending.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn recorder_cancel_edge_discards_before_delayed_command_is_handled() {
+        let mut config = AppConfig::default();
+        config.replacement.enabled = false;
+        config.transcripts.enabled = false;
+        config.dictation.notifications.enabled = false;
+        for edge_first in [false, true] {
+            let (mut engine, typed) = retention_engine(config.clone(), None);
+            engine.buffer.push("never insert this".into());
+            engine.utterance.push("never retain this".into());
+            engine
+                .shared
+                .end_hotkey_capture(engine.shared.capture_generation(), true);
+            assert!(!engine.shared.is_capturing());
+            if edge_first {
+                // Deliberately observe the edge before polling the command queue.
+                engine.on_capture_edge(false).unwrap();
+                assert!(engine.shared.hotkey_cancel_pending.load(Ordering::SeqCst));
+            }
+            engine
+                .handle_command(DictationCommand::CancelHotkey {
+                    generation: engine.shared.capture_generation(),
+                })
+                .unwrap();
+            assert!(!engine.shared.hotkey_cancel_pending.load(Ordering::SeqCst));
+            assert!(typed.lock().unwrap().is_empty());
+            assert!(engine.buffer.chunks.is_empty());
+            assert!(engine.utterance.is_empty());
+            assert!(!engine.was_capturing);
+        }
     }
 
     #[test]

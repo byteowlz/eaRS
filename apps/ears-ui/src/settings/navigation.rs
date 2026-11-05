@@ -29,8 +29,14 @@ impl Tab {
     }
 }
 impl SettingsView {
-    fn select_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
+    fn select_tab(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
         self.tab = tab;
+        self.native_active = tab == Tab::Dictation && self.native.is_some();
+        if self.native_active
+            && let Some(native) = &self.native
+        {
+            native.update(cx, |view, cx| view.focus(window, cx));
+        }
         self.model.update(cx, |model, _| model.settings_tab = tab);
         cx.notify();
     }
@@ -64,7 +70,7 @@ impl SettingsView {
                     return;
                 }
                 if let Some(tab) = this.tab.key(&event.keystroke.key) {
-                    this.select_tab(tab, cx);
+                    this.select_tab(tab, window, cx);
                     cx.stop_propagation();
                 }
             }))
@@ -95,7 +101,7 @@ impl SettingsView {
                         move |_, window, cx| {
                             entity.update(cx, |this, cx| {
                                 this.navigation_focus.focus(window);
-                                this.select_tab(tab, cx);
+                                this.select_tab(tab, window, cx);
                             })
                         }
                     })

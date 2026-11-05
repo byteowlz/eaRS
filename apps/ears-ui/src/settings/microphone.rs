@@ -49,13 +49,37 @@ pub(crate) fn persist_input_device(path: &Path, name: Option<&str>) -> Result<()
     );
     super::auto_pause::persist_edit(path, |text| updated_document(text, name))
 }
-#[derive(Clone)]
-struct Choice {
+/// Shared by both settings hosts: save only after a live engine confirms the switch.
+pub(super) fn apply(
+    model: &mut AppModel,
     name: Option<String>,
-    label: String,
-    selectable: bool,
+    cx: &mut Context<AppModel>,
+) -> Result<()> {
+    ensure!(
+        model.input_pending.is_none(),
+        "A microphone switch is already pending"
+    );
+    if model.engine_running() {
+        model.input_pending = Some(name.clone());
+        model.input_error = None;
+        model.send(DictationCommand::SetInputDevice(name));
+    } else {
+        if !model.configuration_is_preview {
+            persist_input_device(&ears::config::AppConfig::path()?, name.as_deref())?;
+        }
+        model.core.dictation.input_device = name;
+        model.input_error = None;
+    }
+    cx.notify();
+    Ok(())
 }
-fn choices(catalog: Option<&InputDevices>) -> Vec<Choice> {
+#[derive(Clone)]
+pub(super) struct Choice {
+    pub(super) name: Option<String>,
+    pub(super) label: String,
+    pub(super) selectable: bool,
+}
+pub(super) fn choices(catalog: Option<&InputDevices>) -> Vec<Choice> {
     let mut out = vec![Choice {
         name: None,
         label: "System default".into(),
@@ -87,7 +111,7 @@ fn choices(catalog: Option<&InputDevices>) -> Vec<Choice> {
     }
     out
 }
-fn fixture() -> InputDevices {
+pub(super) fn fixture() -> InputDevices {
     if std::env::args().any(|arg| arg == "--preview-settings-mic-empty") {
         return InputDevices {
             default_name: None,
@@ -189,36 +213,10 @@ impl MicrophonePicker {
             return;
         };
         let name = choice.name.clone();
-        let (preview, running) = {
-            let model = self.model.read(cx);
-            (model.configuration_is_preview, model.engine_running())
-        };
-        if running {
-            // Switch live; the engine's answer decides whether it is saved.
-            self.model.update(cx, |m, cx| {
-                m.input_pending = Some(name.clone());
-                m.input_error = None;
-                m.send(DictationCommand::SetInputDevice(name));
-                cx.notify();
-            });
-        } else {
-            if !preview {
-                let result = ears::config::AppConfig::path()
-                    .and_then(|path| persist_input_device(&path, name.as_deref()));
-                if result.is_err() {
-                    self.error = Some(
-                        "Could not save microphone preference. Check config.toml access and try again."
-                            .into(),
-                    );
-                    cx.notify();
-                    return;
-                }
-            }
-            self.model.update(cx, |m, cx| {
-                m.core.dictation.input_device = name;
-                m.input_error = None;
-                cx.notify();
-            });
+        if let Err(error) = self.model.update(cx, |m, cx| apply(m, name, cx)) {
+            self.error = Some(format!("Input not changed: {error:#}"));
+            cx.notify();
+            return;
         }
         self.error = None;
         self.expanded = false;

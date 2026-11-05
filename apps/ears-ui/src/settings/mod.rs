@@ -8,7 +8,12 @@ mod live_settings;
 use live_settings::LiveSetting;
 mod microphone;
 pub(crate) use microphone::persist_input_device;
+mod device;
+mod device_scene;
 mod navigation;
+mod shortcut_cli;
+mod shortcuts;
+pub(crate) use shortcut_cli::handle as shortcuts_cli;
 mod transcription;
 
 use crate::app::AppModel;
@@ -156,6 +161,8 @@ pub struct SettingsView {
     dictionary_error: Option<SharedString>,
     dict_add_focus: FocusHandle,
     tab: Tab,
+    native: Option<Entity<device::NativeSettings>>,
+    native_active: bool,
     server: Entity<TextInput>,
     language: Option<String>,
     test_input: Entity<TextInput>,
@@ -290,7 +297,7 @@ fn join_csv(items: &[String]) -> String {
 }
 
 impl SettingsView {
-    pub fn new(model: Entity<AppModel>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(model: Entity<AppModel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         init(cx);
         let (server_value, language, overlay, radius) = model.read_with(cx, |m, _| {
             (
@@ -366,6 +373,8 @@ impl SettingsView {
 
         let microphone = cx.new(|cx| microphone::MicrophonePicker::new(model.clone(), cx));
         let tab = model.read(cx).settings_tab;
+        let native = device::attach(model.clone(), window, cx);
+        let native_active = native.is_some() && tab == Tab::Dictation;
         Self {
             model,
             focus_handle: cx.focus_handle(),
@@ -374,6 +383,8 @@ impl SettingsView {
             dictionary_error: None,
             dict_add_focus: cx.focus_handle(),
             tab,
+            native,
+            native_active,
             server,
             language,
             test_input,
@@ -599,6 +610,11 @@ impl SettingsView {
     // ---- panes -----------------------------------------------------------
 
     fn view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        if self.native_active
+            && let Some(native) = &self.native
+        {
+            return native.clone().into_any_element();
+        }
         let theme = cx.global::<Theme>().clone();
         let r = &theme.roles;
 

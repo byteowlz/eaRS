@@ -1,0 +1,558 @@
+{
+  "schema_version": 1,
+  "scene": {
+    "id": "ears.settings",
+    "revision": 1,
+    "materials": {
+      "face": {
+        "base": "#1f2226",
+        "ink": "#d4d7dc",
+        "emissive": "#000000",
+        "roughness": 0.62,
+        "metalness": 0.45,
+        "finish": "brushed"
+      },
+      "body": {
+        "base": "#191b1e",
+        "ink": "#a9aeb5",
+        "emissive": "#000000",
+        "roughness": 0.75,
+        "metalness": 0.5,
+        "finish": "matte"
+      },
+      "key": {
+        "base": "#212428",
+        "ink": "#f2f3f5",
+        "emissive": "#000000",
+        "roughness": 0.7,
+        "metalness": 0,
+        "finish": "matte"
+      },
+      "accent": {
+        "base": "#e8762f",
+        "ink": "#141412",
+        "emissive": "#000000",
+        "roughness": 0.7,
+        "metalness": 0,
+        "finish": "matte"
+      },
+      "glass": {
+        "base": "#070a0b",
+        "ink": "#ff9e52",
+        "emissive": "#ff9e52",
+        "roughness": 1,
+        "metalness": 0,
+        "finish": "glass"
+      }
+    },
+    "camera": {
+      "projection": "perspective",
+      "fov_y_deg": 25,
+      "yaw_deg": -18,
+      "pitch_deg": 16,
+      "target": [
+        0,
+        -0.5,
+        -6
+      ],
+      "distance": 115
+    },
+    "light": {
+      "azimuth_deg": 1,
+      "elevation_deg": 30,
+      "intensity": 1,
+      "ambient": 1.3
+    },
+    "devices": [
+      {
+        "id": "ears",
+        "origin": [
+          0,
+          0,
+          0
+        ],
+        "chassis": {
+          "width": 64,
+          "height": 16,
+          "depth": 24,
+          "front_thickness": 0.65,
+          "feet_height": 1,
+          "material": "body",
+          "vents": true
+        },
+        "panels": [
+          {
+            "id": "ears.front",
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "z": 0,
+              "width": 64,
+              "height": 16,
+              "depth": 0.65
+            },
+            "surface": "faceplate",
+            "material": "face",
+            "label": "eaRS",
+            "page": "*"
+          },
+          {
+            "id": "ears.subnav",
+            "rect": {
+              "x": -25,
+              "y": -0.3,
+              "z": 0.66,
+              "width": 10,
+              "height": 8,
+              "depth": 0.1
+            },
+            "surface": "module",
+            "material": "face",
+            "label": "Dictation",
+            "page": "dictation.*"
+          },
+          {
+            "id": "ears.details",
+            "rect": {
+              "x": 6,
+              "y": -0.3,
+              "z": 0.66,
+              "width": 46,
+              "height": 8,
+              "depth": 0.1
+            },
+            "surface": "module",
+            "material": "face",
+            "label": "Settings",
+            "page": "dictation.*"
+          }
+        ],
+        "controls": [
+          {
+            "id": "ears.nav.dictation",
+            "module_id": "ears.front",
+            "page": "*",
+            "kind": "button",
+            "rect": {
+              "x": -23,
+              "y": 5.7,
+              "z": 0.8,
+              "width": 13,
+              "height": 1.4,
+              "depth": 0.1
+            },
+            "material": "key",
+            "label": "Dictation",
+            "accessible_name": "Dictation",
+            "description": "Navigate without discarding drafts",
+            "tab_index": 0,
+            "action": "navigate",
+            "presentation": "printed"
+          },
+          {
+            "id": "ears.nav.overlay",
+            "module_id": "ears.front",
+            "page": "*",
+            "kind": "button",
+            "rect": {
+              "x": -8,
+              "y": 5.7,
+              "z": 0.8,
+              "width": 13,
+              "height": 1.4,
+              "depth": 0.1
+            },
+            "material": "key",
+            "label": "Overlay",
+            "accessible_name": "Overlay",
+            "description": "Navigate without discarding drafts",
+            "tab_index": 1,
+            "action": "navigate",
+            "presentation": "printed"
+          },
+          {
+            "id": "ears.nav.dictionaries",
+            "module_id": "ears.front",
+            "page": "*",
+            "kind": "button",
+            "rect": {
+              "x": 8,
+              "y": 5.7,
+              "z": 0.8,
+              "width": 15,
+              "height": 1.4,
+              "depth": 0.1
+            },
+            "material": "key",
+            "label": "Dictionaries",
+            "accessible_name": "Dictionaries",
+            "description": "Navigate without discarding drafts",
+            "tab_index": 2,
+            "action": "navigate",
+            "presentation": "printed"
+          },
+          {
+            "id": "ears.nav.profiles",
+            "module_id": "ears.front",
+            "page": "*",
+            "kind": "button",
+            "rect": {
+              "x": 24,
+              "y": 5.7,
+              "z": 0.8,
+              "width": 12,
+              "height": 1.4,
+              "depth": 0.1
+            },
+            "material": "key",
+            "label": "Profiles",
+            "accessible_name": "Profiles",
+            "description": "Navigate without discarding drafts",
+            "tab_index": 3,
+            "action": "navigate",
+            "presentation": "printed"
+          },
+          {
+            "id": "ears.dictation.input",
+            "module_id": "ears.subnav",
+            "page": "dictation.*",
+            "kind": "button",
+            "rect": {
+              "x": -25,
+              "y": 1.8,
+              "z": 0.8,
+              "width": 8.8,
+              "height": 1.4,
+              "depth": 0.1
+            },
+            "material": "key",
+            "label": "Input",
+            "accessible_name": "Input",
+            "description": "Synthetic review fixture",
+            "tab_index": 4,
+            "action": "navigate",
+            "presentation": "printed"
+          },
+          {
+            "id": "ears.dictation.shortcuts",
+            "module_id": "ears.subnav",
+            "page": "dictation.*",
+            "kind": "button",
+            "rect": {
+              "x": -25,
+              "y": -0.6,
+              "z": 0.8,
+              "width": 8.8,
+              "height": 1.4,
+              "depth": 0.1
+            },
+            "material": "key",
+            "label": "Shortcuts",
+            "accessible_name": "Shortcuts",
+            "description": "Synthetic review fixture",
+            "tab_index": 5,
+            "action": "navigate",
+            "presentation": "printed"
+          },
+          {
+            "id": "ears.input.device",
+            "module_id": "ears.details",
+            "page": "dictation.input",
+            "kind": "select",
+            "rect": {
+              "x": 2,
+              "y": 1.5,
+              "z": 0.8,
+              "width": 30,
+              "height": 1.8,
+              "depth": 0.1
+            },
+            "material": "glass",
+            "label": "Microphone",
+            "accessible_name": "Microphone",
+            "description": "Synthetic review fixture",
+            "tab_index": 6,
+            "action": "ears.input.device",
+            "presentation": "native-text",
+            "options": [
+              {
+                "id": "default",
+                "label": "System default"
+              },
+              {
+                "id": "mic-a",
+                "label": "Fixture microphone A"
+              },
+              {
+                "id": "mic-b",
+                "label": "Fixture microphone B"
+              }
+            ]
+          },
+          {
+            "id": "ears.input.level",
+            "module_id": "ears.details",
+            "page": "dictation.input",
+            "kind": "meter",
+            "rect": {
+              "x": 22,
+              "y": 1.5,
+              "z": 0.8,
+              "width": 8,
+              "height": 1.8,
+              "depth": 0.1
+            },
+            "material": "glass",
+            "label": "Input level",
+            "accessible_name": "Input level",
+            "description": "Only displays caller-supplied capture state; never opens a microphone.",
+            "tab_index": -1,
+            "action": "none",
+            "presentation": "none",
+            "unit": "normalized_rms",
+            "range": {
+              "min": 0,
+              "max": 1,
+              "step": 0.01
+            }
+          },
+          {
+            "id": "ears.input.status",
+            "module_id": "ears.details",
+            "page": "dictation.input",
+            "kind": "readout",
+            "rect": {
+              "x": 6,
+              "y": -1.7,
+              "z": 0.8,
+              "width": 38,
+              "height": 1.5,
+              "depth": 0.1
+            },
+            "material": "glass",
+            "label": "Input status",
+            "accessible_name": "Input status",
+            "description": "Inactive until app supplies an authorized live signal; zero is not a success claim.",
+            "tab_index": -1,
+            "action": "none",
+            "presentation": "native-text"
+          },
+          {
+            "id": "ears.shortcuts.toggle",
+            "module_id": "ears.details",
+            "page": "dictation.shortcuts",
+            "kind": "shortcut",
+            "rect": {
+              "x": 5,
+              "y": 1.5,
+              "z": 0.8,
+              "width": 36,
+              "height": 1.8,
+              "depth": 0.1
+            },
+            "material": "glass",
+            "label": "Dictation toggle shortcut",
+            "accessible_name": "Dictation toggle shortcut",
+            "description": "Native shortcut capture. Escape cancels draft; commit validates via existing app binding.",
+            "tab_index": 6,
+            "action": "ears.shortcuts.toggle",
+            "presentation": "native-text"
+          },
+          {
+            "id": "ears.shortcuts.reset",
+            "module_id": "ears.details",
+            "page": "dictation.shortcuts",
+            "kind": "button",
+            "rect": {
+              "x": 6,
+              "y": -1.7,
+              "z": 0.8,
+              "width": 13,
+              "height": 1.6,
+              "depth": 0.1
+            },
+            "material": "key",
+            "label": "Reset defaults",
+            "accessible_name": "Reset defaults",
+            "description": "Synthetic review fixture",
+            "tab_index": 7,
+            "action": "ears.shortcuts.reset",
+            "presentation": "printed"
+          },
+          {
+            "id": "ears.shortcuts.cancel",
+            "module_id": "ears.details",
+            "page": "dictation.shortcuts",
+            "kind": "button",
+            "rect": {
+              "x": 22,
+              "y": -1.7,
+              "z": 0.8,
+              "width": 13,
+              "height": 1.6,
+              "depth": 0.1
+            },
+            "material": "key",
+            "label": "Cancel capture",
+            "accessible_name": "Cancel capture",
+            "description": "Synthetic review fixture",
+            "tab_index": 8,
+            "action": "ears.shortcuts.cancel",
+            "presentation": "printed"
+          },
+          {
+            "id": "ears.status",
+            "module_id": "ears.front",
+            "page": "*",
+            "kind": "readout",
+            "rect": {
+              "x": -10,
+              "y": -6.5,
+              "z": 0.8,
+              "width": 38,
+              "height": 1,
+              "depth": 0.1
+            },
+            "material": "glass",
+            "label": "Settings status",
+            "accessible_name": "Settings status",
+            "description": "Synthetic review fixture",
+            "tab_index": -1,
+            "action": "none",
+            "presentation": "native-text"
+          }
+        ]
+      }
+    ]
+  },
+  "state": {
+    "revision": 1,
+    "active_page": "dictation.shortcuts",
+    "controls": {
+      "ears.nav.dictation": {
+        "value": "dictation",
+        "enabled": true,
+        "visible": true,
+        "pressed": false,
+        "focused": false,
+        "busy": false,
+        "error": ""
+      },
+      "ears.nav.overlay": {
+        "value": "overlay",
+        "enabled": true,
+        "visible": true,
+        "pressed": false,
+        "focused": false,
+        "busy": false,
+        "error": ""
+      },
+      "ears.nav.dictionaries": {
+        "value": "dictionaries",
+        "enabled": true,
+        "visible": true,
+        "pressed": false,
+        "focused": false,
+        "busy": false,
+        "error": ""
+      },
+      "ears.nav.profiles": {
+        "value": "profiles",
+        "enabled": true,
+        "visible": true,
+        "pressed": false,
+        "focused": false,
+        "busy": false,
+        "error": ""
+      },
+      "ears.dictation.input": {
+        "value": "dictation.input",
+        "enabled": true,
+        "visible": true,
+        "pressed": false,
+        "focused": false,
+        "busy": false,
+        "error": ""
+      },
+      "ears.dictation.shortcuts": {
+        "value": "dictation.shortcuts",
+        "enabled": true,
+        "visible": true,
+        "pressed": false,
+        "focused": false,
+        "busy": false,
+        "error": ""
+      },
+      "ears.input.device": {
+        "value": "default",
+        "enabled": true,
+        "visible": true,
+        "pressed": false,
+        "focused": false,
+        "busy": false,
+        "error": ""
+      },
+      "ears.input.level": {
+        "value": 0,
+        "enabled": false,
+        "visible": true,
+        "pressed": false,
+        "focused": false,
+        "busy": false,
+        "error": ""
+      },
+      "ears.input.status": {
+        "value": "Capture inactive",
+        "enabled": false,
+        "visible": true,
+        "pressed": false,
+        "focused": false,
+        "busy": false,
+        "error": ""
+      },
+      "ears.shortcuts.toggle": {
+        "value": "Ctrl+Shift+Space",
+        "enabled": true,
+        "visible": true,
+        "pressed": false,
+        "focused": false,
+        "busy": false,
+        "error": ""
+      },
+      "ears.shortcuts.reset": {
+        "value": null,
+        "enabled": true,
+        "visible": true,
+        "pressed": false,
+        "focused": false,
+        "busy": false,
+        "error": ""
+      },
+      "ears.shortcuts.cancel": {
+        "value": null,
+        "enabled": true,
+        "visible": true,
+        "pressed": false,
+        "focused": false,
+        "busy": false,
+        "error": ""
+      },
+      "ears.status": {
+        "value": "Synthetic fixture / no device opened",
+        "enabled": false,
+        "visible": true,
+        "pressed": false,
+        "focused": false,
+        "busy": false,
+        "error": ""
+      }
+    }
+  },
+  "viewport": {
+    "width_dip": 1280,
+    "height_dip": 720,
+    "scale_factor": 2,
+    "pixel_cap": 4194304,
+    "transparent": true
+  }
+}

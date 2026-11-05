@@ -52,6 +52,19 @@ fn key(code: u16) -> Option<Key> {
         KeyCode::SPACE => Key::Space,
         KeyCode::TAB => Key::Tab,
         KeyCode::ESCAPE => Key::Escape,
+        36 => Key::Return,
+        122 => Key::F1,
+        120 => Key::F2,
+        99 => Key::F3,
+        118 => Key::F4,
+        96 => Key::F5,
+        97 => Key::F6,
+        98 => Key::F7,
+        100 => Key::F8,
+        101 => Key::F9,
+        109 => Key::F10,
+        103 => Key::F11,
+        111 => Key::F12,
         _ => return None,
     })
 }
@@ -96,7 +109,12 @@ impl Modifiers {
     /// A `FlagsChanged` event names the exact modifier key.
     fn changed(&mut self, code: u16, flags: CGEventFlags, callback: &mut impl FnMut(EventType)) {
         if let Some((key, bit)) = modifier_key(code) {
-            let down = flags.contains(bit);
+            // Flags are aggregate across both sides: releasing right Option
+            // while left is held still has Alternate set. FlagsChanged names
+            // the side that transitioned, so toggle that side while its family
+            // remains on; a cleared family always means release.
+            let was_down = self.down.iter().any(|(held, _)| *held == key);
+            let down = flags.contains(bit) && !was_down;
             self.emit(key, down, callback);
         }
         self.reconcile(flags, callback);
@@ -254,6 +272,19 @@ mod tests {
             (KeyCode::SPACE, Key::Space),
             (KeyCode::TAB, Key::Tab),
             (KeyCode::ESCAPE, Key::Escape),
+            (36, Key::Return),
+            (122, Key::F1),
+            (120, Key::F2),
+            (99, Key::F3),
+            (118, Key::F4),
+            (96, Key::F5),
+            (97, Key::F6),
+            (98, Key::F7),
+            (100, Key::F8),
+            (101, Key::F9),
+            (109, Key::F10),
+            (103, Key::F11),
+            (111, Key::F12),
         ];
         for (code, expected) in pairs {
             assert_eq!(key(code), Some(expected));
@@ -370,6 +401,31 @@ mod tests {
                 EventType::KeyRelease(Key::Function),
             ]
         );
+    }
+
+    #[test]
+    fn releasing_one_modifier_side_does_not_release_or_repress_the_other() {
+        let mut modifiers = Modifiers::default();
+        let mut events = Vec::new();
+        let alt = CGEventFlags::CGEventFlagAlternate;
+        for (code, flags) in [
+            (LEFT_OPTION, alt),
+            (RIGHT_OPTION, alt),
+            (RIGHT_OPTION, alt),
+            (LEFT_OPTION, CGEventFlags::CGEventFlagNull),
+        ] {
+            modifiers.changed(code, flags, &mut |event| events.push(event));
+        }
+        assert_eq!(
+            events,
+            [
+                EventType::KeyPress(Key::Alt),
+                EventType::KeyPress(Key::AltGr),
+                EventType::KeyRelease(Key::AltGr),
+                EventType::KeyRelease(Key::Alt),
+            ]
+        );
+        assert!(modifiers.down.is_empty());
     }
 
     #[test]

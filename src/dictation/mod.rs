@@ -48,8 +48,8 @@ use std::process::Stdio;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::thread;
 use std::time::Duration;
 
@@ -255,6 +255,10 @@ pub enum DictationCommand {
     Toggle,
     /// Discard pending words and pause.
     Cancel,
+    /// Listener-owned discard, fenced to the generation stopped by that hold.
+    CancelHotkey {
+        generation: u64,
+    },
     /// Hotkey/UI escape back to low-latency dictation.
     SetVoiceMode(voice_commands::VoiceMode),
     SetInsertionMode(InsertionMode),
@@ -351,6 +355,10 @@ pub(crate) struct Shared {
     ptt_held: AtomicBool,
     state: Mutex<DictationState>,
     hotkey_mode: Mutex<crate::config::DictationHotkeyMode>,
+    hotkey_controller: Mutex<Option<hotkeys::HotkeyController>>,
+    /// A recorder stopped a hotkey-owned hold before the engine drained Cancel.
+    hotkey_cancel_pending: AtomicBool,
+    hotkey_cancel_generation: AtomicU64,
     escape_cancels: Mutex<bool>,
     running: AtomicBool,
     notifications: DictationNotificationConfig,
@@ -382,6 +390,9 @@ impl Shared {
             ptt_held: AtomicBool::new(false),
             state: Mutex::new(DictationState::Inactive),
             hotkey_mode: Mutex::new(config.hotkeys.mode),
+            hotkey_controller: Mutex::new(None),
+            hotkey_cancel_pending: AtomicBool::new(false),
+            hotkey_cancel_generation: AtomicU64::new(0),
             running: AtomicBool::new(true),
             escape_cancels: Mutex::new(escape_cancels),
             notifications: config.dictation.notifications.clone(),
@@ -464,6 +475,49 @@ impl Shared {
             self.cancel_epoch.fetch_add(1, Ordering::SeqCst);
         }
         let _ = self.commands.send(command);
+    }
+
+    /// Acquire a hold and its capture token under the same lock as capture
+    /// transitions. A later wake/restart must never become this hold's capture.
+    pub(crate) fn begin_hotkey_hold(&self) -> (u64, bool) {
+        let mut capturing = self.capturing.lock().unwrap();
+        self.ptt_held.store(true, Ordering::SeqCst);
+        let started = !*capturing;
+        *capturing = true;
+        let generation = if started {
+            self.capture_generation.fetch_add(1, Ordering::SeqCst) + 1
+        } else {
+            self.capture_generation()
+        };
+        drop(capturing);
+        if started {
+            self.set_state(DictationState::Listening);
+        }
+        (generation, started)
+    }
+
+    /// End only the capture observed/started by this hold. Ownership checking
+    /// and the stop are serialized with external capture changes. A discarded
+    /// take is fenced before its asynchronous engine cleanup is queued.
+    pub(crate) fn end_hotkey_capture(&self, generation: u64, discard: bool) -> bool {
+        let mut capturing = self.capturing.lock().unwrap();
+        if !*capturing || self.capture_generation() != generation {
+            return false;
+        }
+        *capturing = false;
+        let stopped_generation = self.capture_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        if discard {
+            self.hotkey_cancel_generation
+                .store(stopped_generation, Ordering::SeqCst);
+            self.hotkey_cancel_pending.store(true, Ordering::SeqCst);
+            self.command(DictationCommand::CancelHotkey {
+                generation: stopped_generation,
+            });
+        }
+        drop(capturing);
+        self.wake_started.store(false, Ordering::SeqCst);
+        self.set_state(DictationState::Suspended);
+        true
     }
 
     /// Set capture on/off. Returns whether the value changed.
@@ -667,6 +721,12 @@ impl DictationHandle {
 
     pub fn state(&self) -> DictationState {
         self.shared.state()
+    }
+
+    /// Live shortcut editing and synchronous recorder suspension. `None` means
+    /// the internal listener is disabled or has not yet been initialized.
+    pub fn hotkey_controller(&self) -> Option<hotkeys::HotkeyController> {
+        self.shared.hotkey_controller.lock().unwrap().clone()
     }
 
     pub fn hotkey_mode(&self) -> crate::config::DictationHotkeyMode {
