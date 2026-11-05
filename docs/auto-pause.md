@@ -187,3 +187,17 @@ Parakeet retains its existing three terminal 560 ms zero chunks even after an
 earlier boundary flush: native silence hallucinations are not yet qualified and
 were not hidden by weakening the flush. Maximum-session limits are not implemented.
 Source audio and private transcripts must remain local during qualification.
+
+## Dedicated push-to-talk key
+
+`[hotkeys] push_to_talk = "right_option"` (any supported binding, including
+modifier-only `right_option`, `right_cmd`, `fn`, or chords such as `cmd+space`)
+adds a hold-to-talk key that works in every `mode`, so `mode = "toggle"` plus a
+held key can coexist. Press starts capture, release finishes and inserts.
+
+Following the Hex app's rules: a release under 300 ms discards the take, any
+other key pressed during a modifier-only hold discards it (a `right_option` +
+`m` chord is a shortcut, not dictation), and a capture that was already running
+when the key went down is left alone on release. Escape keeps its existing
+cancel behaviour. Only the key identity and modifiers are observed; eaRS never
+swallows keys, so holding Option still reaches the focused app as a modifier.

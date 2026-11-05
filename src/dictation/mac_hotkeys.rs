@@ -56,39 +56,86 @@ fn key(code: u16) -> Option<Key> {
     })
 }
 
+/// Modifier keys are identified by the keycode carried by `FlagsChanged`
+/// events, which is how left/right (and Fn) stay distinguishable. The
+/// aggregate flags reconcile a missed press or release.
 #[derive(Default)]
 struct Modifiers {
-    ctrl: bool,
-    shift: bool,
-    alt: bool,
+    down: Vec<(Key, CGEventFlags)>,
 }
+
+/// Physical keycode of a modifier key, with the flag that says it is held.
+fn modifier_key(code: u16) -> Option<(Key, CGEventFlags)> {
+    Some(match code {
+        58 => (Key::Alt, CGEventFlags::CGEventFlagAlternate),
+        61 => (Key::AltGr, CGEventFlags::CGEventFlagAlternate),
+        55 => (Key::MetaLeft, CGEventFlags::CGEventFlagCommand),
+        54 => (Key::MetaRight, CGEventFlags::CGEventFlagCommand),
+        59 => (Key::ControlLeft, CGEventFlags::CGEventFlagControl),
+        62 => (Key::ControlRight, CGEventFlags::CGEventFlagControl),
+        56 => (Key::ShiftLeft, CGEventFlags::CGEventFlagShift),
+        60 => (Key::ShiftRight, CGEventFlags::CGEventFlagShift),
+        63 => (Key::Function, CGEventFlags::CGEventFlagSecondaryFn),
+        _ => return None,
+    })
+}
+
 impl Modifiers {
-    fn update(&mut self, flags: CGEventFlags, callback: &mut impl FnMut(EventType)) {
-        for (current, next, key) in [
-            (
-                &mut self.ctrl,
-                flags.contains(CGEventFlags::CGEventFlagControl),
-                Key::ControlLeft,
-            ),
-            (
-                &mut self.shift,
-                flags.contains(CGEventFlags::CGEventFlagShift),
-                Key::ShiftLeft,
-            ),
-            (
-                &mut self.alt,
-                flags.contains(CGEventFlags::CGEventFlagAlternate),
-                Key::Alt,
-            ),
-        ] {
-            if *current != next {
-                *current = next;
-                callback(if next {
-                    EventType::KeyPress(key)
-                } else {
-                    EventType::KeyRelease(key)
-                });
+    fn emit(&mut self, key: Key, down: bool, callback: &mut impl FnMut(EventType)) {
+        if down {
+            if !self.down.iter().any(|(k, _)| *k == key) {
+                self.down.push((key, KeyFlags::of(key)));
+                callback(EventType::KeyPress(key));
             }
+        } else if let Some(index) = self.down.iter().position(|(k, _)| *k == key) {
+            self.down.remove(index);
+            callback(EventType::KeyRelease(key));
+        }
+    }
+
+    /// A `FlagsChanged` event names the exact modifier key.
+    fn changed(&mut self, code: u16, flags: CGEventFlags, callback: &mut impl FnMut(EventType)) {
+        if let Some((key, bit)) = modifier_key(code) {
+            let down = flags.contains(bit);
+            self.emit(key, down, callback);
+        }
+        self.reconcile(flags, callback);
+    }
+
+    /// Release anything the flags say is no longer held and press a missing
+    /// left-hand modifier, so a lost event cannot leave a modifier stuck.
+    fn reconcile(&mut self, flags: CGEventFlags, callback: &mut impl FnMut(EventType)) {
+        for (key, bit) in self.down.clone() {
+            if !flags.contains(bit) {
+                self.emit(key, false, callback);
+            }
+        }
+        for (key, bit) in [
+            (Key::ControlLeft, CGEventFlags::CGEventFlagControl),
+            (Key::ShiftLeft, CGEventFlags::CGEventFlagShift),
+            (Key::Alt, CGEventFlags::CGEventFlagAlternate),
+            (Key::MetaLeft, CGEventFlags::CGEventFlagCommand),
+            (Key::Function, CGEventFlags::CGEventFlagSecondaryFn),
+        ] {
+            // Only when no key of that modifier is tracked: a right-hand press
+            // must not also produce the left-hand fallback.
+            if flags.contains(bit) && !self.down.iter().any(|(k, _)| KeyFlags::of(*k) == bit) {
+                self.emit(key, true, callback);
+            }
+        }
+    }
+}
+
+struct KeyFlags;
+impl KeyFlags {
+    fn of(key: Key) -> CGEventFlags {
+        match key {
+            Key::Alt | Key::AltGr => CGEventFlags::CGEventFlagAlternate,
+            Key::MetaLeft | Key::MetaRight => CGEventFlags::CGEventFlagCommand,
+            Key::ControlLeft | Key::ControlRight => CGEventFlags::CGEventFlagControl,
+            Key::ShiftLeft | Key::ShiftRight => CGEventFlags::CGEventFlagShift,
+            Key::Function => CGEventFlags::CGEventFlagSecondaryFn,
+            _ => CGEventFlags::CGEventFlagNull,
         }
     }
 }
@@ -100,7 +147,11 @@ fn dispatch(
     modifiers: &mut Modifiers,
     callback: &mut impl FnMut(EventType),
 ) {
-    modifiers.update(flags, callback);
+    if matches!(kind, CGEventType::FlagsChanged) {
+        modifiers.changed(code, flags, callback);
+    } else {
+        modifiers.reconcile(flags, callback);
+    }
     if let Some(key) = key(code) {
         match kind {
             CGEventType::KeyDown => callback(EventType::KeyPress(key)),
@@ -290,6 +341,64 @@ mod tests {
             ]
         );
     }
+    const FN_KEY: u16 = 63;
+    const RIGHT_OPTION: u16 = 61;
+    const LEFT_OPTION: u16 = 58;
+    const RIGHT_COMMAND: u16 = 54;
+    const LEFT_SHIFT: u16 = 56;
+
+    #[test]
+    fn modifier_sides_command_and_fn_arrive_from_their_keycodes() {
+        let mut modifiers = Modifiers::default();
+        let mut events = Vec::new();
+        let mut cb = |e| events.push(e);
+        // Right Option alone is what a modifier-only binding names.
+        modifiers.changed(RIGHT_OPTION, CGEventFlags::CGEventFlagAlternate, &mut cb);
+        modifiers.changed(RIGHT_OPTION, CGEventFlags::CGEventFlagNull, &mut cb);
+        modifiers.changed(RIGHT_COMMAND, CGEventFlags::CGEventFlagCommand, &mut cb);
+        modifiers.changed(RIGHT_COMMAND, CGEventFlags::CGEventFlagNull, &mut cb);
+        modifiers.changed(FN_KEY, CGEventFlags::CGEventFlagSecondaryFn, &mut cb);
+        modifiers.changed(FN_KEY, CGEventFlags::CGEventFlagNull, &mut cb);
+        assert_eq!(
+            events,
+            [
+                EventType::KeyPress(Key::AltGr),
+                EventType::KeyRelease(Key::AltGr),
+                EventType::KeyPress(Key::MetaRight),
+                EventType::KeyRelease(Key::MetaRight),
+                EventType::KeyPress(Key::Function),
+                EventType::KeyRelease(Key::Function),
+            ]
+        );
+    }
+
+    #[test]
+    fn left_modifiers_keep_their_existing_keys_and_lost_events_reconcile() {
+        let mut modifiers = Modifiers::default();
+        let mut events = Vec::new();
+        let mut cb = |e| events.push(e);
+        modifiers.changed(LEFT_OPTION, CGEventFlags::CGEventFlagAlternate, &mut cb);
+        modifiers.changed(LEFT_SHIFT, CGEventFlags::CGEventFlagShift, &mut cb);
+        // The release event is lost; the next key event's flags reconcile it.
+        modifiers.reconcile(CGEventFlags::CGEventFlagNull, &mut cb);
+        assert_eq!(
+            events,
+            [
+                EventType::KeyPress(Key::Alt),
+                EventType::KeyPress(Key::ShiftLeft),
+                EventType::KeyRelease(Key::Alt),
+                EventType::KeyRelease(Key::ShiftLeft),
+            ]
+        );
+        // A tap that reports a held modifier without a FlagsChanged still
+        // yields the left-hand key.
+        let mut modifiers = Modifiers::default();
+        let mut events = Vec::new();
+        let mut cb = |e| events.push(e);
+        modifiers.reconcile(CGEventFlags::CGEventFlagAlternate, &mut cb);
+        assert_eq!(events, [EventType::KeyPress(Key::Alt)]);
+    }
+
     #[test]
     fn flags_are_reconciled_on_key_events_and_unknown_keys_are_ignored() {
         let mut modifiers = Modifiers::default();

@@ -192,6 +192,11 @@ enable_internal = true
 mode = "hybrid"
 # Dictation control hotkey (default: ctrl+shift+v)
 toggle = "ctrl+shift+v"
+# Optional hold-to-talk key, independent of `mode` and usable at the same time:
+# hold, speak, release. Modifier-only keys work (right_option, right_cmd, fn).
+# A tap under 300 ms, or any other key while holding a modifier alone, discards
+# the take instead of inserting it. Example:
+# push_to_talk = "right_option"
 # Cycle language among en, de, fr, es, ja (default: ctrl+shift+l)
 language_cycle = "ctrl+shift+l"
 # Note: On macOS, grant Accessibility and Input Monitoring permissions to your terminal or ears-dictation binary.

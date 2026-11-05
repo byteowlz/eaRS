@@ -509,6 +509,10 @@ Key sections:
 - `[server]`: Default WebSocket port used by `ears server start` and the capture client.
 - `[dictation]`: Enable live typing and configure in-app hotkeys.
 - `[hotkeys]`: Set hotkey bindings and mode (`toggle`, `push_to_talk`, or `hybrid`).
+- `[hotkeys].push_to_talk`: Add a dedicated hold-to-talk key alongside any mode, including
+  modifier-only ones (`right_option`, `right_cmd`, `fn`) and `cmd+…` chords. Hold, speak,
+  release to insert; a release under 300 ms, or another key during a modifier-only hold,
+  discards the take instead of inserting it (the Hex app's rule).
 - `[dictation]`: `start_paused = true|false` controls whether dictation starts paused or live.
 - `[dictation.notifications]`: Toggle desktop popups and customise start/pause/stop messages shown for dictation state changes.
 - `[dictation.hooks]` (requires `cargo build --features hooks`): Run shell commands on start, pause, or stop transitions (e.g., change colours in status bars).

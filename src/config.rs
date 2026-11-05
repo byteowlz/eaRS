@@ -222,6 +222,12 @@ impl Default for DictationHotkeyMode {
 pub struct HotkeyConfig {
     pub enable_internal: bool,
     pub toggle: String,
+    /// Optional dedicated hold-to-talk binding, active in every `mode`, e.g.
+    /// `right_option` or `right_cmd`. Modifier-only bindings are allowed. A
+    /// release before 300 ms, or any other key during a modifier-only hold,
+    /// discards the take instead of inserting it (the same rules as Hex).
+    #[serde(default)]
+    pub push_to_talk: Option<String>,
     #[serde(default)]
     pub mode: DictationHotkeyMode,
     pub language_cycle: String,
@@ -309,6 +315,7 @@ impl Default for HotkeyConfig {
         Self {
             enable_internal: true,
             toggle: "ctrl+shift+v".to_string(),
+            push_to_talk: None,
             mode: DictationHotkeyMode::Toggle,
             language_cycle: "ctrl+shift+l".to_string(),
             profile_cycle: None,

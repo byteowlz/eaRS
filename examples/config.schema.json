@@ -421,6 +421,11 @@
           "default": "hybrid",
           "description": "Dictation control mode: toggle, hold-to-talk, or hybrid"
         },
+        "push_to_talk": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Optional dedicated hold-to-talk binding, active in every mode, e.g. right_option, right_cmd or cmd+space. Modifier-only bindings are allowed. A release under 300 ms, or any other key during a modifier-only hold, discards the take instead of inserting it (the Hex rule)."
+        },
         "toggle": {
           "type": "string",
           "default": "ctrl+shift+v",
