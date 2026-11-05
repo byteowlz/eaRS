@@ -10,6 +10,7 @@ mod microphone;
 pub(crate) use microphone::persist_input_device;
 mod device;
 mod device_layout;
+mod layout_editor;
 mod device_scene;
 mod navigation;
 mod shortcut_cli;

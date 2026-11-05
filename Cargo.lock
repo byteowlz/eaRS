@@ -2545,6 +2545,7 @@ dependencies = [
  "device-scene",
  "dirs 6.0.0",
  "eaRS",
+ "glam",
  "gpui",
  "gtk",
  "image",

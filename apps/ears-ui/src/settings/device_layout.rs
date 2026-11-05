@@ -5,8 +5,119 @@
 //! the control column edges; every display aligns to the inner value column.
 //! Spacing scale 0.4/0.8/1.2; one 0.16 dot pitch. Geometry never depends on values.
 use super::shortcuts::Binding;
-use device_scene::Snapshot;
+use device_scene::{Control, Rect, Snapshot};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
+use std::collections::BTreeMap;
+
+/// Committed layout tuned with the layout editor; empty means the generated grid.
+const TUNED: &str = include_str!("../../assets/settings-layout.json");
+pub(super) const SNAP: f64 = 0.2;
+pub(super) const MIN_SIZE: f64 = 0.8;
+
+/// Geometry overrides written by the layout editor. Structure (ids, kinds, actions)
+/// always comes from this module; the file only moves and resizes elements.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub(super) struct LayoutFile {
+    #[serde(default)]
+    pub schema: String,
+    #[serde(default)]
+    pub controls: BTreeMap<String, Placement>,
+    #[serde(default)]
+    pub panels: BTreeMap<String, Placement>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub(super) struct Placement {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub module: Option<String>,
+}
+fn round(v: f64) -> f64 {
+    (v * 100.0).round() / 100.0
+}
+impl Placement {
+    fn of(r: &Rect, module: Option<String>) -> Self {
+        Self {
+            x: round(r.x),
+            y: round(r.y),
+            width: round(r.width),
+            height: round(r.height),
+            module,
+        }
+    }
+}
+impl LayoutFile {
+    pub fn capture(s: &Snapshot) -> Self {
+        let d = &s.scene.devices[0];
+        Self {
+            schema: "ears.settings-layout/v1".into(),
+            controls: d
+                .controls
+                .iter()
+                .map(|c| {
+                    (
+                        c.id.clone(),
+                        Placement::of(&c.rect, Some(c.module_id.clone())),
+                    )
+                })
+                .collect(),
+            panels: d
+                .panels
+                .iter()
+                .map(|p| (p.id.clone(), Placement::of(&p.rect, None)))
+                .collect(),
+        }
+    }
+}
+/// Recompute a display's fixed-pitch grid for its current size: the pitch never changes.
+pub(super) fn refit(control: &mut Control) {
+    let (width, height) = (control.rect.width, control.rect.height);
+    if let Some(m) = control.matrix.as_mut() {
+        m.cols = (((width - 0.8 + PITCH) / (6.0 * PITCH)).floor() as u32).max(1);
+        m.rows = rows_for(height);
+        m.padding_x = ((width - (m.cols * 6 - 1) as f64 * PITCH) / 2.0).max(0.0);
+        m.padding_y = ((height - ((m.rows - 1) * 8 + 7) as f64 * PITCH) / 2.0).max(0.0);
+    }
+}
+/// Apply overrides; unknown ids are ignored so an older file never breaks Settings.
+pub(super) fn apply(s: &mut Snapshot, layout: &LayoutFile) {
+    let d = &mut s.scene.devices[0];
+    for p in &mut d.panels {
+        if let Some(at) = layout.panels.get(&p.id) {
+            (p.rect.x, p.rect.y, p.rect.width, p.rect.height) = (at.x, at.y, at.width, at.height);
+        }
+    }
+    let panels: Vec<String> = d.panels.iter().map(|p| p.id.clone()).collect();
+    for c in &mut d.controls {
+        if let Some(at) = layout.controls.get(&c.id) {
+            (c.rect.x, c.rect.y, c.rect.width, c.rect.height) = (at.x, at.y, at.width, at.height);
+            if let Some(module) = at.module.as_ref().filter(|m| panels.contains(m)) {
+                module.clone_into(&mut c.module_id);
+            }
+            refit(c);
+        }
+    }
+}
+/// The generated grid, without the committed tuned layout.
+#[cfg(test)]
+pub(super) fn generated() -> Snapshot {
+    build()
+}
+pub(super) fn initial() -> Snapshot {
+    let mut s = build();
+    if let Ok(tuned) = serde_json::from_str::<LayoutFile>(TUNED) {
+        let mut candidate = s.clone();
+        apply(&mut candidate, &tuned);
+        // A tuned layout that no longer validates falls back to the generated grid.
+        if device_scene::ValidatedSnapshot::new(candidate.clone()).is_ok() {
+            s = candidate;
+        }
+    }
+    s
+}
 
 const BASE: &str =
     include_str!("../../../../vendor/device/spec/fixtures/device-scene-v1/ears-input.json");
@@ -365,7 +476,7 @@ fn module(id: &str, left: f64, right: f64, bottom: f64, top: f64) -> Json {
         "surface":"module","material":"module","label":"","page":"*"})
 }
 
-pub(super) fn initial() -> Snapshot {
+fn build() -> Snapshot {
     let mut base: Json = serde_json::from_str(BASE).expect("pinned base scene");
     let scene = &mut base["scene"];
     scene["id"] = json!("ears.settings.receiver");
@@ -610,7 +721,7 @@ mod tests {
     }
     #[test]
     fn one_navigation_level_and_every_dictation_setting_on_one_page() {
-        let s = initial();
+        let s = generated();
         s.validate().unwrap();
         let ids: Vec<_> = s.scene.devices[0]
             .controls
@@ -649,7 +760,7 @@ mod tests {
     }
     #[test]
     fn columns_rows_and_compound_controls_share_edges() {
-        let s = initial();
+        let s = generated();
         for (labels, controls) in [
             (
                 vec![
@@ -773,8 +884,44 @@ mod tests {
         );
     }
     #[test]
+    fn layout_file_round_trips_and_refits_displays_at_fixed_pitch() {
+        let s = generated();
+        let mut file = LayoutFile::capture(&s);
+        let mic = file.controls.get_mut("mic").unwrap();
+        mic.width -= 4.0;
+        mic.height = 3.2;
+        let mut edited = s.clone();
+        apply(&mut edited, &file);
+        let (_, c, _) = edited.control("mic").unwrap();
+        let m = c.matrix.as_ref().unwrap();
+        equal(m.pitch, PITCH, "pitch");
+        assert_eq!(m.rows, 2);
+        assert!(((m.cols * 6 - 1) as f64 * PITCH) <= c.rect.width - 0.8 + 1e-9);
+        let json = serde_json::to_string(&LayoutFile::capture(&edited)).unwrap();
+        let mut again = s.clone();
+        apply(&mut again, &serde_json::from_str(&json).unwrap());
+        assert_eq!(LayoutFile::capture(&again), LayoutFile::capture(&edited));
+        device_scene::ValidatedSnapshot::new(again).unwrap();
+        // Unknown ids from an older file are ignored, never an error.
+        let mut stale = LayoutFile::default();
+        stale.controls.insert(
+            "gone".into(),
+            Placement {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+                module: None,
+            },
+        );
+        let mut kept = s.clone();
+        apply(&mut kept, &stale);
+        assert_eq!(kept, s);
+        initial().validate().unwrap();
+    }
+    #[test]
     fn displays_use_one_pitch_and_nothing_overlaps() {
-        let s = initial();
+        let s = generated();
         let d = &s.scene.devices[0];
         for c in &d.controls {
             if c.material == "glass" {

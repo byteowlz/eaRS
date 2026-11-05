@@ -59,6 +59,7 @@ pub(super) fn attach(
     cx: &mut Context<super::SettingsView>,
 ) -> Option<Entity<NativeSettings>> {
     let enabled = !model.read(cx).configuration_is_preview
+        || super::layout_editor::requested()
         || std::env::args().any(|a| a.starts_with("--preview-settings-"));
     let native = enabled.then(|| cx.new(|cx| NativeSettings::new(model.clone(), window, cx)))?;
     cx.subscribe_in(
@@ -116,6 +117,7 @@ pub(super) struct NativeSettings {
     message: Option<Message>,
     test: TestCapture,
     pending_live: Option<&'static str>,
+    editor: Option<super::layout_editor::LayoutEditor>,
 }
 impl EventEmitter<Request> for NativeSettings {}
 
@@ -128,9 +130,12 @@ impl NativeSettings {
         ]) {
             eprintln!("ears-ui: device fonts: {error:#}");
         }
+        let mut snapshot = scene::initial();
+        let editor = super::layout_editor::requested()
+            .then(|| super::layout_editor::LayoutEditor::new(&mut snapshot));
         let device = cx.new(|cx| {
             let mut view = DeviceView::new(
-                scene::initial(),
+                snapshot,
                 "Michroma".into(),
                 crate::theme::FONT_SANS.into(),
                 window,
@@ -178,6 +183,7 @@ impl NativeSettings {
             message: None,
             test: TestCapture::default(),
             pending_live: None,
+            editor,
         };
         this.refresh_inputs(cx);
         this
@@ -295,6 +301,7 @@ impl NativeSettings {
         let (message, newest) = self.display_message(&model);
         let listening = self.listening;
         let test_on = self.test.active;
+        let editing = self.editor.as_ref().is_some_and(|e| e.active);
         let (mic_choices, mic_active) = self.mic_choices(&model);
         let mic_labels: Vec<String> = mic_choices.iter().map(|c| c.label.clone()).collect();
         let mic_shown = self
@@ -303,7 +310,7 @@ impl NativeSettings {
             .min(mic_labels.len().saturating_sub(1));
         let server_choice = self.server_choice.clone().unwrap_or(model.server.clone());
         self.device.update(cx, |view, cx| {
-            view.set_keyboard_enabled(listening.is_none());
+            view.set_keyboard_enabled(listening.is_none() && !editing);
             view.edit_snapshot(
                 |s| {
                     let (cols, rows) = scene::capacity(s, "display");
@@ -847,7 +854,40 @@ impl NativeSettings {
         };
         self.say(message, cx);
     }
+    /// Copy only geometry from an editor result, so state revisions keep moving forward.
+    fn apply_layout(&mut self, next: Snapshot, cx: &mut Context<Self>) {
+        self.device.update(cx, |view, cx| {
+            view.edit_snapshot(
+                |s| {
+                    let src = &next.scene.devices[0];
+                    let dst = &mut s.scene.devices[0];
+                    dst.panels = src.panels.clone();
+                    for c in &mut dst.controls {
+                        if let Some(from) = src.controls.iter().find(|f| f.id == c.id) {
+                            c.rect = from.rect.clone();
+                            from.module_id.clone_into(&mut c.module_id);
+                            c.matrix = from.matrix.clone();
+                        }
+                    }
+                },
+                cx,
+            )
+        });
+        cx.notify();
+    }
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(editor) = self.editor.as_mut() {
+            let snapshot = self.device.read(cx).snapshot().clone();
+            let (handled, next) = editor.key(event, &snapshot);
+            if let Some(next) = next {
+                self.apply_layout(next, cx);
+            }
+            if handled {
+                self.sync(cx);
+                cx.stop_propagation();
+                return;
+            }
+        }
         if self.listening.is_none() && super::window::close_key(event) {
             window.remove_window();
             cx.stop_propagation();
@@ -1069,10 +1109,12 @@ impl Render for NativeSettings {
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
-                    if this
-                        .device
-                        .read(cx)
-                        .is_chassis_at(event.position.x.into(), event.position.y.into())
+                    let editing = this.editor.as_ref().is_some_and(|e| e.active);
+                    if !editing
+                        && this
+                            .device
+                            .read(cx)
+                            .is_chassis_at(event.position.x.into(), event.position.y.into())
                     {
                         this.drag.begin(window);
                     }
@@ -1090,5 +1132,82 @@ impl Render for NativeSettings {
             .on_key_down(cx.listener(|this, event, window, cx| this.key(event, window, cx)))
             .on_key_up(cx.listener(|this, _, _, _| this.local_ready = true))
             .child(self.device.clone())
+            .when_some(self.editor.as_ref(), |root, editor| {
+                let device = self.device.read(cx);
+                let overlay = editor.overlay(device.projection(), device.snapshot());
+                let active = editor.active;
+                root.child(
+                    div()
+                        .id("layout-editor")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .when(active, |layer| {
+                            layer
+                                .occlude()
+                                .on_mouse_down(
+                                    gpui::MouseButton::Left,
+                                    cx.listener(|this, e: &gpui::MouseDownEvent, window, cx| {
+                                        this.device.read(cx).focus(window);
+                                        let device = this.device.read(cx);
+                                        let (Some(p), s) =
+                                            (device.projection(), device.snapshot().clone())
+                                        else {
+                                            return;
+                                        };
+                                        if let Some(editor) = this.editor.as_mut() {
+                                            editor.mouse_down(
+                                                &p,
+                                                &s,
+                                                e.position.x.into(),
+                                                e.position.y.into(),
+                                                e.modifiers.shift,
+                                            );
+                                        }
+                                        // Never also start a window drag underneath.
+                                        cx.stop_propagation();
+                                        cx.notify();
+                                    }),
+                                )
+                                .on_mouse_move(cx.listener(
+                                    |this, e: &gpui::MouseMoveEvent, _, cx| {
+                                        if !e.dragging() {
+                                            return;
+                                        }
+                                        let device = this.device.read(cx);
+                                        let (Some(p), s) =
+                                            (device.projection(), device.snapshot().clone())
+                                        else {
+                                            return;
+                                        };
+                                        let next = this.editor.as_mut().and_then(|editor| {
+                                            editor.mouse_move(
+                                                &p,
+                                                &s,
+                                                e.position.x.into(),
+                                                e.position.y.into(),
+                                            )
+                                        });
+                                        if let Some(next) = next {
+                                            this.apply_layout(next, cx);
+                                        }
+                                        cx.stop_propagation();
+                                    },
+                                ))
+                                .on_mouse_up(
+                                    gpui::MouseButton::Left,
+                                    cx.listener(|this, _, _, cx| {
+                                        if let Some(editor) = this.editor.as_mut() {
+                                            editor.mouse_up();
+                                        }
+                                        cx.stop_propagation();
+                                        cx.notify();
+                                    }),
+                                )
+                        })
+                        .child(overlay),
+                )
+            })
     }
 }

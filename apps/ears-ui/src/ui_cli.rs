@@ -34,6 +34,7 @@ const OPTIONS: &[&str] = &[
     "--no-overlay",
     "--preview-settings",
     "--preview-settings-device",
+    "--edit-settings-layout",
     "--preview-settings-shortcuts",
     "--preview-settings-mic-empty",
     "--preview-settings-mic-missing",
