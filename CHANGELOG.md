@@ -4,6 +4,22 @@ All notable changes to eaRS are documented in this file.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-05
+
+### Features
+
+- **settings**: all four tabs are one native receiver device. Dictation, Overlay, Dictionaries and Profiles share a top display, a microphone Test key and one navigation row; changes apply immediately, with lamp keys for switches, steppers for choices and native text fields set into the recessed displays.
+- **settings**: Test streams recognised speech into the top display. It captures with every output target replaced by a sink, so nothing is typed, copied, kept in audio history or written to transcript logs, even if a context profile changes the insertion mode mid-test.
+- **settings**: `--edit-settings-layout` moves and resizes elements on the real device (0.2-unit snapping, modules carry their controls, Cmd-S saves to `settings-layout.json`). It is a tuning tool; the committed grid stays the default.
+- **settings**: the window is frameless, with real 3D rounded slabs, engraved legends, key-light shadows and fixed-pitch dot-matrix displays drawn on the device surfaces.
+
+### Fixes
+
+- **hotkeys**: a device key click is no longer dropped while a text-only frame renders, so toggles act on the first click.
+- **hotkeys**: hold-to-talk and auto-pause log their decisions under `EARS_UI_VERBOSE`, so an early stop can be diagnosed.
+- **ui**: Black paints the collapsed pill too, and the idle waveform draws a flat baseline instead of one dot.
+- **ui**: plates no longer show shadow blotches and the brushed finish reads as fine machining.
+
 ### Removed
 
 - **engines**: remove the legacy prkt-based `parakeet` engine, vendored prkt crate, legacy model/device/chunk flags and `parakeet-*` acceleration features. Nemotron (`parakeet-rs`) and its model/language flags are unchanged; use `apple,parakeet-rs` or `nvidia,parakeet-rs` rather than the removed feature aliases. Installers, benchmark clients and older app selectors now request the supported engine.

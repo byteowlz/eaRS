@@ -421,6 +421,10 @@ impl Listener {
             let (generation, started) = shared.begin_hotkey_hold();
             self.ptt_generation = Some(generation);
             self.ptt.pressed(Instant::now(), !started);
+            vlog!(
+                "Push-to-talk press: generation {generation}, started={started}, held={}",
+                shared.ptt_held()
+            );
             if started {
                 vlog!("Audio capture started (push to talk)");
             }
@@ -476,6 +480,10 @@ impl Listener {
             shared.set_ptt_held(false);
             let release = self.ptt.released(Instant::now());
             let generation = self.ptt_generation.take();
+            vlog!(
+                "Push-to-talk release: {release:?}, generation {generation:?}, held={}",
+                shared.ptt_held()
+            );
             if let Some(generation) = generation
                 && release != PttRelease::Leave
             {

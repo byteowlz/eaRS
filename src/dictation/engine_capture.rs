@@ -299,6 +299,18 @@ impl Engine {
                 .as_ref()
                 .is_some_and(|auto| auto.control.due(generation))
         {
+            // A physical hold outranks silence; say so when that is what held it off.
+            if self.shared.ptt_held()
+                && self
+                    .auto_pause
+                    .runtime
+                    .as_ref()
+                    .is_some_and(|auto| auto.control.due(generation))
+            {
+                crate::dictation::vlog!(
+                    "auto-pause: due at generation {generation}, kept capturing by a held shortcut"
+                );
+            }
             return Ok(None);
         }
         let request_id = self
