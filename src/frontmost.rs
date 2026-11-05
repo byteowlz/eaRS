@@ -65,6 +65,7 @@ impl FrontmostApp {
 /// it. It protects the app being typed into only when that app holds it.
 /// `holder_is_other_app` means the holder is a different, regular (Dock) app;
 /// an unknown holder or a helper process stays protective.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
 pub(crate) fn secure_input_blocks(
     enabled: bool,
     holder: Option<u32>,
