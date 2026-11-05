@@ -286,12 +286,11 @@ fn sync(cx: &mut App) {
 // Icon
 // ---------------------------------------------------------------------------
 
-/// Rasterise a 16×16 microphone glyph. `active` picks the accent colour,
-/// `healthy` picks between it and the warning grey, `enabled` between grey
-/// and the active colour. Template-style monochrome would fight schemes, so
-/// this follows the island's role mapping instead.
+/// The real eaRS mark (rendered from `logo/ears_logo_white.svg` by
+/// `scripts/export-icons.sh`), tinted with the island's role colours: muted
+/// when off or unhealthy, primary while capturing, muted foreground when idle.
+/// Recolouring one artwork covers both light and dark bars.
 fn icon_for(active: bool, healthy: bool, enabled: bool) -> Icon {
-    const S: usize = 32; // draw at 2x for retina crispness
     let (r, g, b) = if !enabled || !healthy {
         (0.62, 0.65, 0.63) // muted
     } else if active {
@@ -299,42 +298,27 @@ fn icon_for(active: bool, healthy: bool, enabled: bool) -> Icon {
     } else {
         (0.698, 0.725, 0.71) // foreground-muted
     };
-
-    let mut pixels = vec![0u8; S * S * 4];
-    let centre = (S - 1) as f32 / 2.0;
-    for y in 0..S {
-        for x in 0..S {
-            let (fx, fy) = (x as f32, y as f32);
-            // Capsule: the mic body.
-            let body_top = 4.0;
-            let body_bottom = 15.0;
-            let body_r = 4.6;
-            let cx = centre;
-            let body_mid = (body_top + body_bottom) / 2.0;
-            let body_half = (body_bottom - body_top) / 2.0;
-            let in_body = (fx - cx).powi(2) / (body_r * body_r)
-                + (fy - body_mid).powi(2) / (body_half * body_half)
-                <= 1.0;
-            // Arc: the holder.
-            let arc_c = (cx, 13.5);
-            let arc_r = 8.4;
-            let arc_t = 1.7;
-            let dist = ((fx - arc_c.0).powi(2) + (fy - arc_c.1).powi(2)).sqrt();
-            let in_arc = dist <= arc_r && dist >= arc_r - arc_t && fy >= arc_c.1 && fy <= 21.0;
-            // Stem + base.
-            let in_stem = (fx - cx).abs() <= 1.6 && fy > 15.0 && fy <= 21.0;
-            let in_base = (fx - cx).abs() <= 6.0 && fy >= 22.5 && fy <= 25.0;
-
-            if in_body || in_arc || in_stem || in_base {
-                let index = (y * S + x) * 4;
-                pixels[index] = (r * 255.0) as u8;
-                pixels[index + 1] = (g * 255.0) as u8;
-                pixels[index + 2] = (b * 255.0) as u8;
-                pixels[index + 3] = 255;
-            }
-        }
+    let (width, height, mut pixels) = mark_rgba();
+    for pixel in pixels.chunks_exact_mut(4) {
+        pixel[0] = (r * 255.0) as u8;
+        pixel[1] = (g * 255.0) as u8;
+        pixel[2] = (b * 255.0) as u8;
+        // Alpha carries the mark's shape and stays as rendered.
     }
-    Icon::from_rgba(pixels, S as u32, S as u32).expect("static icon rgba")
+    Icon::from_rgba(pixels, width, height).expect("bundled tray mark")
+}
+
+/// Decoded once from the committed PNG.
+fn mark_rgba() -> (u32, u32, Vec<u8>) {
+    static MARK: std::sync::OnceLock<(u32, u32, Vec<u8>)> = std::sync::OnceLock::new();
+    MARK.get_or_init(|| {
+        let bytes = include_bytes!("../assets/tray/ears-mark.png");
+        let image = image::load_from_memory(bytes)
+            .expect("bundled tray mark is a valid PNG")
+            .to_rgba8();
+        (image.width(), image.height(), image.into_raw())
+    })
+    .clone()
 }
 
 // ---------------------------------------------------------------------------

@@ -29,6 +29,8 @@ toml_edit = "0.22"
 tempfile = "3"
 dirs = "6.0"
 crossbeam-channel = "0.5"
+# Decode the bundled tray mark (a committed PNG from the real logo).
+image = { version = "0.25", default-features = false, features = ["png"] }
 tray-icon = "0.21"
 auto-launch = "0.5"
 raw-window-handle = "0.6"

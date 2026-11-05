@@ -51,9 +51,18 @@ Microphone (`ears-ui --input-devices` lists them as JSON).
 
 ## Typing into other applications
 
-eaRS inserts text with `uinput` when it can open `/dev/uinput`, and otherwise
-falls back to enigo, which is unreliable on Wayland. To enable the reliable
-path, allow your user to open `/dev/uinput`:
+Text insertion uses `enigo`, which is built with both Linux backends:
+
+- **Wayland**: the wlroots virtual-keyboard protocol
+  (`zwp_virtual_keyboard_manager_v1`), available on Hyprland and sway. No extra
+  permission is needed.
+- **X11**: the x11rb backend.
+- **uinput**: used where the compositor offers neither (it needs access to
+  `/dev/uinput`).
+
+Earlier builds only enabled the x11rb backend, so on Hyprland enigo fell back to
+uinput, which failed without `/dev/uinput` access and left typing broken. If a
+compositor has no virtual-keyboard protocol, allow `/dev/uinput` instead:
 
 ```sh
 sudo usermod -aG input "$USER"      # then log out and back in
@@ -61,5 +70,5 @@ sudo modprobe uinput                # load the module now
 ```
 
 A udev rule can set the group/mode instead, e.g.
-`KERNEL=="uinput", GROUP="input", MODE="0660"`. This is a system change and is
-not done automatically by eaRS.
+`KERNEL=="uinput", GROUP="input", MODE="0660"`. eaRS does not change system
+permissions itself.

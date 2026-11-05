@@ -32,9 +32,16 @@ rsvg-convert -w 1024 -h 1024 logo/ears_logo_white_on_black.svg -o "$work/ios.png
 magick "$work/ios.png" -background black -gravity center -extent 1024x1024 -alpha remove -alpha off \
     -colorspace sRGB "${stamp[@]}" "PNG24:$out/ios/ears_1024.png"
 
+# Tray/menu-bar mark: the real ears logo mark (no tile, no wordmark), white on
+# transparent so eaRS can tint it with the island's state colours at runtime.
+mkdir -p apps/ears-ui/assets/tray
+rsvg-convert --keep-aspect-ratio -w 88 -h 88 logo/ears_logo_white.svg -o "$work/tray.png"
+magick "$work/tray.png" -background none -gravity center -extent 88x88 -colorspace sRGB "${stamp[@]}" \
+    "PNG32:apps/ears-ui/assets/tray/ears-mark.png"
+
 # Linux (hicolor theme sizes) and Windows (.ico) reuse the padded rounded tile.
 for size in 16 24 32 48 64 128 256 512; do
     magick "$master" -resize "${size}x${size}" "${stamp[@]}" "PNG32:$out/linux/ears_${size}.png"
 done
 magick "$master" -define icon:auto-resize=256,64,48,32,24,16 "$out/windows/ears.ico"
-echo "Exported macOS ICNS/master, iOS master, Linux PNGs and Windows ICO into $out."
+echo "Exported macOS ICNS/master, iOS master, Linux PNGs, Windows ICO and the tray mark."

@@ -14,6 +14,9 @@ without changing the artwork. Same method as byteowlz/xlatch
   image; the OS applies its own mask.
 - `linux/ears_<size>.png`: hicolor theme sizes 16-512 px.
 - `windows/ears.ico`: 16-256 px.
+- `apps/ears-ui/assets/tray/ears-mark.png`: the logo mark alone, white on
+  transparent, for the tray/menu-bar icon (eaRS tints it with the island's state
+  colours).
 
 These are conventional flat exports, not a layered Icon Composer `.icon`
 (oqto-mobile uses one for Liquid Glass on iOS/macOS 26). Create that before an

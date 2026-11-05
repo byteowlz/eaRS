@@ -2481,6 +2481,7 @@ dependencies = [
  "eaRS",
  "gpui",
  "gtk",
+ "image",
  "motion-core",
  "motion-render",
  "objc2",
@@ -2555,6 +2556,10 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
+ "tempfile",
+ "wayland-client",
+ "wayland-protocols-misc",
+ "wayland-protocols-wlr",
  "windows 0.61.3",
  "x11rb",
  "xkbcommon 0.9.0",
@@ -10219,6 +10224,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "wayland-protocols-misc"
+version = "0.3.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e9567599ef23e09b8dad6e429e5738d4509dfc46b3b21f32841a304d16b29c8"
+dependencies = [
+ "bitflags 2.13.1",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols 0.32.13",
+ "wayland-scanner",
+]
+
+[[package]]
 name = "wayland-protocols-plasma"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10228,6 +10246,19 @@ dependencies = [
  "wayland-backend",
  "wayland-client",
  "wayland-protocols 0.31.2",
+ "wayland-scanner",
+]
+
+[[package]]
+name = "wayland-protocols-wlr"
+version = "0.3.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb04e52f7836d7c7976c78ca0250d61e33873c34156a2a1fc9474828ec268234"
+dependencies = [
+ "bitflags 2.13.1",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols 0.32.13",
  "wayland-scanner",
 ]
 
