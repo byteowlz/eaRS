@@ -69,7 +69,14 @@ fn noise(p: vec2<f32>) -> f32 {
     }
     let ambient=v.base*(0.30+0.65*max(n.y,0.0))*u.ambient.x;
     var color=(ambient+v.base*grain*nl*(1.0-metal*0.5)*u.light.w+spec*nl*u.light.w)*1.25;
-    // Glass is deliberately dark and matte enough not to veil native labels.
+    // Opaque display planes retain alpha=1, including antialiased phosphor edges.
     if v.props.z>2.5 { color=v.base*(0.75+0.25*nl); }
+    if v.props.z>3.5 {
+        let distance=length(v.local);
+        let aa=max(fwidth(distance)*0.5,0.001);
+        let dot=1.0-smoothstep(0.38-aa,0.38+aa,distance);
+        let glow=(1.0-smoothstep(0.38,0.50,distance))*0.06;
+        color=mix(color,v.emission,dot)+v.emission*glow;
+    }
     return vec4(color,1.0);
 }

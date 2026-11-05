@@ -51,6 +51,7 @@ struct Draft {
 pub(super) struct NativeSettings {
     model: Entity<AppModel>,
     device: Entity<DeviceView>,
+    drag: super::window::Drag,
     draft: Option<Draft>,
     recording: Option<HotkeyRecording>,
     listening: bool,
@@ -91,14 +92,14 @@ impl NativeSettings {
             view.set_control_font("brand", "Geo".into());
             view
         });
-        cx.subscribe(&device, |this, _, action: &Action, cx| {
-            this.action(action, cx)
+        cx.subscribe_in(&device, window, |this, _, action: &Action, window, cx| {
+            this.action(action, window, cx)
         })
         .detach();
         cx.observe(&model, |this, _, cx| this.sync(cx)).detach();
         cx.observe_window_activation(window, |this, window, cx| {
-            if !window.is_window_active() && this.draft.is_some() {
-                this.cancel(cx);
+            if !window.is_window_active() {
+                this.deactivate(cx);
             }
         })
         .detach();
@@ -109,6 +110,7 @@ impl NativeSettings {
         let mut this = Self {
             model,
             device,
+            drag: Default::default(),
             draft: None,
             recording: None,
             listening: false,
@@ -118,10 +120,17 @@ impl NativeSettings {
             loading: false,
             input_draft: None,
             waiting_input: false,
-            status: "Choose a microphone; Apply changes it. Refresh lists inputs.".into(),
+            status: String::new(),
         };
-        this.sync(cx);
+        let page = this.device.read(cx).snapshot().state.active_page.clone();
+        this.page(&page, cx);
         this
+    }
+    fn deactivate(&mut self, cx: &mut Context<Self>) {
+        self.drag.end();
+        if self.draft.is_some() {
+            self.cancel(cx);
+        }
     }
     pub(super) fn focus(&self, window: &mut Window, cx: &gpui::App) {
         self.device.read(cx).focus(window);
@@ -263,7 +272,7 @@ impl NativeSettings {
         })
         .detach();
     }
-    fn action(&mut self, action: &Action, cx: &mut Context<Self>) {
+    fn action(&mut self, action: &Action, window: &mut Window, cx: &mut Context<Self>) {
         if !scene::accepts(action, self.device.read(cx).snapshot()) {
             return;
         }
@@ -280,6 +289,10 @@ impl NativeSettings {
             return;
         }
         match id {
+            "window.close" => {
+                self.cancel(cx);
+                window.remove_window();
+            }
             "nav.dictation" | "nav.overlay" | "nav.dictionaries" | "nav.profiles"
             | "dictation.general" => self.navigate(id, cx),
             scene::INPUT | scene::SHORTCUTS => {
@@ -561,7 +574,13 @@ impl NativeSettings {
         };
         self.sync(cx);
     }
-    fn key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+    fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.listening && super::window::close_key(event) {
+            self.cancel(cx);
+            window.remove_window();
+            cx.stop_propagation();
+            return;
+        }
         if event.keystroke.key == "escape" && self.draft.is_some() {
             self.cancel(cx);
             cx.stop_propagation();
@@ -602,7 +621,28 @@ impl Render for NativeSettings {
                         )),
                 )
             })
-            .on_key_down(cx.listener(|this, event, _, cx| this.key(event, cx)))
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
+                    if this
+                        .device
+                        .read(cx)
+                        .is_chassis_at(event.position.x.into(), event.position.y.into())
+                    {
+                        this.drag.begin(window);
+                    }
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, event, window, _| this.drag.update(event, window)))
+            .on_mouse_up(
+                gpui::MouseButton::Left,
+                cx.listener(|this, _, _, _| this.drag.end()),
+            )
+            .on_mouse_up_out(
+                gpui::MouseButton::Left,
+                cx.listener(|this, _, _, _| this.drag.end()),
+            )
+            .on_key_down(cx.listener(|this, event, window, cx| this.key(event, window, cx)))
             .on_key_up(cx.listener(|this, _, _, _| this.local_ready = true))
             .child(self.device.clone())
     }

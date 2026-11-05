@@ -9,12 +9,14 @@ use live_settings::LiveSetting;
 mod microphone;
 pub(crate) use microphone::persist_input_device;
 mod device;
+mod device_layout;
 mod device_scene;
 mod navigation;
 mod shortcut_cli;
 mod shortcuts;
 pub(crate) use shortcut_cli::handle as shortcuts_cli;
 mod transcription;
+mod window;
 
 use crate::app::AppModel;
 use crate::config::ContentMotion;
@@ -163,6 +165,7 @@ pub struct SettingsView {
     tab: Tab,
     native: Option<Entity<device::NativeSettings>>,
     native_active: bool,
+    window_drag: window::Drag,
     server: Entity<TextInput>,
     language: Option<String>,
     test_input: Entity<TextInput>,
@@ -379,6 +382,7 @@ impl SettingsView {
             model,
             focus_handle: cx.focus_handle(),
             navigation_focus: cx.focus_handle(),
+            window_drag: Default::default(),
             pane_scroll: std::array::from_fn(|_| gpui::ScrollHandle::new()),
             dictionary_error: None,
             dict_add_focus: cx.focus_handle(),
@@ -626,7 +630,7 @@ impl SettingsView {
             Tab::Profiles => self.profiles_pane(&theme, cx),
         };
 
-        div()
+        self.window_shell(cx)
             .on_children_prepainted(crate::preview_proof::bounds(
                 self.model.read(cx).configuration_is_preview,
                 "settings-root",
@@ -640,16 +644,7 @@ impl SettingsView {
             .text_color(r.foreground)
             .font_family(theme.font_sans.clone())
             .track_focus(&self.focus_handle)
-            .on_key_down(cycle_settings_focus)
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .px(theme.space(5.0))
-                    .py(theme.space(3.0))
-                    .border_b_1()
-                    .border_color(r.border)
-                    .child(tab_bar),
-            )
+            .child(self.window_header(tab_bar, &theme, cx))
             .child(
                 div()
                     .id(("settings-scroll", self.tab.index()))

@@ -239,6 +239,21 @@ pub fn pin_to_screen_top(window: &Window, display: u32, offset: f32) {
     position_from_top(window, display, None, offset);
 }
 
+/// GPUI 0.2.2 retains titled chrome even with titlebar=None. Configure the
+/// Settings window before constructing its focused view. GPUI's NSWindow
+/// subclass explicitly allows key/main status for borderless windows.
+pub fn prepare_settings_window(window: &Window) {
+    prepare_overlay_panel(window);
+    if let Some(ns) = ns_window(window) {
+        ns.setStyleMask(
+            ns.styleMask()
+                | NSWindowStyleMask::Resizable
+                | NSWindowStyleMask::Miniaturizable
+                | NSWindowStyleMask::Closable,
+        );
+    }
+}
+
 /// GPUI's transparent popup retains titled chrome; it must not outline the
 /// entire large window. The floating pill supplies its own local shadow.
 pub fn prepare_overlay_panel(window: &Window) {

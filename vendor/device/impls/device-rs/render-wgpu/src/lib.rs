@@ -1,8 +1,9 @@
 //! Portable offscreen renderer. All I/O is caller-owned; run on a worker, never the UI thread.
+mod matrix;
 mod mesh;
 use bytemuck::{Pod, Zeroable};
 use device_scene::*;
-pub use mesh::{HitTriangle, Label};
+pub use mesh::{HitTriangle, Label, TextRaster};
 use mesh::{Mesh, Vertex};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -36,12 +37,22 @@ pub struct RenderFrame {
 impl RenderFrame {
     /// A non-control surface occludes controls behind it. Disabled controls are filtered by the host.
     pub fn hit_test(&self, x_dip: f64, y_dip: f64) -> Option<&str> {
+        self.hit_surface(x_dip, y_dip)?.control_id.as_deref()
+    }
+
+    /// Only visible non-control geometry is draggable, never empty canvas or a disabled control.
+    pub fn is_chassis_at(&self, x_dip: f64, y_dip: f64) -> bool {
+        self.hit_surface(x_dip, y_dip)
+            .is_some_and(|surface| surface.control_id.is_none())
+    }
+
+    fn hit_surface(&self, x_dip: f64, y_dip: f64) -> Option<&HitTriangle> {
         let ray = self.projection.ray(x_dip, y_dip)?;
         self.hit_geometry
             .iter()
             .filter_map(|t| ray.triangle(t.vertices).map(|distance| (distance, t)))
             .min_by(|a, b| a.0.total_cmp(&b.0))
-            .and_then(|(_, t)| t.control_id.as_deref())
+            .map(|(_, t)| t)
     }
 }
 #[repr(C)]

@@ -9,7 +9,7 @@ lint:
 
 # Requires a native GPU; never silently skips a missing adapter.
 gpu-test:
-    cargo test -p device-render-wgpu --test native_gpu --locked -- --ignored --nocapture
+    cargo test -p device-render-wgpu --test native_gpu --test matrix_gpu --locked -- --ignored --nocapture
 
 build-proof:
     cargo build --locked -p device-gpui --example specimen

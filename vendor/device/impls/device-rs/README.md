@@ -17,6 +17,9 @@ or a visual-parity claim.
   and reusable `DeviceView`. The view emits typed Actions; application hosts own
   selection previews, shortcut recording, persistence and every external effect.
   The native fixture example is only a synthetic host of that same view.
+  Transparent viewports leave the host canvas clear. `is_chassis_at` exposes
+  current non-control geometry for host-owned dragging; controls (including
+  disabled ones), empty canvas and stale frames never become drag handles.
 
 The libraries never open fixture/font files, microphones, networks or app config.
 Only explicitly invoked proof executables read their supplied paths. No consumer
@@ -118,8 +121,16 @@ Not yet established:
 - Angled typography: labels are sharp native text at projected centres/extents,
   but GPUI does not perspective-warp them. A host glyph-atlas pass is required.
   Labels are not yet depth-clipped glyph by glyph. Brand Geo is not exercised.
-- Matrix glyph-table rendering: matrix fields validate, but the specimen currently
-  uses disclosed native-text fallback, not the shared fixed-pitch dot glyphs.
+- Matrix text now uses shared case-preserving 5x7 phosphor geometry on the 3D
+  display plane, not native-font overlays. Pitch/cells/padding come only from the
+  scene; values never resize the dots. Long values word-wrap, then show a matrix
+  ellipsis when capacity is exhausted; hover reveals the unchanged full value.
+  Unsupported Unicode uses whole-string native shaping with a disclosed tooltip,
+  never replacement glyphs, uppercasing or transliteration.
+  `render-wgpu/src/matrix-glyphs.json` preserves the original r10 glyphs from
+  Studio revision `a710fbc`, extending them with ASCII/lowercase and common German
+  letters. Explicit GPU tests cover lit/unlit contrast, perspective and hit mapping
+  at 1x/2x. Native print/Unicode fallback still has the angled-text limitations above.
 - Native text/shortcut editing, IME, caret/selection projection and accessibility
   trees. Shortcut activation emits Preview with the current value to request
   app-owned capture; it never pretends that a chord has been recorded. Continuous knob/

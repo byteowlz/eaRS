@@ -6,6 +6,20 @@ primary destinations remain Dictation, Overlay, Dictionaries and Profiles.
 their existing panes and drafts. Select Dictation again to return to the device.
 This is an incremental implementation, not a completed whole-app redesign.
 
+## Window
+
+The device has no OS title bar, frame or opaque stage. Drag unused chassis metal
+to move it; controls and empty transparent space are not drag handles. The top
+right × closes Settings without applying drafts; Command-W on macOS (Control-W
+elsewhere) also closes, except while actively recording that chord. Escape cancels
+a draft. Existing non-device panes retain a Close button and header-padding drag
+area. Opening Settings again uses the normal tray entry.
+
+GPUI's titlebar setting alone does not remove macOS chrome: the Settings-only
+AppKit setup removes the titled/full-content mask and native shadow before the
+focused view is constructed. The shared view honors the transparent viewport;
+microphone capture, overlays and permissions are unchanged.
+
 ## Input
 
 Refresh enumerates device metadata without opening a microphone. Activate the
@@ -63,8 +77,19 @@ The pinned `vendor/device` dependency contains the shared scene, wgpu renderer
 and GPUI adapter, imported unchanged from design-system. App-owned layout/state
 and effect dispatch live in `apps/ears-ui/src/settings/device*.rs`. It is neither a
 WebView nor an app-local duplicate renderer, and needs no sibling checkout.
-Front presentation avoids perspective-warping native text. Michroma and Geo are
-bundled; native text supplies Unicode fallback. Overlay rendering is unchanged.
+Printed legends use bundled Michroma and Geo. Orange displays use the shared
+case-preserving 5x7 glyph table, rendered as round phosphors on the actual 3D
+surfaces with the same camera and depth buffer. Pitch is fixed at 0.16 device
+units for every eaRS display, independent of string length. Long values wrap at
+word boundaries and show an ellipsis if still too long; hovering shows the full,
+unchanged value. Unsupported Unicode uses a disclosed native-shaped fallback.
+Overlay rendering is unchanged.
+
+`settings/device_layout.rs` defines the common row tracks, column edges, gutters
+and padding. Shortcut labels and fields share baselines; action keys have equal
+widths and gutters; Input/Shortcuts share the same outer edges and footer. Geometry
+tests check all visible pairs for overlap and every orange display for matrix
+presentation. A wider string never changes item geometry or dot size.
 
 Synthetic, non-persisting previews:
 
@@ -79,7 +104,7 @@ pointer/keyboard interaction for selection, conflicting shortcuts, cancellation,
 capture, preview Save and return to General. The shared renderer additionally has
 actual Metal readback/hit tests at 1x/2x. This is not physical global-hotkey,
 high-refresh, accessibility-tree, Linux/Windows or IME acceptance. Shared material
-and fixed-pitch glyph fidelity are still incomplete; other settings panes are not
+fidelity and perspective-warped printed labels remain incomplete; other settings panes are not
 yet rendered as hardware. Wake phrase controls and the ctx invocation seam remain
 separate work; no external action execution was enabled.
 

@@ -31,6 +31,7 @@ fn actual_gpu_frames_preserve_projection_hits_alpha_and_channel_order() {
                 );
                 assert_eq!(frame.request_generation, 7);
                 assert_eq!(&frame.pixels[..4], &[0, 0, 0, 0]);
+                assert!(!frame.is_chassis_at(0.0, 0.0));
                 assert!(frame.pixels.chunks_exact(4).any(|p| p[3] == 255));
                 assert!(
                     frame
@@ -47,6 +48,20 @@ fn actual_gpu_frames_preserve_projection_hits_alpha_and_channel_order() {
                     );
                     let p = frame.projection.project(world).unwrap();
                     assert_eq!(frame.hit_test(p[0], p[1]), Some("ears.nav.dictation"));
+                    assert!(!frame.is_chassis_at(p[0], p[1]));
+                    assert!(
+                        frame
+                            .hit_geometry
+                            .iter()
+                            .filter(|t| t.control_id.is_none())
+                            .any(|t| {
+                                let center = (t.vertices[0] + t.vertices[1] + t.vertices[2]) / 3.0;
+                                frame
+                                    .projection
+                                    .project(center)
+                                    .is_some_and(|p| frame.is_chassis_at(p[0], p[1]))
+                            })
+                    );
                     let absent = if page == "input" {
                         "ears.shortcuts.toggle"
                     } else {

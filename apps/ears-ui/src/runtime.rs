@@ -20,7 +20,6 @@ use gpui::BorrowAppContext;
 use gpui::Bounds;
 use gpui::Entity;
 use gpui::Global;
-use gpui::TitlebarOptions;
 use gpui::WindowAppearance;
 use gpui::WindowBounds;
 use gpui::WindowHandle;
@@ -28,6 +27,7 @@ use gpui::WindowKind;
 use gpui::WindowOptions;
 use gpui::px;
 use gpui::size;
+use gpui::{WindowBackgroundAppearance, WindowDecorations};
 use std::thread::JoinHandle;
 use std::time::Duration;
 use std::time::Instant;
@@ -250,11 +250,9 @@ pub fn open_settings(cx: &mut App) {
     let bounds = Bounds::centered(None, size(px(SETTINGS_SIZE.0), px(SETTINGS_SIZE.1)), cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
-        titlebar: Some(TitlebarOptions {
-            title: Some("eaRS Settings".into()),
-            appears_transparent: false,
-            traffic_light_position: None,
-        }),
+        titlebar: None,
+        window_background: WindowBackgroundAppearance::Transparent,
+        window_decorations: Some(WindowDecorations::Client),
         focus: true,
         show: true,
         kind: WindowKind::Normal,
@@ -266,6 +264,7 @@ pub fn open_settings(cx: &mut App) {
         ..Default::default()
     };
     match cx.open_window(options, |window, cx| {
+        platform::prepare_settings_window(window);
         let appearance = window.appearance();
         apply_theme(cx, Some(appearance));
         cx.new(|cx| SettingsView::new(model.clone(), window, cx))

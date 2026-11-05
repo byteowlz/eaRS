@@ -54,6 +54,9 @@ impl SettingsView {
                 self.tab.index() as u32,
             ))
             .id("settings-tabs")
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .flex_1()
+            .min_w_0()
             .w_full()
             .flex()
             .gap(px(2.0))

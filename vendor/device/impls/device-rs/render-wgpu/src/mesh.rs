@@ -3,6 +3,9 @@ use bytemuck::{Pod, Zeroable};
 use device_scene::*;
 use glam::{DVec3, Vec3};
 
+#[path = "matrix_mesh.rs"]
+mod matrix_mesh;
+
 const MAX_VERTICES: usize = 600_000;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -19,6 +22,18 @@ pub struct HitTriangle {
     pub vertices: [DVec3; 3],
     pub control_id: Option<String>,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextRaster {
+    Native,
+    Matrix,
+    MatrixClipped,
+    UnicodeFallback,
+}
+impl TextRaster {
+    pub fn is_matrix(self) -> bool {
+        matches!(self, Self::Matrix | Self::MatrixClipped)
+    }
+}
 #[derive(Clone, Debug)]
 pub struct Label {
     pub text: String,
@@ -27,6 +42,7 @@ pub struct Label {
     pub height: f64,
     pub color: [u8; 3],
     pub printed: bool,
+    pub raster: TextRaster,
     pub control_id: Option<String>,
 }
 #[derive(Default)]
@@ -352,6 +368,7 @@ impl Mesh {
                 height: 0.5,
                 color: color_bytes(&s.scene.materials[&p.material].ink),
                 printed: true,
+                raster: TextRaster::Native,
                 control_id: None,
             });
         }
@@ -518,6 +535,17 @@ impl Mesh {
                     .map(str::to_owned)
                     .unwrap_or_else(|| state.value.0.to_string()),
             };
+            let raster = if c.presentation == Presentation::Matrix {
+                self.matrix_text(
+                    &text,
+                    c.matrix.as_ref().expect("validated matrix"),
+                    &r,
+                    d.origin,
+                    mat,
+                )?
+            } else {
+                TextRaster::Native
+            };
             self.labels.push(Label {
                 text,
                 center: DVec3::new(
@@ -529,6 +557,7 @@ impl Mesh {
                 height: r.height * 0.65,
                 color: color_bytes(&mat.ink),
                 printed: c.presentation == Presentation::Printed,
+                raster,
                 control_id: Some(c.id.clone()),
             });
         }

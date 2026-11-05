@@ -1,10 +1,13 @@
 //! Reusable native device view. Emits typed actions; the host owns every app effect.
+#[path = "readout_tooltip.rs"]
+mod readout_tooltip;
 use crate::{ImageSlot, RenderWorker};
 use device_scene::{Action, Kind, Phase, Snapshot, Source, ValidatedSnapshot, Value};
 use gpui::{
     Context, FocusHandle, KeyDownEvent, MouseButton, SharedString, Window, div, img, prelude::*,
     px, rgb,
 };
+use readout_tooltip::ReadoutTooltip;
 
 pub struct DeviceView {
     snapshot: Snapshot,
@@ -116,6 +119,12 @@ impl DeviceView {
         let id = p.frame.hit_test(x as f64, y as f64)?;
         let (_, c, state) = self.snapshot.control(id)?;
         (state.enabled && c.action != "none").then(|| id.to_owned())
+    }
+    /// Host-owned dragging may begin only on current, visible non-control geometry.
+    pub fn is_chassis_at(&self, x: f32, y: f32) -> bool {
+        self.slot.current().is_some_and(|p| {
+            p.snapshot.snapshot() == &self.snapshot && p.frame.is_chassis_at(x as f64, y as f64)
+        })
     }
     fn focus_control(&mut self, id: &str) {
         for (key, state) in &mut self.snapshot.state.controls {
@@ -247,13 +256,77 @@ impl DeviceView {
                 self.pressed = None;
                 self.clear_pressed();
                 self.request(cx);
-                cx.stop_propagation();
+                // Host editors own cancellation; do not swallow their Escape.
             }
             _ => {}
         }
     }
 }
 impl gpui::EventEmitter<Action> for DeviceView {}
+impl DeviceView {
+    // Native print/fallback and exact-value tooltips; matrix ink is already in GPU pixels.
+    fn label_element(
+        &self,
+        label: &device_render_wgpu::Label,
+        projection: &device_scene::Projection,
+        label_index: usize,
+    ) -> Option<gpui::Stateful<gpui::Div>> {
+        let center = projection.project(label.center)?;
+        let right = projection.project(label.center + glam::DVec3::X * label.width / 2.0)?;
+        let top = projection.project(label.center + glam::DVec3::Y * label.height / 2.0)?;
+        let width = ((right[0] - center[0]).abs() * 2.0) as f32;
+        let height = ((top[1] - center[1]).abs() * 2.0) as f32;
+        let color = ((label.color[0] as u32) << 16)
+            | ((label.color[1] as u32) << 8)
+            | label.color[2] as u32;
+        // Native sharp text: projected centre/extent, but no perspective warp in this proof.
+        let tooltip_text = if label.raster == device_render_wgpu::TextRaster::UnicodeFallback {
+            format!("Native glyph fallback: {}", label.text)
+        } else {
+            label.text.clone()
+        };
+        let tooltip_font = self.ui_font.clone();
+        Some(
+            div()
+                .id(("device-readout", label_index))
+                .tooltip(move |_, cx| {
+                    cx.new(|_| ReadoutTooltip(tooltip_text.clone(), tooltip_font.clone()))
+                        .into()
+                })
+                .absolute()
+                .left(px(center[0] as f32 - width / 2.0))
+                .top(px(center[1] as f32 - height / 2.0))
+                .w(px(width))
+                .h(px(height))
+                .flex()
+                .items_center()
+                .justify_center()
+                .overflow_hidden()
+                .text_color(rgb(color))
+                .font_family(
+                    label
+                        .control_id
+                        .as_ref()
+                        .and_then(|id| self.font_overrides.get(id))
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            if label.printed {
+                                self.printed_font.clone()
+                            } else {
+                                self.ui_font.clone()
+                            }
+                        }),
+                )
+                .text_size(px((height * 0.75)
+                    .min(width / (label.text.chars().count().max(1) as f32 * 0.62))
+                    .clamp(5.0, 24.0)))
+                .when(!label.raster.is_matrix(), |element| {
+                    element.child(label.text.clone())
+                }),
+        )
+    }
+}
+
 impl Render for DeviceView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut root = div()
@@ -261,7 +334,9 @@ impl Render for DeviceView {
             .relative()
             .size_full()
             .overflow_hidden()
-            .bg(rgb(0x101316))
+            .when(!self.snapshot.viewport.transparent, |root| {
+                root.bg(rgb(0x101316))
+            })
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event, _, cx| this.key(event, cx)))
             .on_mouse_down(
@@ -322,61 +397,10 @@ impl Render for DeviceView {
                     .w(px(viewport.width_dip as f32))
                     .h(px(viewport.height_dip as f32)),
             );
-            for label in &p.frame.labels {
-                let Some(center) = p.frame.projection.project(label.center) else {
-                    continue;
-                };
-                let Some(right) = p
-                    .frame
-                    .projection
-                    .project(label.center + glam::DVec3::X * label.width / 2.0)
-                else {
-                    continue;
-                };
-                let Some(top) = p
-                    .frame
-                    .projection
-                    .project(label.center + glam::DVec3::Y * label.height / 2.0)
-                else {
-                    continue;
-                };
-                let width = ((right[0] - center[0]).abs() * 2.0) as f32;
-                let height = ((top[1] - center[1]).abs() * 2.0) as f32;
-                let color = ((label.color[0] as u32) << 16)
-                    | ((label.color[1] as u32) << 8)
-                    | label.color[2] as u32;
-                // Native sharp text: projected centre/extent, but no perspective warp in this proof.
-                root = root.child(
-                    div()
-                        .absolute()
-                        .left(px(center[0] as f32 - width / 2.0))
-                        .top(px(center[1] as f32 - height / 2.0))
-                        .w(px(width))
-                        .h(px(height))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .overflow_hidden()
-                        .text_color(rgb(color))
-                        .font_family(
-                            label
-                                .control_id
-                                .as_ref()
-                                .and_then(|id| self.font_overrides.get(id))
-                                .cloned()
-                                .unwrap_or_else(|| {
-                                    if label.printed {
-                                        self.printed_font.clone()
-                                    } else {
-                                        self.ui_font.clone()
-                                    }
-                                }),
-                        )
-                        .text_size(px((height * 0.75)
-                            .min(width / (label.text.chars().count().max(1) as f32 * 0.62))
-                            .clamp(5.0, 24.0)))
-                        .child(label.text.clone()),
-                );
+            for (index, label) in p.frame.labels.iter().enumerate() {
+                if let Some(element) = self.label_element(label, &p.frame.projection, index) {
+                    root = root.child(element);
+                }
             }
         }
         if let Some(error) = &self.slot.error {
