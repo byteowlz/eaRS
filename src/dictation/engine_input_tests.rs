@@ -46,6 +46,34 @@ impl World {
     fn events(&self) -> Vec<DictationEvent> {
         self.events.lock().unwrap().clone()
     }
+    /// Open a specific selection the way the real opener would.
+    fn open_named(
+        &self,
+        selection: &InputSelection,
+        enabled: bool,
+    ) -> Result<Box<dyn InputStream>> {
+        let device = match selection {
+            InputSelection::Default => self.default.lock().unwrap().clone().unwrap_or_default(),
+            InputSelection::Named(name) => name.clone(),
+            InputSelection::Index(i) => format!("#{i}"),
+        };
+        if !self.plugged.lock().unwrap().contains(&device) {
+            self.log.lock().unwrap().push(format!("fail {device}"));
+            return Err(anyhow!("cannot open {device}"));
+        }
+        self.log
+            .lock()
+            .unwrap()
+            .push(format!("open {device} enabled={enabled}"));
+        let failed = Arc::new(AtomicBool::new(false));
+        self.streams.lock().unwrap().push(failed.clone());
+        Ok(Box::new(Fake {
+            device,
+            log: self.log.clone(),
+            failed,
+        }) as Box<dyn InputStream>)
+    }
+
     fn slot(&self) -> InputSlot {
         let world = self.clone();
         let events = self.events.clone();
@@ -301,4 +329,84 @@ fn the_default_fallback_skips_the_broken_pcm_names_and_keeps_order() {
         ]
     );
     assert!(default_fallbacks(&[]).is_empty());
+}
+
+/// A world where the ALSA "default" PCM is broken and only the hardware device
+/// opens — the omarchy situation the fallback exists for.
+fn fallback_world() -> World {
+    let world = World::with(&["default", "Shure MV7+"], "default");
+    world.log.lock().unwrap().push("broken default".into());
+    world
+}
+
+fn fallback_slot(world: &World) -> InputSlot {
+    let events = world.events.clone();
+    let raw = {
+        let world = world.clone();
+        Arc::new(move |selection: InputSelection, enabled| {
+            let InputSelection::Default = selection else {
+                return world.open_named(&selection, enabled);
+            };
+            let name = world.default.lock().unwrap().clone().unwrap_or_default();
+            if name == "default" {
+                return Err(anyhow!("snd_pcm_hw_params failed"));
+            }
+            world.open_named(&InputSelection::Named(name), enabled)
+        })
+            as Arc<dyn Fn(InputSelection, bool) -> Result<Box<dyn InputStream>> + Send + Sync>
+    };
+    let open = raw.clone();
+    InputSlot::new(
+        Box::new(
+            move |selection, enabled| match open(selection.clone(), enabled) {
+                Ok(stream) => Ok(stream),
+                Err(error) => open_default_fallback_with(
+                    &*raw,
+                    selection,
+                    error,
+                    enabled,
+                    true,
+                    &["default".to_string(), "Shure MV7+".to_string()],
+                ),
+            },
+        ),
+        Box::new(move |event| events.lock().unwrap().push(event)),
+        Box::new({
+            let world = world.clone();
+            move || world.default.lock().unwrap().clone()
+        }),
+        Duration::ZERO,
+    )
+}
+
+#[test]
+fn a_resolved_fallback_does_not_switch_devices_on_every_tick() {
+    let world = fallback_world();
+    let slot = fallback_slot(&world);
+    slot.start_now(None, 1);
+    assert_eq!(
+        slot.device().as_deref(),
+        Some("Shure MV7+"),
+        "fallback opened"
+    );
+    world.clear();
+    for _ in 0..6 {
+        slot.supervise();
+    }
+    assert_eq!(
+        world.log(),
+        Vec::<String>::new(),
+        "a resolved fallback must not be reopened every tick"
+    );
+    assert!(
+        world.events().is_empty(),
+        "and must not re-announce the device"
+    );
+    // A genuine change of the OS default still re-resolves once.
+    world.set_default("Shure MV7+");
+    slot.supervise();
+    assert_eq!(slot.device().as_deref(), Some("Shure MV7+"));
+    world.clear();
+    slot.supervise();
+    assert!(world.log().is_empty(), "settled again after one change");
 }

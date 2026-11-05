@@ -42,10 +42,29 @@ fn open_default_fallback(
     error: anyhow::Error,
     enabled: bool,
 ) -> Result<Box<dyn InputStream>> {
-    if !cfg!(target_os = "linux") || !matches!(selection, InputSelection::Default) {
+    // The platform policy lives here; the mechanism below is testable anywhere.
+    open_default_fallback_with(
+        open,
+        selection,
+        error,
+        enabled,
+        cfg!(target_os = "linux"),
+        &crate::audio::input_device_names(),
+    )
+}
+
+fn open_default_fallback_with(
+    open: &(dyn Fn(InputSelection, bool) -> Result<Box<dyn InputStream>> + Send + Sync),
+    selection: InputSelection,
+    error: anyhow::Error,
+    enabled: bool,
+    allow: bool,
+    devices: &[String],
+) -> Result<Box<dyn InputStream>> {
+    if !allow || !matches!(selection, InputSelection::Default) {
         return Err(error);
     }
-    for candidate in default_fallbacks(&crate::audio::input_device_names()) {
+    for candidate in default_fallbacks(devices) {
         let InputSelection::Named(name) = candidate.clone() else {
             continue;
         };
@@ -92,6 +111,11 @@ pub(crate) struct InputSlot {
     default_name: DefaultName,
     current: Mutex<Option<Box<dyn InputStream>>>,
     selection: Mutex<InputSelection>,
+    /// What "system default" last resolved to: the OS default name at that
+    /// moment and the device actually opened (which may be a fallback, when the
+    /// ALSA default PCM is unusable). Without this the supervisor compares the
+    /// fallback device against the raw default name and re-resolves every tick.
+    resolved_default: Mutex<Option<(Option<String>, String)>>,
     /// The loss was reported; avoids repeating it every supervisor tick.
     lost_reported: AtomicBool,
     retry_delay: Duration,
@@ -117,6 +141,7 @@ impl InputSlot {
             default_name,
             current: Mutex::new(None),
             selection: Mutex::new(InputSelection::Default),
+            resolved_default: Mutex::new(None),
             lost_reported: AtomicBool::new(false),
             retry_delay,
         }
@@ -237,6 +262,9 @@ impl InputSlot {
             Ok(stream) => {
                 let active = Some(stream.device().to_owned());
                 *current = Some(stream);
+                if let Some(device) = &active {
+                    self.note_resolution(device);
+                }
                 (self.emit)(DictationEvent::InputDevice {
                     requested,
                     active,
@@ -266,8 +294,16 @@ impl InputSlot {
         if let Some(stream) = current.as_ref() {
             stream.enable();
         }
+        let is_default = matches!(selection, InputSelection::Default);
         *self.selection.lock().unwrap_or_else(|p| p.into_inner()) = selection;
+        *self
+            .resolved_default
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = None;
         self.lost_reported.store(false, Ordering::SeqCst);
+        if is_default {
+            self.note_resolution(&device);
+        }
         Ok(device)
     }
 
@@ -292,17 +328,33 @@ impl InputSlot {
                 let Some(default) = (self.default_name)() else {
                     return;
                 };
-                if stream.device() == default {
+                let resolved = self
+                    .resolved_default
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .clone();
+                // Nothing changed: the OS default name is the one we resolved
+                // from, and the stream is still the device we chose for it.
+                if let Some((os_at, device)) = resolved {
+                    if os_at.as_deref() == Some(default.as_str()) && stream.device() == device {
+                        return;
+                    }
+                } else if stream.device() == default {
+                    self.note_resolution(&stream.device().to_owned());
                     return;
                 }
-                // Follow the new OS default; on failure keep the old input.
+                // The OS default changed: resolve again. On failure keep the old.
                 if let Ok(next) = (self.open)(InputSelection::Default, false) {
                     let device = next.device().to_owned();
+                    let resolving = stream.device().to_owned();
                     drop(current.replace(next));
                     if let Some(stream) = current.as_ref() {
                         stream.enable();
                     }
-                    eprintln!("input: system default changed; now using {device}");
+                    self.note_resolution(&device);
+                    if resolving != device {
+                        eprintln!("input: system default changed; now using {device}");
+                    }
                     (self.emit)(DictationEvent::InputDevice {
                         requested: None,
                         active: Some(device),
@@ -320,6 +372,7 @@ impl InputSlot {
             Ok(stream) => {
                 let device = stream.device().to_owned();
                 *current = Some(stream);
+                self.note_resolution(&device);
                 self.lost_reported.store(false, Ordering::SeqCst);
                 eprintln!("input: reconnected to {device}");
                 (self.emit)(DictationEvent::InputDevice {
@@ -334,6 +387,17 @@ impl InputSlot {
                 active: None,
                 error: Some(format!("disconnected; {RECONNECTING}")),
             }),
+        }
+    }
+
+    /// Remember which device the current "system default" resolved to.
+    fn note_resolution(&self, device: &str) {
+        if self.selection() == InputSelection::Default {
+            *self
+                .resolved_default
+                .lock()
+                .unwrap_or_else(|p| p.into_inner()) =
+                Some(((self.default_name)(), device.to_owned()));
         }
     }
 
