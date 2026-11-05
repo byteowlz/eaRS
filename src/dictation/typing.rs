@@ -276,6 +276,8 @@ pub struct TranscriptRecorder {
     config: TranscriptHistoryConfig,
     pending: Vec<String>,
     last_flush: Instant,
+    /// Settings test captures are never logged, even with transcript history on.
+    suspended: bool,
 }
 
 impl TranscriptRecorder {
@@ -284,11 +286,16 @@ impl TranscriptRecorder {
             config,
             pending: Vec::new(),
             last_flush: Instant::now(),
+            suspended: false,
         }
     }
 
+    pub fn set_suspended(&mut self, suspended: bool) {
+        self.suspended = suspended;
+    }
+
     pub fn record(&mut self, event_type: &str, raw: &str, replaced: &str) -> Result<()> {
-        if !self.config.enabled {
+        if !self.config.enabled || self.suspended {
             return Ok(());
         }
         let now = time::OffsetDateTime::now_utc();
@@ -411,6 +418,9 @@ pub struct Inserter {
     keyboard: Box<dyn VirtualKeyboard>,
     /// Kept when the mode is a clipboard mode so the session text can be read.
     clipboard: Option<Arc<std::sync::Mutex<String>>>,
+    /// Settings test capture: recognised text reaches the UI only. No typing,
+    /// clipboard or prompt output, including after a profile changes the mode.
+    preview: bool,
 }
 
 struct SharedClipboardKeyboard {
@@ -440,6 +450,7 @@ impl Inserter {
             mode: InsertionMode::InsertAtCursor,
             keyboard,
             clipboard: None,
+            preview: false,
         }
     }
 
@@ -448,6 +459,7 @@ impl Inserter {
             mode,
             keyboard: Box::new(NullKeyboard),
             clipboard: None,
+            preview: false,
         };
         inserter.set_mode(mode)?;
         Ok(inserter)
@@ -464,6 +476,11 @@ impl Inserter {
     /// Switch the insertion target. Re-creates the keyboard, so pending
     /// clipboard text is dropped.
     pub fn set_mode(&mut self, mode: InsertionMode) -> Result<()> {
+        if self.preview {
+            // Remember the requested target; it takes effect when the test ends.
+            self.mode = mode;
+            return Ok(());
+        }
         match mode {
             InsertionMode::InsertAtCursor => {
                 self.keyboard = create_virtual_keyboard().context(
@@ -483,6 +500,26 @@ impl Inserter {
         }
         self.mode = mode;
         Ok(())
+    }
+
+    /// Replace every output target with a sink until `end_preview`.
+    pub fn begin_preview(&mut self) {
+        self.preview = true;
+        self.keyboard = Box::new(NullKeyboard);
+        self.clipboard = None;
+    }
+
+    /// Restore the real target for the current (possibly updated) mode.
+    pub fn end_preview(&mut self) -> Result<()> {
+        if !self.preview {
+            return Ok(());
+        }
+        self.preview = false;
+        self.set_mode(self.mode)
+    }
+
+    pub fn is_preview(&self) -> bool {
+        self.preview
     }
 
     /// Text accumulated in a clipboard mode since the session began.
@@ -506,7 +543,7 @@ impl Inserter {
     /// Called when capture stops. Emits the prompt text in
     /// [`InsertionMode::SendAsPrompt`].
     pub(crate) fn end_session(&mut self, shared: &Shared) {
-        if self.mode == InsertionMode::SendAsPrompt {
+        if self.mode == InsertionMode::SendAsPrompt && !self.preview {
             if let Some(text) = self.session_text().filter(|t| !t.is_empty()) {
                 shared.emit(DictationEvent::PromptReady { text });
             }

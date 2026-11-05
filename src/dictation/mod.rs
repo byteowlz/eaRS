@@ -253,6 +253,10 @@ pub enum DictationCommand {
     SetCapturing(bool),
     /// Flip capture.
     Toggle,
+    /// Settings test: capture with recognised text sent only to the UI as
+    /// Partial/Utterance events. Nothing is typed, copied, retained or logged.
+    /// Refused while dictation is already capturing; false ends the test.
+    SetTestCapture(bool),
     /// Discard pending words and pause.
     Cancel,
     /// Listener-owned discard, fenced to the generation stopped by that hold.

@@ -947,6 +947,7 @@ impl Engine {
         let resume = match &command {
             DictationCommand::SetCapturing(true) => true,
             DictationCommand::Toggle => !self.shared.is_capturing(),
+            DictationCommand::SetTestCapture(true) => !self.shared.is_capturing(),
             _ => false,
         };
         match command {
@@ -955,6 +956,22 @@ impl Engine {
             }
             DictationCommand::Toggle => {
                 self.shared.toggle();
+            }
+            DictationCommand::SetTestCapture(true) => {
+                if self.shared.is_capturing() {
+                    self.shared.emit(DictationEvent::Error {
+                        message: "Stop dictation before testing".into(),
+                    });
+                    return Ok(Flow::Continue);
+                }
+                self.inserter.begin_preview();
+                self.recorder.set_suspended(true);
+                self.shared.set_capturing(true);
+            }
+            DictationCommand::SetTestCapture(false) => {
+                if self.inserter.is_preview() {
+                    self.shared.set_capturing(false);
+                }
             }
             DictationCommand::CancelHotkey { generation } => {
                 self.cancel_hotkey_generation(generation)?;
@@ -1174,7 +1191,8 @@ impl Engine {
             }
             self.router.discard_pending();
             self.utterance.clear();
-            if let Some(history) = self.history.as_mut() {
+            let preview = self.inserter.is_preview();
+            if let Some(history) = self.history.as_mut().filter(|_| !preview) {
                 history.begin_session();
             }
             self.inserter.begin_session()?;
@@ -1233,6 +1251,10 @@ impl Engine {
         self.utterance.clear();
         if emit_prompt {
             self.inserter.end_session(&self.shared);
+        }
+        if self.inserter.is_preview() {
+            self.recorder.set_suspended(false);
+            self.inserter.end_preview()?;
         }
         Ok(())
     }
@@ -1464,6 +1486,10 @@ impl Engine {
     /// Keep the audio of a finished utterance when retention is on. Failures
     /// are reported but never interrupt dictation.
     fn commit_history(&mut self, raw: &str, replaced: &str) {
+        if self.inserter.is_preview() {
+            self.discard_history();
+            return;
+        }
         let Some(history) = self.history.as_mut() else {
             return;
         };
@@ -1646,6 +1672,10 @@ mod local_pause_tests;
 #[cfg(all(test, feature = "client-vad"))]
 #[path = "engine_auto_pause_progress_tests.rs"]
 mod auto_pause_progress_tests;
+
+#[cfg(test)]
+#[path = "engine_test_capture_tests.rs"]
+mod test_capture_tests;
 
 #[cfg(test)]
 mod tests {
