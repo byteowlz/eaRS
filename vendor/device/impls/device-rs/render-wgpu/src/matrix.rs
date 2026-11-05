@@ -115,6 +115,10 @@ mod tests {
         assert_eq!(long.cells[15], glyphs()[&'…']);
         assert_eq!(layout("A\nB", &m).unwrap().cells[8], glyphs()[&'B']);
         assert_eq!(text, "Right Option");
+        // Device names use typographic apostrophes and accents; they stay dot matrix.
+        for name in ["Tommy’s iPhone", "Jürgen’s AirPods", "Café Mic", "“Studio”"] {
+            assert!(layout(name, &matrix(24, 1)).is_some(), "{name}");
+        }
         assert!(layout("日本語", &m).is_none());
         assert!(layout("e\u{301}", &m).is_none());
     }

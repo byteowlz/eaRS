@@ -13,8 +13,8 @@ ee7c7a3ab5b1729545568633cd31a2d96fac64934860b794f036c9a1b2142ec4  impls/device-r
 2bee2b1dc7939674faf7a2e283780cbbef993ece553d4b50c37475f09e8d1a68  impls/device-rs/render-wgpu/src/bin/device-render.rs
 7d45ba7a0de907ee2506765d580a46da16553cc6101ea115c139fd3f8f372da1  impls/device-rs/render-wgpu/src/lib.rs
 1b4cf869b103011fabc0185d8f8c0ab04791174194a0851ef59353f068cee32b  impls/device-rs/render-wgpu/src/material.wgsl
-0780072460641df89357e9e7667e9b57a8ef1888283effccaf4db286172f6850  impls/device-rs/render-wgpu/src/matrix-glyphs.json
-e82fdc85f029d11a9e485ecf29171db0aa55add311ccc17fb092d6539ab0f1e3  impls/device-rs/render-wgpu/src/matrix.rs
+127b5ba6d5bc7b90266124cab73f8df3701c1d6652cd01858b22e1646ddf42dd  impls/device-rs/render-wgpu/src/matrix-glyphs.json
+cdd3e20afa0b1e5bc6e75dd508b85883369e4d15b45036eb6bca6ff015234ed9  impls/device-rs/render-wgpu/src/matrix.rs
 d9075915a3f59beabd137ab425cf0252256b54a74cbb99136dc6ecb8b6dbf3d2  impls/device-rs/render-wgpu/src/matrix_mesh.rs
 63148fb3e989c356c1a951f8e41ce2bc1d25b8a4b084cf2999d59c259a8cae2d  impls/device-rs/render-wgpu/src/mesh.rs
 a0835b24ce68f57f2e4247679b25eaee2c9affa0d7c487f31a3b7995a42c6f5c  impls/device-rs/render-wgpu/src/shape.rs
