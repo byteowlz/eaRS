@@ -11,7 +11,6 @@ use serde_json::{Value as Json, json};
 const BASE: &str =
     include_str!("../../../../vendor/device/spec/fixtures/device-scene-v1/ears-input.json");
 pub(super) const PAGE: &str = "dictation";
-pub(super) const MIC_SLOTS: usize = 4;
 pub(super) const PITCH: f64 = 0.16;
 const INNER: f64 = 0.4;
 const GAP: f64 = 0.8;
@@ -24,7 +23,7 @@ const SIDE_KEY: f64 = 2.4;
 const SWITCH_KEY: f64 = 6.0;
 const EDGE: f64 = 30.4;
 const HEIGHT: f64 = 46.0;
-const SLOTS: usize = 12;
+const SLOTS: usize = 11;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Span {
@@ -105,6 +104,9 @@ impl Builder {
             "rect":{"x":(span.left+span.right)/2.0,"y":y,"z":0.8,"width":span.width(),"height":height,"depth":0.15},
             "material":material,"label":label,"accessible_name":label,"description":help,
             "tab_index":-1,"action":id,"presentation":presentation});
+        if kind == "select" {
+            control["options"] = json!([{"id":"choice-0","label":""}]);
+        }
         if presentation == "matrix" {
             let cols = ((span.width() - 0.8 + PITCH) / (6.0 * PITCH)).floor() as u32;
             let rows = rows_for(height);
@@ -113,7 +115,7 @@ impl Builder {
                 "padding_x":(span.width() - (cols * 6 - 1) as f64 * PITCH) / 2.0,
                 "padding_y":(height - ((rows - 1) * 8 + 7) as f64 * PITCH) / 2.0});
         }
-        let interactive = matches!(kind, "button" | "toggle" | "shortcut");
+        let interactive = matches!(kind, "button" | "toggle" | "shortcut" | "select");
         if interactive {
             control["tab_index"] = json!(self.controls.len());
         } else {
@@ -317,18 +319,42 @@ impl<'a> Column<'a> {
             Json::Null,
         );
     }
-    fn wide_switch(&mut self, id: &str, help: &str) {
+    /// Full-width click-through display: click it, or ◀ ▶, to step through choices.
+    fn wide_select(&mut self, id: &str, text: &str, help: &str) {
         let y = self.next_row();
+        let (full, module) = (self.full, self.module);
         self.b.add(
-            id,
-            self.module,
-            "toggle",
-            "",
+            &format!("{id}.prev"),
+            module,
+            "button",
+            "◀",
             help,
-            self.full,
+            full.first(SIDE_KEY),
             y,
             ROW,
-            json!(false),
+            Json::Null,
+        );
+        self.b.add(
+            id,
+            module,
+            "select",
+            text,
+            help,
+            full.inset(SIDE_KEY + INNER),
+            y,
+            ROW,
+            json!("choice-0"),
+        );
+        self.b.add(
+            &format!("{id}.next"),
+            module,
+            "button",
+            "▶",
+            help,
+            full.last(SIDE_KEY),
+            y,
+            ROW,
+            Json::Null,
         );
     }
 }
@@ -453,9 +479,11 @@ pub(super) fn initial() -> Snapshot {
     {
         let mut c = Column::new(&mut b, "ears.left", left_full, column_top);
         c.heading("head.mic", "MICROPHONE");
-        for slot in 0..MIC_SLOTS {
-            c.wide_switch(&format!("mic.{slot}"), "Use this microphone");
-        }
+        c.wide_select(
+            "mic",
+            "Microphone",
+            "Click to step through inputs; it switches when you stop.",
+        );
         c.heading("head.shortcuts", "SHORTCUTS");
         c.shortcut(
             Binding::Toggle,
@@ -488,6 +516,13 @@ pub(super) fn initial() -> Snapshot {
             "Restore defaults",
             "Restore the default shortcuts",
         );
+        c.heading("head.wake", "WAKE WORD");
+        c.stepper(
+            "wake",
+            "Sensitivity",
+            "Higher wakes more easily but triggers falsely more often",
+            ("−", "+"),
+        );
     }
     {
         let mut c = Column::new(&mut b, "ears.right", right_full, column_top);
@@ -503,13 +538,6 @@ pub(super) fn initial() -> Snapshot {
             "threshold",
             "Speech threshold",
             "Higher ignores more noise but may cut quiet speech",
-            ("−", "+"),
-        );
-        c.heading("head.wake", "WAKE WORD");
-        c.stepper(
-            "wake",
-            "Sensitivity",
-            "Higher wakes more easily but triggers falsely more often",
             ("−", "+"),
         );
         c.heading("head.text", "TEXT");
@@ -596,7 +624,7 @@ mod tests {
             "nav.profiles",
             "test",
             "display",
-            "mic.0",
+            "mic",
             "shortcut.toggle",
             "shortcut.push_to_talk",
             "shortcut.profile_cycle",
@@ -622,20 +650,26 @@ mod tests {
     #[test]
     fn columns_rows_and_compound_controls_share_edges() {
         let s = initial();
-        // Every row label starts at its column edge; every control ends at the column edge.
         for (labels, controls) in [
             (
-                vec!["label.shortcut.toggle", "label.keymode", "label.escape"],
-                vec!["shortcut.toggle.clear", "keymode.next", "shortcut.defaults"],
+                vec![
+                    "label.shortcut.toggle",
+                    "label.keymode",
+                    "label.escape",
+                    "label.wake",
+                    "mic.prev",
+                ],
+                vec![
+                    "shortcut.toggle.clear",
+                    "keymode.next",
+                    "shortcut.defaults",
+                    "wake.next",
+                    "mic.next",
+                ],
             ),
             (
-                vec![
-                    "label.language",
-                    "label.wake",
-                    "label.insert",
-                    "label.server",
-                ],
-                vec!["language.next", "wake.next", "insert.next", "server.use"],
+                vec!["label.language", "label.insert", "label.server"],
+                vec!["language.next", "insert.next", "server.use"],
             ),
         ] {
             let edge = left(&rect(&s, labels[0]));
@@ -647,7 +681,6 @@ mod tests {
                 equal(right(&rect(&s, id)), end, id);
             }
         }
-        // Label and its control share a centre line.
         for (label, control) in [
             ("label.pause", "pause"),
             ("label.shortcut.toggle", "shortcut.toggle"),
@@ -655,23 +688,83 @@ mod tests {
         ] {
             equal(rect(&s, label).y, rect(&s, control).y, label);
         }
-        // All steppers have identical displays; shortcut displays match each other.
-        let width = rect(&s, "language").width;
-        for id in ["pause", "threshold", "wake", "insert", "server", "keymode"] {
-            equal(rect(&s, id).width, width, id);
+        // Every value display shares the value column's edges.
+        for id in [
+            "pause",
+            "threshold",
+            "wake",
+            "insert",
+            "server",
+            "keymode",
+            "connection",
+            "shortcut.profile_cycle",
+        ] {
+            equal(
+                left(&rect(&s, id)),
+                left(&rect(
+                    &s,
+                    if id == "insert"
+                        || id == "pause"
+                        || id == "threshold"
+                        || id == "server"
+                        || id == "connection"
+                    {
+                        "language"
+                    } else {
+                        "keymode"
+                    },
+                )),
+                id,
+            );
+            equal(rect(&s, id).width, rect(&s, "language").width, id);
         }
-        // Both columns start their first section on the same line.
+        // One baseline grid shared by both columns.
         equal(
             rect(&s, "head.mic").y,
             rect(&s, "head.speech").y,
             "section tops",
         );
-        // Equal navigation tabs.
+        equal(rect(&s, "mic").y, rect(&s, "language").y, "first rows");
+        equal(
+            rect(&s, "shortcut.toggle").y,
+            rect(&s, "threshold").y,
+            "grid lines",
+        );
+        equal(
+            rect(&s, "shortcut.defaults").y,
+            rect(&s, "server").y,
+            "grid lines",
+        );
+        // Navigation keys line up with the columns; the top band spans both.
         let tab = rect(&s, "nav.dictation").width;
         for id in ["nav.overlay", "nav.dictionaries", "nav.profiles"] {
             equal(rect(&s, id).width, tab, id);
         }
-        // Display and Test share the top band.
+        equal(
+            left(&rect(&s, "nav.dictation")),
+            left(&rect(&s, "mic.prev")),
+            "tab grid",
+        );
+        equal(
+            right(&rect(&s, "nav.overlay")),
+            right(&rect(&s, "mic.next")),
+            "tab grid",
+        );
+        equal(
+            right(&rect(&s, "nav.profiles")),
+            right(&rect(&s, "server.use")),
+            "tab grid",
+        );
+        equal(
+            left(&rect(&s, "display")),
+            left(&rect(&s, "nav.dictation")),
+            "top band",
+        );
+        equal(
+            right(&rect(&s, "window.close")),
+            right(&rect(&s, "nav.profiles")),
+            "top band",
+        );
         equal(rect(&s, "display").y, rect(&s, "test").y, "top band");
         equal(
             rect(&s, "display").y + rect(&s, "display").height / 2.0,
@@ -692,16 +785,10 @@ mod tests {
                 assert!(c.action == "none");
             }
         }
+        let mic = d.controls.iter().find(|c| c.id == "mic").unwrap();
         assert!(
-            d.controls
-                .iter()
-                .find(|c| c.id == "display")
-                .unwrap()
-                .matrix
-                .as_ref()
-                .unwrap()
-                .rows
-                >= 3
+            mic.matrix.as_ref().unwrap().cols >= 22,
+            "long input names fit"
         );
         for (i, a) in d.controls.iter().enumerate() {
             for b in &d.controls[i + 1..] {

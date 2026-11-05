@@ -1,5 +1,5 @@
 //! App-owned scene state, display text and typed-action validation. Geometry: device_layout.
-pub(super) use super::device_layout::{MIC_SLOTS, initial};
+pub(super) use super::device_layout::initial;
 use device_scene::{Snapshot, Value};
 use serde_json::json;
 
@@ -15,11 +15,21 @@ pub(super) fn text(s: &mut Snapshot, id: &str, value: impl Into<String>) {
 pub(super) fn switch(s: &mut Snapshot, id: &str, on: bool) {
     state(s, id).value = Value(json!(on));
 }
-/// Show or hide an interactive key; hidden keys are never focusable or clickable.
-pub(super) fn show(s: &mut Snapshot, id: &str, visible: bool) {
-    let control = state(s, id);
-    control.visible = visible;
-    control.enabled = visible;
+/// Replace a click-through display's choices and select one.
+pub(super) fn choices(s: &mut Snapshot, id: &str, labels: &[String], current: usize) {
+    if let Some(control) = s.scene.devices[0].controls.iter_mut().find(|c| c.id == id) {
+        control.options = Some(
+            labels
+                .iter()
+                .enumerate()
+                .map(|(i, label)| device_scene::OptionItem {
+                    id: format!("choice-{i}"),
+                    label: label.clone(),
+                })
+                .collect(),
+        );
+    }
+    text(s, id, format!("choice-{current}"));
 }
 /// Keep a key in its grid place but make it unavailable (dimmed, unfocusable).
 pub(super) fn enable(s: &mut Snapshot, id: &str, enabled: bool) {
@@ -153,9 +163,16 @@ pub(super) fn accepts(action: &device_scene::Action, snapshot: &Snapshot) -> boo
     }
     match action.phase {
         device_scene::Phase::Commit | device_scene::Phase::Cancel => true,
-        device_scene::Phase::Preview => snapshot
-            .control(&action.control_id)
-            .is_some_and(|(_, control, _)| control.kind == device_scene::Kind::Shortcut),
+        device_scene::Phase::Preview => {
+            snapshot
+                .control(&action.control_id)
+                .is_some_and(|(_, control, _)| {
+                    matches!(
+                        control.kind,
+                        device_scene::Kind::Shortcut | device_scene::Kind::Select
+                    )
+                })
+        }
     }
 }
 
@@ -205,6 +222,5 @@ mod tests {
         assert!(accepts(&action, &snapshot));
         action.state_revision += 1;
         assert!(!accepts(&action, &snapshot));
-        assert_eq!(MIC_SLOTS, 4);
     }
 }

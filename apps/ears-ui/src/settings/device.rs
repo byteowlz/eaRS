@@ -108,7 +108,8 @@ pub(super) struct NativeSettings {
     local_ready: bool,
     capture_generation: u64,
     catalog: Option<InputDevices>,
-    mic_page: usize,
+    mic_choice: Option<usize>,
+    mic_generation: u64,
     waiting_input: Option<Option<String>>,
     server_choice: Option<String>,
     help: Option<String>,
@@ -169,7 +170,8 @@ impl NativeSettings {
             local_ready: true,
             capture_generation: 0,
             catalog: None,
-            mic_page: 0,
+            mic_choice: None,
+            mic_generation: 0,
             waiting_input: None,
             server_choice: None,
             help: None,
@@ -293,7 +295,12 @@ impl NativeSettings {
         let (message, newest) = self.display_message(&model);
         let listening = self.listening;
         let test_on = self.test.active;
-        let mics = self.mic_slots(&model);
+        let (mic_choices, mic_active) = self.mic_choices(&model);
+        let mic_labels: Vec<String> = mic_choices.iter().map(|c| c.label.clone()).collect();
+        let mic_shown = self
+            .mic_choice
+            .unwrap_or(mic_active)
+            .min(mic_labels.len().saturating_sub(1));
         let server_choice = self.server_choice.clone().unwrap_or(model.server.clone());
         self.device.update(cx, |view, cx| {
             view.set_keyboard_enabled(listening.is_none());
@@ -306,7 +313,10 @@ impl NativeSettings {
                         scene::display_text(&message, cols, rows, newest),
                     );
                     scene::switch(s, "test", test_on);
-                    write_mics(s, &mics);
+                    scene::choices(s, "mic", &mic_labels, mic_shown);
+                    scene::enable(s, "mic.prev", mic_labels.len() > 1);
+                    scene::enable(s, "mic.next", mic_labels.len() > 1);
+                    scene::enable(s, "mic", mic_labels.len() > 1);
                     write_shortcuts(s, &model.hotkeys, listening);
                     write_settings(s, &model, &server_choice);
                 },
@@ -315,7 +325,8 @@ impl NativeSettings {
         });
         cx.notify();
     }
-    fn mic_slots(&mut self, model: &ModelView) -> Vec<Option<MicSlot>> {
+    /// Selectable inputs plus a saved input that is not connected; index of the active one.
+    fn mic_choices(&self, model: &ModelView) -> (Vec<microphone::Choice>, usize) {
         let saved = &model.input_device;
         let active = model.input_pending.clone().unwrap_or_else(|| saved.clone());
         let mut choices: Vec<_> = microphone::choices(self.catalog.as_ref())
@@ -332,35 +343,71 @@ impl NativeSettings {
                 selectable: false,
             });
         }
-        let paged = choices.len() > scene::MIC_SLOTS;
-        let per_page = if paged {
-            scene::MIC_SLOTS - 1
-        } else {
-            scene::MIC_SLOTS
-        };
-        let pages = choices.len().div_ceil(per_page).max(1);
-        self.mic_page %= pages;
-        let mut slots: Vec<Option<MicSlot>> = choices
-            .iter()
-            .skip(self.mic_page * per_page)
-            .take(per_page)
-            .map(|c| {
-                Some(MicSlot {
-                    label: c.label.clone(),
-                    name: Some(c.name.clone()),
-                    on: c.name == active,
-                })
-            })
-            .collect();
-        slots.resize(per_page, None);
-        if paged {
-            slots.push(Some(MicSlot {
-                label: format!("More inputs  {}/{}", self.mic_page + 1, pages),
-                name: None,
-                on: false,
-            }));
+        let current = choices.iter().position(|c| c.name == active).unwrap_or(0);
+        (choices, current)
+    }
+    /// Step the shown input; the switch happens once the user stops stepping, so
+    /// passing over inputs never opens them.
+    fn step_mic(&mut self, target: MicStep, cx: &mut Context<Self>) {
+        let model = self.model.read(cx).clone_view();
+        let (choices, active) = self.mic_choices(&model);
+        if choices.len() < 2 {
+            return;
         }
-        slots
+        let shown = self.mic_choice.unwrap_or(active);
+        let next = match target {
+            MicStep::By(delta) => {
+                (shown as isize + delta).rem_euclid(choices.len() as isize) as usize
+            }
+            MicStep::To(index) => index.min(choices.len() - 1),
+        };
+        self.mic_choice = Some(next);
+        self.mic_generation += 1;
+        let generation = self.mic_generation;
+        self.sync(cx);
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(MIC_SETTLE).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.mic_generation == generation {
+                    this.commit_mic(cx);
+                }
+            });
+        })
+        .detach();
+    }
+    fn commit_mic(&mut self, cx: &mut Context<Self>) {
+        let Some(index) = self.mic_choice.take() else {
+            return;
+        };
+        let model = self.model.read(cx).clone_view();
+        let (choices, active) = self.mic_choices(&model);
+        let Some(choice) = choices.get(index).cloned() else {
+            return self.sync(cx);
+        };
+        if index == active {
+            return self.sync(cx);
+        }
+        if !choice.selectable {
+            return self.say(format!("{} is not connected.", choice.label), cx);
+        }
+        let name = choice.name.clone();
+        match self
+            .model
+            .update(cx, |m, cx| microphone::apply(m, name.clone(), cx))
+        {
+            Ok(()) if model.preview => {
+                self.say(format!("Preview: input set to {}.", choice.label), cx)
+            }
+            Ok(()) if model.engine_running => {
+                self.waiting_input = Some(name);
+                self.say(format!("Switching to {}…", choice.label), cx);
+            }
+            Ok(()) => self.say(
+                format!("{} will be used when dictation starts.", choice.label),
+                cx,
+            ),
+            Err(error) => self.say(format!("Microphone not changed: {error:#}"), cx),
+        }
     }
 
     // ---- actions ---------------------------------------------------------
@@ -394,12 +441,22 @@ impl NativeSettings {
             );
             return;
         }
-        if let Some(slot) = id
-            .strip_prefix("mic.")
-            .and_then(|s| s.parse::<usize>().ok())
-        {
-            self.choose_mic(slot, cx);
-            return;
+        match id {
+            "mic.prev" => return self.step_mic(MicStep::By(-1), cx),
+            "mic.next" => return self.step_mic(MicStep::By(1), cx),
+            "mic" => {
+                // Clicking the display steps to the option the device proposes.
+                let index = action
+                    .value
+                    .string()
+                    .and_then(|v| v.strip_prefix("choice-"))
+                    .and_then(|v| v.parse::<usize>().ok());
+                return match index {
+                    Some(index) => self.step_mic(MicStep::To(index), cx),
+                    None => self.step_mic(MicStep::By(1), cx),
+                };
+            }
+            _ => {}
         }
         let step = |id: &str, base: &str| -> Option<isize> {
             id.strip_prefix(base).and_then(|rest| match rest {
@@ -534,37 +591,6 @@ impl NativeSettings {
                 LiveSetting::WakeSensitivity => "Wake sensitivity",
             });
             cx.emit(Request::Live(setting, next));
-        }
-    }
-    fn choose_mic(&mut self, slot: usize, cx: &mut Context<Self>) {
-        let model = self.model.read(cx).clone_view();
-        let Some(Some(choice)) = self.mic_slots(&model).get(slot).cloned() else {
-            return;
-        };
-        let Some(name) = choice.name else {
-            self.mic_page += 1;
-            self.sync(cx);
-            return;
-        };
-        if choice.on || choice.label.ends_with("(not connected)") {
-            return;
-        }
-        let running = model.engine_running;
-        let preview = model.preview;
-        match self
-            .model
-            .update(cx, |m, cx| microphone::apply(m, name.clone(), cx))
-        {
-            Ok(()) if running && !preview => {
-                self.waiting_input = Some(name);
-                self.say(format!("Switching to {}…", choice.label), cx);
-            }
-            Ok(()) if preview => self.say("Preview: microphone switch simulated.", cx),
-            Ok(()) => self.say(
-                format!("{} will be used when dictation starts.", choice.label),
-                cx,
-            ),
-            Err(error) => self.say(format!("Microphone not changed: {error:#}"), cx),
         }
     }
     fn refresh_inputs(&mut self, cx: &mut Context<Self>) {
@@ -875,13 +901,12 @@ fn live_step(id: &str) -> Option<(LiveSetting, f32)> {
     Some((setting, direction))
 }
 
-#[derive(Clone)]
-struct MicSlot {
-    label: String,
-    /// `None` for the paging key; `Some(None)` is the system default input.
-    name: Option<Option<String>>,
-    on: bool,
+#[derive(Clone, Copy)]
+enum MicStep {
+    By(isize),
+    To(usize),
 }
+const MIC_SETTLE: Duration = Duration::from_millis(900);
 
 /// The model fields the device shows, copied once per sync.
 struct ModelView {
@@ -932,19 +957,6 @@ impl AppModel {
     }
 }
 
-fn write_mics(s: &mut Snapshot, slots: &[Option<MicSlot>]) {
-    for i in 0..scene::MIC_SLOTS {
-        let id = format!("mic.{i}");
-        match slots.get(i).cloned().flatten() {
-            Some(slot) => {
-                scene::show(s, &id, true);
-                scene::label(s, &id, &slot.label);
-                scene::switch(s, &id, slot.on);
-            }
-            None => scene::show(s, &id, false),
-        }
-    }
-}
 fn write_shortcuts(s: &mut Snapshot, hotkeys: &HotkeyConfig, listening: Option<Binding>) {
     for binding in Binding::ALL {
         let id = format!("shortcut.{}", binding.id());
