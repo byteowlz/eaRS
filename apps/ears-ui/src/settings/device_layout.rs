@@ -133,7 +133,9 @@ const LABEL_WIDTH: f64 = 10.4;
 const SIDE_KEY: f64 = 2.4;
 const SWITCH_KEY: f64 = 6.0;
 const EDGE: f64 = 30.4;
-const HEIGHT: f64 = 48.4;
+const HEIGHT: f64 = 42.0;
+const BRAND: f64 = 1.2;
+const DISPLAY: f64 = 4.4;
 const SLOTS: usize = 12;
 
 #[path = "device_layout_pages.rs"]
@@ -495,7 +497,13 @@ fn build() -> Snapshot {
     let device = &mut scene["devices"][0];
     device["chassis"]["height"] = json!(HEIGHT);
     let inner = HEIGHT / 2.0 - 1.6;
-    let top_bottom = inner - (PAD + 4.4 + GAP + ROW + PAD);
+    // Top module: brand strip, the tab row, then display with its two keys.
+    let brand_y = inner - BRAND / 2.0;
+    let tab_y = inner - BRAND - INNER - ROW / 2.0;
+    let band_top = tab_y - ROW / 2.0 - INNER;
+    let display_y = band_top - DISPLAY / 2.0;
+    let band_bottom = band_top - DISPLAY;
+    let top_bottom = band_bottom - PAD;
     let mid_top = top_bottom - GAP;
     let column_top = mid_top - (PAD - GAP / 2.0);
     let mid_bottom = column_top - (SLOTS as f64 - 1.0) * SLOT - ROW - PAD;
@@ -525,11 +533,8 @@ fn build() -> Snapshot {
         right: right_full.right,
     };
 
-    // Top module: main display, Test and Close; then the only navigation row,
-    // whose keys line up with the two columns below.
-    let display_top = inner - PAD;
-    // Close at the top and Test (a microphone key) at the bottom of one key
-    // column, both flush with the display's edges; the display takes the rest.
+    // Display with Close and Test stacked in one key column at its right edge;
+    // the single tab row sits above them and uses the display's full width.
     let close = band.last(SIDE_KEY);
     let test = close;
     let display = Span {
@@ -543,8 +548,8 @@ fn build() -> Snapshot {
         "Display",
         "Help, status and test transcripts",
         display,
-        display_top - 2.2,
-        4.4,
+        display_y,
+        DISPLAY,
         json!(""),
     );
     b.add(
@@ -554,7 +559,7 @@ fn build() -> Snapshot {
         "Test",
         "Test: speak to see your words here. Nothing is typed or saved.",
         test,
-        display_top - 4.4 + ROW / 2.0,
+        band_bottom + ROW / 2.0,
         ROW,
         Json::Null,
     );
@@ -565,16 +570,13 @@ fn build() -> Snapshot {
         "×",
         "Close settings",
         close,
-        display_top - ROW / 2.0,
+        band_top - ROW / 2.0,
         ROW,
         Json::Null,
     );
-    let nav_y = display_top - 4.4 - GAP - ROW / 2.0;
-    let tabs = left_full
-        .tracks(2, GAP)
-        .into_iter()
-        .chain(right_full.tracks(2, GAP));
-    for (span, (id, label)) in tabs.zip([
+    let nav_y = tab_y;
+    let tabs = band.tracks(4, GAP);
+    for (span, (id, label)) in tabs.into_iter().zip([
         ("dictation", "Dictation"),
         ("overlay", "Overlay"),
         ("dictionaries", "Dictionaries"),
@@ -692,13 +694,13 @@ fn build() -> Snapshot {
     b.page = "*";
     b.add(
         "brand",
-        "ears.front",
+        "ears.top",
         "legend",
         "eaRS",
         "eaRS",
-        left_full.first(8.0),
-        (mid_bottom - inner) / 2.0,
-        2.0,
+        band.first(4.4),
+        brand_y,
+        BRAND,
         json!("eaRS"),
     );
 
@@ -871,17 +873,12 @@ mod tests {
         }
         equal(
             left(&rect(&s, "nav.dictation")),
-            left(&rect(&s, "mic.prev")),
-            "tab grid",
-        );
-        equal(
-            right(&rect(&s, "nav.overlay")),
-            right(&rect(&s, "mic.next")),
+            left(&rect(&s, "display")),
             "tab grid",
         );
         equal(
             right(&rect(&s, "nav.profiles")),
-            right(&rect(&s, "server.use")),
+            right(&rect(&s, "window.close")),
             "tab grid",
         );
         equal(

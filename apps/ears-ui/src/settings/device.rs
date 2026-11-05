@@ -1276,7 +1276,8 @@ fn mic_icon(label: &str, size: f32, ink: u32) -> gpui::AnyElement {
     } else {
         rgb(ink)
     };
-    let u = (size / 10.0).max(1.0);
+    // The key is small; the glyph fills most of it rather than reading as a dot.
+    let u = (size / 6.6).max(1.2);
     let line = (u * 1.1).max(1.0);
     div()
         .flex()
