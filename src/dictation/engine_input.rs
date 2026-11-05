@@ -17,6 +17,46 @@ use std::time::Duration;
 
 use crate::dictation::{DictationEvent, Shared};
 
+/// Inputs to try when the system default cannot be opened, in order: the
+/// enumerated devices except the broken default PCM itself. Linux only; also
+/// used by tests without touching audio.
+pub(crate) fn default_fallbacks(devices: &[String]) -> Vec<InputSelection> {
+    devices
+        .iter()
+        .filter(|name| name.as_str() != "default" && name.as_str() != "pipewire")
+        .map(|name| InputSelection::Named(name.clone()))
+        .collect()
+}
+
+/// An opener that can be called repeatedly (retry, fallback, supervisor).
+type SharedOpener = Arc<dyn Fn(InputSelection, bool) -> Result<Box<dyn InputStream>> + Send + Sync>;
+
+/// On Linux the PipeWire-backed ALSA `default` PCM can be unusable while the
+/// hardware device works (observed on Arch: `snd_pcm_hw_params` fails for
+/// `default`/`pipewire`, `hw:`/`plughw:`/`sysdefault:` capture fine). Only the
+/// system default falls back, in enumeration order, and the device actually
+/// used is reported. A microphone chosen by name never falls back.
+fn open_default_fallback(
+    open: &(dyn Fn(InputSelection, bool) -> Result<Box<dyn InputStream>> + Send + Sync),
+    selection: InputSelection,
+    error: anyhow::Error,
+    enabled: bool,
+) -> Result<Box<dyn InputStream>> {
+    if !cfg!(target_os = "linux") || !matches!(selection, InputSelection::Default) {
+        return Err(error);
+    }
+    for candidate in default_fallbacks(&crate::audio::input_device_names()) {
+        let InputSelection::Named(name) = candidate.clone() else {
+            continue;
+        };
+        if let Ok(stream) = open(candidate, enabled) {
+            eprintln!("input: system default unusable ({error:#}); using {name}");
+            return Ok(stream);
+        }
+    }
+    Err(error)
+}
+
 pub(crate) trait InputStream: Send {
     fn device(&self) -> &str;
     fn enable(&self);
@@ -98,22 +138,38 @@ impl InputSlot {
         audio_tx: crossbeam_channel::Sender<Vec<f32>>,
         shared: Arc<Shared>,
     ) -> Self {
-        let on_error: ErrorHook = Arc::new(move |message| {
+        let on_error: ErrorHook = Arc::new(|message| {
             // The supervisor notices the failed stream and reports/reconnects.
             eprintln!("Audio stream error: {message}");
         });
+        let raw: SharedOpener = {
+            let audio_tx = audio_tx.clone();
+            let on_error = on_error.clone();
+            Arc::new(move |selection, enabled| {
+                Ok(Box::new(Capture::open(
+                    audio_tx.clone(),
+                    selection,
+                    on_error.clone(),
+                    enabled,
+                )?) as Box<dyn InputStream>)
+            })
+        };
+        let open = raw.clone();
         Self::new(
-            Box::new(move |selection, enabled| {
-                let capture =
-                    Capture::open(audio_tx.clone(), selection, on_error.clone(), enabled)?;
-                Ok(Box::new(capture) as Box<dyn InputStream>)
-            }),
+            Box::new(
+                move |selection, enabled| match open(selection.clone(), enabled) {
+                    Ok(stream) => Ok(stream),
+                    Err(error) => open_default_fallback(&*raw, selection, error, enabled),
+                },
+            ),
             Box::new(move |event| shared.emit(event)),
             Box::new(crate::audio::default_input_device_name),
             Duration::from_secs(1),
         )
     }
 
+    /// Open the configured input in the background, retrying transient
+    /// failures, then keep it alive with the supervisor.
     fn selection(&self) -> InputSelection {
         self.selection
             .lock()
@@ -131,8 +187,6 @@ impl InputSlot {
         }
     }
 
-    /// Open the configured input in the background, retrying transient
-    /// failures, then keep it alive with the supervisor.
     pub(crate) fn start(self: &Arc<Self>, requested: Option<String>, attempts: u32) {
         let slot = self.clone();
         let spawned = thread::Builder::new()

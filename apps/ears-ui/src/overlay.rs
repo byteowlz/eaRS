@@ -70,6 +70,13 @@ use std::time::Instant;
 
 /// Window size. The pill is centred inside; the margin leaves room for the
 /// shadow and for the island to grow.
+/// Distinct Wayland app_id on Linux: compositors route floating/tiled rules by
+/// it, and the island must not share the Settings window's class.
+#[cfg(target_os = "linux")]
+const ISLAND_APP_ID: &str = "dev.byteowlz.ears-ui.island";
+#[cfg(not(target_os = "linux"))]
+const ISLAND_APP_ID: &str = "dev.byteowlz.ears-ui";
+
 pub(crate) const WIN_W: f32 = 640.0;
 const WIN_H: f32 = 110.0;
 /// Regular pill.
@@ -437,7 +444,7 @@ pub(crate) fn open(cx: &mut App, overlay: &OverlayConfig, model: Entity<AppModel
         is_minimizable: false,
         display_id: Some(display.id()),
         window_background: WindowBackgroundAppearance::Transparent,
-        app_id: Some("dev.byteowlz.ears-ui".into()),
+        app_id: Some(ISLAND_APP_ID.into()),
         ..Default::default()
     };
     let click_through = overlay.click_through;

@@ -508,6 +508,7 @@ Key sections:
 - `[dictation].codec`: Set `"pcm"` (default, accuracy-first) or `"opus"` (bandwidth-saving for remote servers). `ears-dictation --codec` overrides the config value.
 - `[server]`: Default WebSocket port used by `ears server start` and the capture client.
 - `[dictation]`: Enable live typing and configure in-app hotkeys.
+- Linux specifics (tray, Hyprland window rules, microphone, `uinput` typing): [docs/linux.md](docs/linux.md).
 - `[hotkeys]`: Set hotkey bindings and mode (`toggle`, `push_to_talk`, or `hybrid`).
 - `[hotkeys].push_to_talk`: Add a dedicated hold-to-talk key alongside any mode, including
   modifier-only ones (`right_option`, `right_cmd`, `fn`) and `cmd+…` chords. Hold, speak,

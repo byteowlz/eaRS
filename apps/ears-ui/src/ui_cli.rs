@@ -4,8 +4,27 @@ use crate::{
     presentation,
 };
 use gpui::Application;
+/// Hyprland rules for the floating island and the Settings window. GPUI's
+/// Wayland backend uses ordinary toplevels, so a tiling compositor needs these
+/// rules to float, unframe and pin the island instead of tiling it.
+pub const LINUX_WINDOW_RULES: &str = "\
+# eaRS on Hyprland (append to ~/.config/hypr/hyprland.conf, then `hyprctl reload`)
+# The island: float, no frame/shadow, never take focus, stay on top.
+windowrulev2 = float,class:^(dev\\.byteowlz\\.ears-ui\\.island)$
+windowrulev2 = noborder,class:^(dev\\.byteowlz\\.ears-ui\\.island)$
+windowrulev2 = noshadow,class:^(dev\\.byteowlz\\.ears-ui\\.island)$
+windowrulev2 = noinitialfocus,class:^(dev\\.byteowlz\\.ears-ui\\.island)$
+windowrulev2 = pin,class:^(dev\\.byteowlz\\.ears-ui\\.island)$
+windowrulev2 = size 640 110,class:^(dev\\.byteowlz\\.ears-ui\\.island)$
+windowrulev2 = move 0 0,class:^(dev\\.byteowlz\\.ears-ui\\.island)$
+# Settings: a floating dialog rather than a tiled pane.
+windowrulev2 = float,class:^(dev\\.byteowlz\\.ears-ui)$
+windowrulev2 = center,class:^(dev\\.byteowlz\\.ears-ui)$
+";
+
 const OPTIONS: &[&str] = &[
     "--build-info",
+    "--linux-window-rules",
     "--input-devices",
     "--settings",
     "--setup",
@@ -68,6 +87,10 @@ pub fn handle(args: &[String]) -> bool {
             "{}",
             serde_json::to_string_pretty(&info).expect("static build information")
         );
+        return true;
+    }
+    if args.iter().any(|a| a == "--linux-window-rules") {
+        print!("{LINUX_WINDOW_RULES}");
         return true;
     }
     if args.iter().any(|a| a == "--input-devices") {
@@ -171,7 +194,10 @@ mod tests {
     use super::*;
     #[test]
     fn preview_modifiers_are_non_engine_options_and_unknown_flags_fail_closed() {
+        assert!(LINUX_WINDOW_RULES.contains("dev\\.byteowlz\\.ears-ui\\.island"));
+        assert!(LINUX_WINDOW_RULES.contains("noinitialfocus"));
         for flag in [
+            "--linux-window-rules",
             "--input-devices",
             "--preview-settings-mic-empty",
             "--preview-settings-mic-missing",

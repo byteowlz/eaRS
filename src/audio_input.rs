@@ -143,6 +143,13 @@ pub fn input_devices() -> Result<InputDevices> {
     })
 }
 
+/// Names of enumerated inputs, for fallbacks; metadata only, no stream.
+pub fn input_device_names() -> Vec<String> {
+    input_devices()
+        .map(|devices| devices.devices.into_iter().filter_map(|d| d.name).collect())
+        .unwrap_or_default()
+}
+
 /// Resolve a pinned name afresh; never silently fall back or trust a stale index.
 fn named_input_index(names: &[Option<String>], wanted: &str) -> Result<usize> {
     let mut matches = names

@@ -287,3 +287,18 @@ fn a_switch_or_supervisor_tick_during_startup_is_refused_not_blocked() {
     slot.supervise(); // returns immediately instead of deadlocking
     drop(held);
 }
+
+#[test]
+fn the_default_fallback_skips_the_broken_pcm_names_and_keeps_order() {
+    let devices: Vec<String> = ["default", "pipewire", "HDA Intel PCH", "USB Mic"]
+        .map(String::from)
+        .to_vec();
+    assert_eq!(
+        default_fallbacks(&devices),
+        vec![
+            InputSelection::Named("HDA Intel PCH".into()),
+            InputSelection::Named("USB Mic".into()),
+        ]
+    );
+    assert!(default_fallbacks(&[]).is_empty());
+}
