@@ -23,6 +23,51 @@ use tray_icon::menu::MenuEvent;
 use tray_icon::menu::MenuId;
 use tray_icon::menu::PredefinedMenuItem;
 
+/// On Linux the tray backend is libertray/libappindicator over GTK: GTK must
+/// be initialized once, on the main thread, before any menu widget exists.
+/// Without it the app used to abort at startup (`GTK has not been initialized`).
+/// When GTK is unavailable (headless session, no display) the tray is skipped
+/// and eaRS keeps running with Settings and hotkeys.
+#[cfg(target_os = "linux")]
+mod gtk_boot {
+    use std::sync::OnceLock;
+
+    static READY: OnceLock<bool> = OnceLock::new();
+
+    pub fn prepare() -> bool {
+        *READY.get_or_init(|| {
+            // `init` uses gtk_init_check: a headless/tty session returns Err
+            // instead of aborting, and a repeated call on the main thread is a
+            // no-op.
+            gtk::init().is_ok() && gtk::is_initialized_main_thread()
+        })
+    }
+
+    /// Deliver tray/indicator events to the GTK side from our own loop.
+    pub fn pump_events() {
+        if !gtk::is_initialized_main_thread() {
+            return;
+        }
+        while gtk::events_pending() {
+            gtk::main_iteration_do(false);
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+mod gtk_boot {
+    pub fn prepare() -> bool {
+        true
+    }
+    pub fn pump_events() {}
+}
+
+/// Prepare the platform tray backend. Call once, early, before GPUI starts:
+/// the Linux backend needs GTK on the main thread first.
+pub fn prepare() -> bool {
+    gtk_boot::prepare()
+}
+
 const ID_TOGGLE: &str = "ears-toggle";
 const ID_SETTINGS: &str = "ears-settings";
 const ID_MODE_INSERT: &str = "ears-mode-insert";
@@ -48,6 +93,10 @@ impl Global for TrayState {}
 /// the tick loop.
 pub fn install(cx: &mut App) {
     if cx.has_global::<TrayState>() {
+        return;
+    }
+    if !gtk_boot::prepare() {
+        eprintln!("ears-ui: tray disabled: the GTK tray backend is unavailable in this session");
         return;
     }
 
@@ -135,6 +184,7 @@ pub fn install(cx: &mut App) {
 
 /// Drain tray menu events and re-sync the icon/menu with the model.
 pub fn pump(cx: &mut App) {
+    gtk_boot::pump_events();
     while let Ok(event) = MenuEvent::receiver().try_recv() {
         dispatch(&event.id, cx);
     }

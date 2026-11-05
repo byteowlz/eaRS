@@ -414,6 +414,8 @@ fn main() {
         ui.overlay.enabled = false;
     }
 
+    // The Linux tray backend needs GTK initialized on the main thread first.
+    let tray_ready = tray::prepare();
     Application::new().run(move |cx| {
         eprintln!("ears-ui: app launched");
         platform::set_accessory_policy();
@@ -429,8 +431,17 @@ fn main() {
         cx.on_window_closed(|cx| runtime::on_window_closed(cx))
             .detach();
 
-        tray::install(cx);
-        eprintln!("ears-ui: tray installed");
+        if tray_ready {
+            tray::install(cx);
+        }
+        eprintln!(
+            "ears-ui: tray {}",
+            if cx.has_global::<tray::TrayState>() {
+                "installed"
+            } else {
+                "unavailable"
+            }
+        );
         if !setup_mode {
             runtime::start_engine(cx);
             eprintln!("ears-ui: engine started");
