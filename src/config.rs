@@ -27,6 +27,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub subs: SubsConfig,
     #[serde(default)]
+    pub parakeet_ultra: ParakeetUltraConfig,
+    #[serde(default)]
     pub replacement: ReplacementConfig,
     #[serde(default)]
     pub transcripts: TranscriptHistoryConfig,
@@ -242,6 +244,20 @@ pub struct HotkeyConfig {
     pub escape_cancels: bool,
 }
 
+/// Parakeet Ultra (moondream) as an utterance engine. Ultra ships as
+/// safetensors for a Python runtime and TDT is not cache-aware, so eaRS hands
+/// one utterance at a time to an operator-provided command that prints JSON.
+/// Empty `command` keeps the engine off; nothing is downloaded.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ParakeetUltraConfig {
+    pub command: Vec<String>,
+    pub language: Option<String>,
+    pub timeout_ms: u64,
+    pub max_utterance_secs: u32,
+    pub temp_dir: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubsConfig {
     pub font: String,
@@ -378,6 +394,7 @@ impl Default for AppConfig {
             },
             model: ModelConfig::default(),
             parakeet_rs: ParakeetRsConfig::default(),
+            parakeet_ultra: ParakeetUltraConfig::default(),
             moonshine: MoonshineConfig::default(),
             transcribe_cpp: TranscribeCppConfig::default(),
             server: ServerConfig::default(),

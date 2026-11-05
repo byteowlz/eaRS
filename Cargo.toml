@@ -158,6 +158,9 @@ parakeet-rs = ["dep:parakeet-rs", "dep:ort", "parakeet-rs/cpu", "parakeet-rs/loa
 transcribe-cpp = ["dep:transcribe-cpp", "dep:ureq"]
 # Native CPU streaming; model defaults to cached German Tiny, or a local ORT export.
 moonshine = ["dep:moonshine-rs", "dep:ureq"]
+# Parakeet Ultra via an operator-provided Python runtime (safetensors model,
+# no ONNX); eaRS buffers one utterance per request and shells out.
+parakeet-ultra = []
 
 # Acceleration (shared flags)
 nvidia = ["dep:cudarc", "candle/cuda", "candle-nn/cuda", "transcribe-cpp?/cuda", "parakeet-rs?/cuda"]

@@ -37,6 +37,18 @@ language = "auto"
 # Client --lang overrides this per session.
 # language = "auto"
 
+# Parakeet Ultra (moondream, CC-BY-4.0) as an utterance engine: Ultra ships as
+# safetensors for a Python runtime and TDT is not cache-aware, so eaRS buffers one
+# utterance and runs your command with a temporary WAV path appended. The command
+# must print {"text": "..."} (optionally {"words": [{word,start_time,end_time}]}).
+# Requires a build with --features parakeet-ultra. Nothing is downloaded.
+[parakeet_ultra]
+command = []
+# language = "de"
+# timeout_ms = 60000
+# max_utterance_secs = 120
+# temp_dir = "/tmp"
+
 [server]
 # WebSocket server host address (default: local machine "127.0.0.1")
 host = "127.0.0.1"

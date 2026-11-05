@@ -28,6 +28,9 @@ mod engine;
 pub mod listener;
 #[cfg(feature = "moonshine")]
 mod moonshine;
+
+#[cfg(feature = "parakeet-ultra")]
+mod parakeet_ultra;
 #[cfg(feature = "parakeet-rs")]
 mod parakeet_rs;
 mod parallel;
@@ -327,6 +330,21 @@ pub async fn run(options: ServerOptions) -> Result<()> {
             eprintln!(
                 "[ears-server] parakeet-rs needs a model: pass --parakeet-rs-model <dir> or set [parakeet_rs].model_dir"
             );
+        }
+    }
+
+    #[cfg(feature = "parakeet-ultra")]
+    if !config.parakeet_ultra.command.is_empty() {
+        let ultra = config.parakeet_ultra.clone();
+        match parakeet_ultra::ParakeetUltraEngine::load(parakeet_ultra::ParakeetUltraConfig {
+            command: ultra.command,
+            language: ultra.language,
+            timeout_ms: ultra.timeout_ms,
+            max_utterance_secs: ultra.max_utterance_secs,
+            temp_dir: ultra.temp_dir,
+        }) {
+            Ok(engine) => engine_manager.register(Arc::new(engine)),
+            Err(err) => eprintln!("[ears-server] failed to initialize parakeet-ultra: {err:#}"),
         }
     }
 

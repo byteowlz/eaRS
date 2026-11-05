@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
-#[cfg(any(feature = "moonshine", feature = "parakeet-rs"))]
+#[cfg(any(feature = "moonshine", feature = "parakeet-rs", feature = "parakeet-ultra"))]
 use crossbeam_channel::{SendTimeoutError, Sender};
 
 use crate::{TranscriptionSink, WebSocketMessage};
@@ -16,6 +16,8 @@ pub enum EngineKind {
     Moonshine,
     #[cfg(feature = "parakeet-rs")]
     ParakeetRs,
+    #[cfg(feature = "parakeet-ultra")]
+    ParakeetUltra,
     #[cfg(feature = "transcribe-cpp")]
     TranscribeCpp,
 }
@@ -28,6 +30,8 @@ impl EngineKind {
             EngineKind::Moonshine => "moonshine",
             #[cfg(feature = "parakeet-rs")]
             EngineKind::ParakeetRs => "parakeet-rs",
+            #[cfg(feature = "parakeet-ultra")]
+            EngineKind::ParakeetUltra => "parakeet-ultra",
             #[cfg(feature = "transcribe-cpp")]
             EngineKind::TranscribeCpp => "transcribe-cpp",
         }
@@ -40,6 +44,8 @@ impl EngineKind {
             "moonshine" => Some(EngineKind::Moonshine),
             #[cfg(feature = "parakeet-rs")]
             "parakeet-rs" | "parakeet_rs" | "nemotron" => Some(EngineKind::ParakeetRs),
+            #[cfg(feature = "parakeet-ultra")]
+            "parakeet-ultra" | "parakeet_ultra" | "ultra" => Some(EngineKind::ParakeetUltra),
             #[cfg(feature = "transcribe-cpp")]
             "transcribe-cpp" | "transcribe_cpp" | "tcpp" => Some(EngineKind::TranscribeCpp),
             _ => None,
@@ -79,7 +85,11 @@ pub trait EngineSession: Send {
 /// Shared bounded admission policy for engines with an accepted-audio FIFO.
 /// A failed enqueue is not accepted input and must never result in a drain ACK.
 /// Keep the distinction between a stalled and disconnected worker explicit.
-#[cfg(any(feature = "moonshine", feature = "parakeet-rs"))]
+#[cfg(any(
+    feature = "moonshine",
+    feature = "parakeet-rs",
+    feature = "parakeet-ultra"
+))]
 pub(super) fn queue_command<T>(sender: &Sender<T>, command: T) -> Result<()> {
     match sender.send_timeout(command, std::time::Duration::from_secs(1)) {
         Ok(()) => Ok(()),

@@ -104,6 +104,18 @@
       },
       "additionalProperties": false
     },
+    "parakeet_ultra": {
+      "type": "object",
+      "description": "Parakeet Ultra (moondream, CC-BY-4.0) as an utterance engine. Ultra is safetensors for a Python runtime and TDT is not cache-aware, so eaRS buffers one utterance per request, writes a temporary WAV and runs `command` with the WAV path appended; the command prints {\"text\": ...} (optional words). Requires --features parakeet-ultra. Empty command keeps it off; nothing is downloaded.",
+      "properties": {
+        "command": {"type": "array", "items": {"type": "string"}, "default": [], "description": "Transcription command, e.g. [\"python\", \"/opt/parakeet-ultra/transcribe.py\"]"},
+        "language": {"type": ["string", "null"], "default": null, "description": "Language hint passed as --language"},
+        "timeout_ms": {"type": "integer", "default": 60000, "description": "Per-utterance bound; the child is killed when it overruns"},
+        "max_utterance_secs": {"type": "integer", "default": 120, "description": "Longest utterance kept; longer audio is refused, not truncated"},
+        "temp_dir": {"type": ["string", "null"], "default": null, "description": "Where temporary WAVs are written and removed"}
+      },
+      "additionalProperties": false
+    },
     "dictation": {
       "type": "object",
       "description": "Dictation mode configuration",
