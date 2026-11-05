@@ -1,10 +1,12 @@
 use crate::RenderError;
 use bytemuck::{Pod, Zeroable};
 use device_scene::*;
-use glam::{DVec3, Vec3};
+use glam::{DVec3, Vec2, Vec3};
 
 #[path = "matrix_mesh.rs"]
 mod matrix_mesh;
+#[path = "shape.rs"]
+mod shape;
 
 const MAX_VERTICES: usize = 600_000;
 #[repr(C)]
@@ -188,34 +190,8 @@ impl Mesh {
             .min(r.width * 0.08)
             .min(r.height * 0.08)
             .min(r.depth * 0.45);
-        let mut body = r.clone();
-        body.z -= b;
-        body.depth -= b;
-        self.cuboid(&body, origin, mat, control)?;
-        let top = Rect {
-            width: r.width - 2.0 * b,
-            height: r.height - 2.0 * b,
-            depth: 0.0,
-            ..r.clone()
-        };
-        let outer = body.corners(origin).map(|p| p.as_vec3());
-        let inner = top.corners(origin).map(|p| p.as_vec3());
-        let center = inner[4].lerp(inner[7], 0.5);
-        self.quad(
-            [inner[4], inner[5], inner[7], inner[6]],
-            mat,
-            center,
-            control,
-        )?;
-        for [a, b] in [[4, 5], [5, 7], [7, 6], [6, 4]] {
-            self.quad(
-                [outer[a], outer[b], inner[b], inner[a]],
-                mat,
-                center,
-                control,
-            )?;
-        }
-        Ok(())
+        // Rounded plan corners and a rounded front edge, with smooth normals.
+        self.rounded_slab(r, origin, mat, control, 0.22, b)
     }
     fn cylinder(
         &mut self,
@@ -290,7 +266,7 @@ impl Mesh {
             height: c.height - 0.1_f64.min(c.height * 0.05),
             depth: c.depth - c.front_thickness,
         };
-        self.bevel(&body, d.origin, mat, None)?;
+        self.rounded_slab(&body, d.origin, mat, None, CHASSIS_RADIUS, 0.3)?;
         if c.feet_height > 0.0 {
             for x in [-0.38, 0.38] {
                 for z in [-0.15, -0.85] {
@@ -332,37 +308,21 @@ impl Mesh {
         Ok(())
     }
     fn panel(&mut self, d: &Device, p: &Panel, s: &Snapshot) -> Result<(), RenderError> {
-        let mut pieces = vec![p.rect.clone()];
-        for c in &d.controls {
-            if c.module_id != p.id || !s.control_visible(d, c) || is_legend(c) {
-                continue;
-            }
-            // Every physical key and display gets an actual aperture through its parent plate.
-            if matches!(
-                c.kind,
-                Kind::Button
-                    | Kind::Toggle
-                    | Kind::Select
-                    | Kind::Text
-                    | Kind::Shortcut
-                    | Kind::Readout
-                    | Kind::Meter
-                    | Kind::Fader
-            ) {
-                let hole = Rect {
-                    width: c.rect.width + 0.16,
-                    height: c.rect.height + 0.16,
-                    ..c.rect.clone()
-                };
-                pieces = pieces.iter().flat_map(|r| subtract(r, &hole)).collect();
-                if pieces.len() > 8192 {
-                    return Err(RenderError::Budget("panel aperture budget exceeded"));
-                }
-            }
-        }
-        for r in pieces {
-            self.cuboid(&r, d.origin, &s.scene.materials[&p.material], None)?;
-        }
+        // Plates and modules are rounded slabs; keys and displays sit on them,
+        // displays inside a raised bezel, so depth reads from real geometry and shadow.
+        let (radius, edge) = match p.surface {
+            Surface::Faceplate => (CHASSIS_RADIUS, 0.35),
+            Surface::Module => (0.6, 0.12),
+            Surface::Display => (0.25, 0.05),
+        };
+        self.rounded_slab(
+            &p.rect,
+            d.origin,
+            &s.scene.materials[&p.material],
+            None,
+            radius,
+            edge,
+        )?;
         if !p.label.is_empty() {
             self.labels.push(Label {
                 text: p.label.clone(),
@@ -505,6 +465,10 @@ impl Mesh {
                 };
                 self.cylinder(&r, d.origin, &m, control)?;
             }
+            Kind::Readout | Kind::Select | Kind::Shortcut | Kind::Text => {
+                self.rounded_slab(&r, d.origin, mat, control, 0.1, 0.03)?;
+                self.bezel(&r, d.origin, control)?;
+            }
             _ => {
                 self.bevel(&r, d.origin, mat, control)?;
             }
@@ -621,7 +585,34 @@ impl Mesh {
     }
 }
 const LAMP_INSET: f64 = 0.9;
+const CHASSIS_RADIUS: f64 = 1.4;
+const BEZEL: f64 = 0.14;
 impl Mesh {
+    /// A satin frame standing slightly proud of a display, so the glass reads as recessed.
+    fn bezel(
+        &mut self,
+        glass: &Rect,
+        origin: [f64; 3],
+        control: Option<&str>,
+    ) -> Result<(), RenderError> {
+        let outer = Rect {
+            width: glass.width + 2.0 * BEZEL,
+            height: glass.height + 2.0 * BEZEL,
+            z: glass.z + 0.05,
+            depth: glass.depth + 0.05,
+            ..glass.clone()
+        };
+        let satin = Material {
+            base: "#16181b".into(),
+            metalness: 0.55,
+            roughness: 0.42,
+            ..dark()
+        };
+        for bar in subtract(&outer, glass) {
+            self.rounded_slab(&bar, origin, &satin, control, 0.05, 0.03)?;
+        }
+        Ok(())
+    }
     /// Indicator lamp on a latching key: lit accent when on, dark glass when off.
     fn lamp(
         &mut self,

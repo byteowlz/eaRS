@@ -140,6 +140,10 @@ impl DeviceView {
     pub fn focus(&self, window: &mut Window) {
         window.focus(&self.focus);
     }
+    /// Camera mapping of the displayed frame, for host tools such as layout editors.
+    pub fn projection(&self) -> Option<device_scene::Projection> {
+        self.slot.current().map(|p| p.frame.projection.clone())
+    }
     pub fn error(&self) -> Option<&str> {
         self.slot.error.as_deref()
     }

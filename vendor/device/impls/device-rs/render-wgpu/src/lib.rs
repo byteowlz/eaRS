@@ -62,6 +62,39 @@ struct Uniforms {
     eye: [f32; 4],
     light: [f32; 4],
     ambient: [f32; 4],
+    /// World to shadow-map clip space for the key light.
+    light_vp: [[f32; 4]; 4],
+}
+/// Shadow map edge: fitted tightly to the device each frame, ~30 texels per unit.
+const SHADOW_SIZE: u32 = 2048;
+/// Orthographic key-light projection fitted to every vertex of the frame.
+fn light_view_projection(vertices: &[Vertex], light: glam::Vec3) -> glam::Mat4 {
+    let dir = light.normalize_or(glam::Vec3::Z);
+    let up = if dir.y.abs() > 0.95 {
+        glam::Vec3::Z
+    } else {
+        glam::Vec3::Y
+    };
+    let view = glam::camera::rh::view::look_at_mat4(dir * 500.0, glam::Vec3::ZERO, up);
+    let (mut lo, mut hi) = (glam::Vec3::splat(f32::MAX), glam::Vec3::splat(f32::MIN));
+    for v in vertices {
+        let p = view.transform_point3(glam::Vec3::from_array(v.position));
+        lo = lo.min(p);
+        hi = hi.max(p);
+    }
+    if vertices.is_empty() {
+        return glam::Mat4::IDENTITY;
+    }
+    let pad = 0.5;
+    // View space looks down -Z: near/far are the negated z extents.
+    glam::camera::rh::proj::directx::orthographic(
+        lo.x - pad,
+        hi.x + pad,
+        lo.y - pad,
+        hi.y + pad,
+        -hi.z - pad,
+        -lo.z + pad,
+    ) * view
 }
 struct Targets {
     width: u32,
@@ -79,6 +112,9 @@ pub struct OffscreenRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::RenderPipeline,
+    shadow_pipeline: wgpu::RenderPipeline,
+    shadow_view: wgpu::TextureView,
+    shadow_bind: wgpu::BindGroup,
     uniforms: wgpu::Buffer,
     bind: wgpu::BindGroup,
     targets: Option<Targets>,
@@ -149,6 +185,64 @@ impl OffscreenRenderer {
             multiview_mask: None,
             cache: None,
         });
+        let shadow_attributes = wgpu::vertex_attr_array![0=>Float32x3];
+        let shadow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("key light shadow"),
+            layout: None,
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_shadow"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<Vertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &shadow_attributes,
+                })],
+            },
+            primitive: wgpu::PrimitiveState {
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: Default::default(),
+                bias: wgpu::DepthBiasState {
+                    constant: 2,
+                    slope_scale: 2.5,
+                    clamp: 0.0,
+                },
+            }),
+            multisample: Default::default(),
+            fragment: None,
+            multiview_mask: None,
+            cache: None,
+        });
+        let shadow = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("key light shadow map"),
+            size: wgpu::Extent3d {
+                width: SHADOW_SIZE,
+                height: SHADOW_SIZE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let shadow_view = shadow.create_view(&Default::default());
+        let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("shadow compare"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            compare: Some(wgpu::CompareFunction::LessEqual),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            ..Default::default()
+        });
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("projection and light"),
             size: std::mem::size_of::<Uniforms>() as u64,
@@ -158,6 +252,24 @@ impl OffscreenRenderer {
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("scene"),
             layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniforms.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&shadow_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&shadow_sampler),
+                },
+            ],
+        });
+        let shadow_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("shadow scene"),
+            layout: &shadow_pipeline.get_bind_group_layout(0),
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: uniforms.as_entire_binding(),
@@ -167,6 +279,9 @@ impl OffscreenRenderer {
             device,
             queue,
             pipeline,
+            shadow_pipeline,
+            shadow_view,
+            shadow_bind,
             uniforms,
             bind,
             targets: None,
@@ -196,7 +311,13 @@ impl OffscreenRenderer {
         let s = snapshot.snapshot();
         let az = s.scene.light.azimuth_deg.to_radians();
         let el = s.scene.light.elevation_deg.to_radians();
+        let light_dir = glam::Vec3::new(
+            (el.cos() * az.sin()) as f32,
+            el.sin() as f32,
+            (el.cos() * az.cos()) as f32,
+        );
         let uniforms = Uniforms {
+            light_vp: light_view_projection(&mesh.vertices, light_dir).to_cols_array_2d(),
             vp: projection.view_projection.as_mat4().to_cols_array_2d(),
             eye: projection.eye.as_vec3().extend(1.0).to_array(),
             light: [
@@ -231,6 +352,26 @@ impl OffscreenRenderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("receiver frame"),
             });
+        {
+            // Depth from the key light, sampled by the material pass for soft shadows.
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("shadow"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.shadow_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            pass.set_pipeline(&self.shadow_pipeline);
+            pass.set_bind_group(0, &self.shadow_bind, &[]);
+            pass.set_vertex_buffer(0, vertices.slice(..));
+            pass.draw(0..mesh.vertices.len() as u32, 0..1);
+        }
         {
             let bg = if s.viewport.transparent {
                 wgpu::Color::TRANSPARENT

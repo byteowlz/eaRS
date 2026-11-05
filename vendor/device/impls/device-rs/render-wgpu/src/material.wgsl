@@ -3,8 +3,11 @@ struct Uniforms {
     eye: vec4<f32>,
     light: vec4<f32>,
     ambient: vec4<f32>,
+    light_vp: mat4x4<f32>,
 };
 @group(0) @binding(0) var<uniform> u: Uniforms;
+@group(0) @binding(1) var shadow_map: texture_depth_2d;
+@group(0) @binding(2) var shadow_sampler: sampler_comparison;
 struct Input {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
@@ -28,10 +31,36 @@ struct Output {
     o.world=v.position; o.normal=v.normal; o.base=v.base; o.props=v.props; o.local=v.local; o.emission=v.emission;
     return o;
 }
+@vertex fn vs_shadow(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f32> {
+    return u.light_vp * vec4(position, 1.0);
+}
 fn hash(p: vec2<f32>) -> f32 { return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
 fn noise(p: vec2<f32>) -> f32 {
     let cell=floor(p); let f=fract(p); let s=f*f*(3.0-2.0*f);
     return mix(mix(hash(cell),hash(cell+vec2(1.0,0.0)),s.x),mix(hash(cell+vec2(0.0,1.0)),hash(cell+vec2(1.0)),s.x),s.y);
+}
+/// Soft key-light visibility: 5x5 PCF over the fitted shadow map.
+fn visibility(world: vec3<f32>, n: vec3<f32>, light: vec3<f32>) -> f32 {
+    // Normal offset keeps lit faces from self-shadowing at grazing angles.
+    let p = u.light_vp * vec4(world + n * 0.02, 1.0);
+    let ndc = p.xyz / p.w;
+    let uv = ndc.xy * vec2(0.5, -0.5) + vec2(0.5);
+    if any(uv < vec2(0.0)) || any(uv > vec2(1.0)) || ndc.z > 1.0 { return 1.0; }
+    let texel = 1.0 / vec2<f32>(textureDimensions(shadow_map));
+    var sum = 0.0;
+    for (var y = -2; y <= 2; y++) {
+        for (var x = -2; x <= 2; x++) {
+            sum += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + vec2(f32(x), f32(y)) * texel * 1.5, ndc.z - 0.0008);
+        }
+    }
+    return sum / 25.0;
+}
+/// A studio softbox above the camera plus a dim horizon: what polished metal reflects.
+fn studio(r: vec3<f32>) -> f32 {
+    let softbox = normalize(vec3(0.0, 0.45, 0.9));
+    let band = exp(-pow((1.0 - dot(r, softbox)) / 0.012, 2.0));
+    let sky = clamp(r.y * 0.5 + 0.5, 0.0, 1.0);
+    return 0.10 + 0.22 * sky * sky + 1.1 * band;
 }
 @fragment fn fs(v: Output) -> @location(0) vec4<f32> {
     var n=normalize(v.normal);
@@ -39,14 +68,19 @@ fn noise(p: vec2<f32>) -> f32 {
     let light=normalize(u.light.xyz);
     let half_vector=normalize(view+light);
     let rough=clamp(v.props.x,0.08,1.0); let metal=v.props.y;
+    let brushed = v.props.z>0.5 && v.props.z<1.5;
     var grain=1.0;
-    if v.props.z>0.5 && v.props.z<1.5 {
-        // Horizontal machining, attenuated at subpixel pitch rather than crawling with resolution.
+    var streak=0.0;
+    if brushed {
+        // Horizontal machining at a scale the eye can resolve: broad tonal streaks,
+        // finer lines faded out where they would alias below a pixel.
         let uv=select(v.world.xy,v.world.xz,abs(n.y)>0.7);
-        let aa=clamp(1.0-length(fwidth(uv*vec2(0.65,42.0)))*0.25,0.0,1.0);
-        let g=noise(uv*vec2(0.65,42.0));
-        grain=1.0+(g-0.5)*0.65*aa;
-        n=normalize(n+vec3(0.0,(g-0.5)*0.12*aa,0.0));
+        let coarse=noise(vec2(uv.x*0.12, uv.y*5.5));
+        let mid=noise(vec2(uv.x*0.35, uv.y*13.0));
+        let fine=noise(vec2(uv.x*0.9, uv.y*31.0));
+        let fine_aa=clamp(1.0-fwidth(uv.y*31.0)*0.6,0.0,1.0);
+        streak=(coarse-0.5)*0.35+(mid-0.5)*0.30+(fine-0.5)*0.30*fine_aa;
+        grain=1.0+streak*0.34;
     }
     if v.props.z>1.5 && v.props.z<2.5 {
         let radius=length(v.local);
@@ -61,16 +95,32 @@ fn noise(p: vec2<f32>) -> f32 {
     let f0=mix(vec3(0.04),v.base,metal);
     let fresnel=f0+(vec3(1.0)-f0)*pow(1.0-max(dot(half_vector,view),0.0),5.0);
     var spec=distribution*geometry*fresnel/max(4.0*nl*nv,0.001);
+    if brushed {
+        // Anisotropic lobe: brushing along X stretches the highlight across the grain.
+        let t=normalize(vec3(1.0,0.0,0.0)-n*n.x);
+        let th=dot(t,half_vector);
+        let aniso=pow(max(sqrt(max(1.0-th*th,0.0)),0.0),90.0);
+        spec+=f0*aniso*(0.55+streak*0.9);
+    }
     if v.props.z>1.5 && v.props.z<2.5 {
         // Tangential machining produces a stable light-aligned anisotropic lobe.
         let tangent=normalize(vec3(-v.local.y,v.local.x,0.0001));
         let aniso=pow(max(1.0-abs(dot(tangent,half_vector)),0.0),12.0);
         spec+=f0*aniso*0.7;
     }
-    let ambient=v.base*(0.30+0.65*max(n.y,0.0))*u.ambient.x;
-    var color=(ambient+v.base*grain*nl*(1.0-metal*0.5)*u.light.w+spec*nl*u.light.w)*1.25;
-    // Opaque display planes retain alpha=1, including antialiased phosphor edges.
-    if v.props.z>2.5 { color=v.base*(0.75+0.25*nl); }
+    let shadow=visibility(v.world,n,light);
+    let direct=shadow*u.light.w;
+    // Ambient falls off on downward faces and in the shadowed side of edges.
+    let ambient=v.base*(0.22+0.55*max(n.y*0.5+0.5,0.0))*u.ambient.x*(0.75+0.25*shadow);
+    var color=(ambient+v.base*grain*nl*(1.0-metal*0.5)*direct+spec*nl*direct)*1.25;
+    if metal>0.2 {
+        // Reflected studio light gives flat metal a gradient and a soft highlight band.
+        let r=reflect(-view,n);
+        let env=studio(r)*(1.0-rough*0.55)*(0.85+0.15*shadow);
+        color+=f0*env*grain*0.9;
+    }
+    // Glass is deliberately dark and matte enough not to veil native labels.
+    if v.props.z>2.5 { color=v.base*(0.75+0.25*nl)*(0.7+0.3*shadow); }
     if v.props.z>3.5 {
         let distance=length(v.local);
         let aa=max(fwidth(distance)*0.5,0.001);
