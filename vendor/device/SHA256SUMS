@@ -6,7 +6,7 @@ b23b4d2ea14024f3fe25a6a7b8747c282fdff703444174fcc321bdc8d38c541a  impls/device-r
 3ce4f2432e1235ca2f6d5d1663a29c4f15745c29d56f13547ac630237ed6ede6  impls/device-rs/gpui/examples/specimen.rs
 f310957aa12e5388042a3ded6a8522eecedcb214b758206ddb5d2328940bfba1  impls/device-rs/gpui/src/lib.rs
 22ae18651542d747ea23d9fbb23c24fc303b81cc66c5b67b84b2e2645048da0f  impls/device-rs/gpui/src/readout_tooltip.rs
-2883289ca7023b587addbcdee9fa68948fdd0c9c817c78ce22147bbaa2b3cb5a  impls/device-rs/gpui/src/view.rs
+57c3390bddd2381f7e955ad12c9ae756668ad6e50383a2bea87f4f3a1336fa82  impls/device-rs/gpui/src/view.rs
 4dc40c6f949014adfa04c964473a4c622bca308828bb8fb2dab1a984796958ce  impls/device-rs/gpui/src/worker.rs
 9dea3b76a701f1ec98b6436f19867b581bf7d6d41eb4e3db0efe7de14a9a4a94  impls/device-rs/justfile
 ee7c7a3ab5b1729545568633cd31a2d96fac64934860b794f036c9a1b2142ec4  impls/device-rs/render-wgpu/Cargo.toml

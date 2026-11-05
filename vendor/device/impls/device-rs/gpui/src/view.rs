@@ -131,6 +131,16 @@ impl DeviceView {
             p.snapshot.snapshot() == &self.snapshot && p.frame.is_chassis_at(x as f64, y as f64)
         })
     }
+    fn clear_focus(&mut self) {
+        let mut changed = false;
+        for state in self.snapshot.state.controls.values_mut() {
+            changed |= state.focused;
+            state.focused = false;
+        }
+        if changed {
+            self.snapshot.state.revision += 1;
+        }
+    }
     fn focus_control(&mut self, id: &str) {
         for (key, state) in &mut self.snapshot.state.controls {
             state.focused = key == id;
@@ -356,10 +366,49 @@ impl DeviceView {
                 // Size follows the legend's role (its height), never the string length.
                 .text_size(px((height * 0.72).clamp(5.0, 28.0)))
                 .when(!label.raster.is_matrix(), |element| {
-                    element.child(label.text.clone())
+                    element.child(etched(label, (height * 0.72).clamp(5.0, 28.0), color))
                 }),
         )
     }
+}
+
+/// Printed legends read as engraved: a dark lip above (light from above) and a faint
+/// lit edge below, with the ink fill slightly sunk. Native text stays sharp.
+fn etched(label: &device_render_wgpu::Label, size: f32, color: u32) -> gpui::AnyElement {
+    let text = label.text.clone();
+    if !label.printed {
+        return text.into_any_element();
+    }
+    let lip = (size * 0.07).clamp(0.6, 1.6);
+    let sunk = |c: u32, k: f32| {
+        let ch = |shift: u32| (((c >> shift) & 0xff) as f32 * k) as u32;
+        (ch(16) << 16) | (ch(8) << 8) | ch(0)
+    };
+    div()
+        .relative()
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .top(px(lip))
+                .text_color(gpui::rgba(0xffffff1f))
+                .child(text.clone()),
+        )
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .top(px(-lip * 0.8))
+                .text_color(gpui::rgba(0x000000c0))
+                .child(text.clone()),
+        )
+        .child(
+            div()
+                .relative()
+                .text_color(rgb(sunk(color, 0.9)))
+                .child(text),
+        )
+        .into_any_element()
 }
 
 impl Render for DeviceView {
@@ -387,7 +436,8 @@ impl Render for DeviceView {
                 cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
                     window.focus(&this.focus);
                     if let Some(id) = this.hit(event.position.x.into(), event.position.y.into()) {
-                        this.focus_control(&id);
+                        // Pointer use shows no focus ring; the ring is for keyboard navigation.
+                        this.clear_focus();
                         this.pressed = Some(id.clone());
                         this.snapshot
                             .state
@@ -395,6 +445,8 @@ impl Render for DeviceView {
                             .get_mut(&id)
                             .expect("state")
                             .pressed = true;
+                        // Every state edit gets a new revision, or the frame is rejected.
+                        this.snapshot.state.revision += 1;
                         this.request(cx);
                     }
                 }),
