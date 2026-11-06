@@ -133,7 +133,10 @@ const LABEL_WIDTH: f64 = 10.4;
 const SIDE_KEY: f64 = 2.4;
 const SWITCH_KEY: f64 = 6.0;
 const EDGE: f64 = 30.4;
-const HEIGHT: f64 = 42.0;
+/// Chassis height. `inner` keeps 1.6 units of frame above and below, so this
+/// value is derived from the content column: the plates end 1.6 above the
+/// bottom edge exactly as the top module starts 1.6 below it.
+const HEIGHT: f64 = 43.2;
 const BRAND: f64 = 1.2;
 const DISPLAY: f64 = 4.4;
 const SLOTS: usize = 12;
@@ -732,6 +735,34 @@ mod tests {
     fn equal(a: f64, b: f64, what: &str) {
         assert!((a - b).abs() < 1e-8, "{what}: {a} != {b}");
     }
+    #[test]
+    fn the_frame_is_the_same_thickness_all_around() {
+        let s = generated();
+        let front = s.scene.devices[0]
+            .panels
+            .iter()
+            .find(|p| p.id == "ears.front")
+            .expect("faceplate")
+            .rect
+            .clone();
+        let top = front.y + front.height / 2.0;
+        let bottom = front.y - front.height / 2.0;
+        for panel in &s.scene.devices[0].panels {
+            if panel.id == "ears.front" {
+                continue;
+            }
+            let panel_top = panel.rect.y + panel.rect.height / 2.0;
+            let panel_bottom = panel.rect.y - panel.rect.height / 2.0;
+            assert!(
+                panel_top <= top - 1.6 + 1e-9 && panel_bottom >= bottom + 1.6 - 1e-9,
+                "{} leaves the frame uneven: top gap {}, bottom gap {}",
+                panel.id,
+                top - panel_top,
+                panel_bottom - bottom
+            );
+        }
+    }
+
     #[test]
     fn one_navigation_level_and_every_dictation_setting_on_one_page() {
         let s = generated();
