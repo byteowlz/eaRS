@@ -25,7 +25,9 @@ use objc2_app_kit::NSEvent;
 use objc2_app_kit::NSScreen;
 use objc2_app_kit::NSView;
 use objc2_app_kit::NSWindow;
+use objc2_app_kit::NSWindowButton;
 use objc2_app_kit::NSWindowStyleMask;
+use objc2_app_kit::NSWindowTitleVisibility;
 use objc2_app_kit::NSWorkspace;
 use objc2_foundation::NSNumber;
 use objc2_foundation::NSPoint;
@@ -243,14 +245,33 @@ pub fn pin_to_screen_top(window: &Window, display: u32, offset: f32) {
 /// Settings window before constructing its focused view. GPUI's NSWindow
 /// subclass explicitly allows key/main status for borderless windows.
 pub fn prepare_settings_window(window: &Window) {
-    prepare_overlay_panel(window);
-    if let Some(ns) = ns_window(window) {
-        ns.setStyleMask(
-            ns.styleMask()
-                | NSWindowStyleMask::Resizable
-                | NSWindowStyleMask::Miniaturizable
-                | NSWindowStyleMask::Closable,
-        );
+    let Some(ns) = ns_window(window) else {
+        return;
+    };
+    // Keep the window titled so AppKit draws its own traffic lights, then let
+    // the content view cover the whole window: the device chassis sits under
+    // the buttons and the title bar shows no text or background of its own.
+    ns.setStyleMask(
+        NSWindowStyleMask::Titled
+            | NSWindowStyleMask::FullSizeContentView
+            | NSWindowStyleMask::Resizable
+            | NSWindowStyleMask::Miniaturizable
+            | NSWindowStyleMask::Closable,
+    );
+    ns.setTitlebarAppearsTransparent(true);
+    ns.setTitleVisibility(NSWindowTitleVisibility::Hidden);
+    ns.setMovableByWindowBackground(false);
+    ns.setHasShadow(true);
+    ns.setOpaque(false);
+    ns.setBackgroundColor(Some(&NSColor::clearColor()));
+    for kind in [
+        NSWindowButton::CloseButton,
+        NSWindowButton::MiniaturizeButton,
+        NSWindowButton::ZoomButton,
+    ] {
+        if let Some(button) = ns.standardWindowButton(kind) {
+            button.setHidden(false);
+        }
     }
 }
 

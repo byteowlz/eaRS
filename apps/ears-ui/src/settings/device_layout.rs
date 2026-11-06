@@ -131,7 +131,6 @@ const SLOT: f64 = 2.4;
 const HEADING: f64 = 1.2;
 const LABEL_WIDTH: f64 = 10.4;
 const SIDE_KEY: f64 = 2.4;
-const SWITCH_KEY: f64 = 6.0;
 const EDGE: f64 = 30.4;
 /// Chassis height. `inner` keeps 1.6 units of frame above and below, so this
 /// value is derived from the content column: the plates end 1.6 above the
@@ -360,7 +359,7 @@ impl<'a> Column<'a> {
             Json::Null,
         );
     }
-    /// Label, then a latching key with a lamp.
+    /// Label, then a latching key with a lamp, sharing the steppers' outer edges.
     fn switch(&mut self, id: &str, text: &str, help: &str) {
         let y = self.next_row();
         self.legend(id, text, help, y);
@@ -370,7 +369,7 @@ impl<'a> Column<'a> {
             "toggle",
             "Off",
             help,
-            self.control.first(SWITCH_KEY),
+            self.control,
             y,
             ROW,
             json!(false),
@@ -488,6 +487,27 @@ fn module(id: &str, left: f64, right: f64, bottom: f64, top: f64) -> Json {
 }
 
 fn build() -> Snapshot {
+    build_with(chrome())
+}
+
+/// Whether the window supplies its own close affordance.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Chrome {
+    /// The platform draws window buttons (macOS traffic lights): no close key.
+    WindowButtons,
+    /// The device itself carries a close key at the right edge.
+    CloseKey,
+}
+
+fn chrome() -> Chrome {
+    if cfg!(target_os = "macos") {
+        Chrome::WindowButtons
+    } else {
+        Chrome::CloseKey
+    }
+}
+
+fn build_with(chrome: Chrome) -> Snapshot {
     let mut base: Json = serde_json::from_str(BASE).expect("pinned base scene");
     let scene = &mut base["scene"];
     scene["id"] = json!("ears.settings.receiver");
@@ -500,7 +520,8 @@ fn build() -> Snapshot {
     let device = &mut scene["devices"][0];
     device["chassis"]["height"] = json!(HEIGHT);
     let inner = HEIGHT / 2.0 - 1.6;
-    // Top module: brand strip, the tab row, then display with its two keys.
+    // Top module: brand strip, then one row of tabs ending in the microphone
+    // and close key, then a display that uses the plate's full width.
     let brand_y = inner - BRAND / 2.0;
     let tab_y = inner - BRAND - INNER - ROW / 2.0;
     let band_top = tab_y - ROW / 2.0 - INNER;
@@ -536,13 +557,22 @@ fn build() -> Snapshot {
         right: right_full.right,
     };
 
-    // Display with Close and Test stacked in one key column at its right edge;
-    // the single tab row sits above them and uses the display's full width.
-    let close = band.last(SIDE_KEY);
-    let test = close;
-    let display = Span {
-        left: band.left,
-        right: close.left - GAP,
+    // One row: the tabs, then the microphone and the close key at the right
+    // edge. The display below takes the plate's full width.
+    let (mic, close) = match chrome {
+        // Window buttons live outside the device, so the microphone takes the edge.
+        Chrome::WindowButtons => (band.last(SIDE_KEY), band.last(SIDE_KEY)),
+        // Otherwise the close key holds the right edge and the microphone sits inside.
+        Chrome::CloseKey => {
+            let close = band.last(SIDE_KEY);
+            (
+                Span {
+                    left: close.left - GAP - SIDE_KEY,
+                    right: close.left - GAP,
+                },
+                close,
+            )
+        }
     };
     b.add(
         "display",
@@ -550,7 +580,7 @@ fn build() -> Snapshot {
         "readout",
         "Display",
         "Help, status and test transcripts",
-        display,
+        band,
         display_y,
         DISPLAY,
         json!(""),
@@ -561,24 +591,30 @@ fn build() -> Snapshot {
         "button",
         "Test",
         "Test: speak to see your words here. Nothing is typed or saved.",
-        test,
-        band_bottom + ROW / 2.0,
+        mic,
+        tab_y,
         ROW,
         Json::Null,
     );
-    b.add(
-        "window.close",
-        "ears.top",
-        "button",
-        "×",
-        "Close settings",
-        close,
-        band_top - ROW / 2.0,
-        ROW,
-        Json::Null,
-    );
+    if chrome == Chrome::CloseKey {
+        b.add(
+            "window.close",
+            "ears.top",
+            "button",
+            "×",
+            "Close settings",
+            close,
+            tab_y,
+            ROW,
+            Json::Null,
+        );
+    }
     let nav_y = tab_y;
-    let tabs = band.tracks(4, GAP);
+    let tabs = Span {
+        left: band.left,
+        right: mic.left - GAP,
+    }
+    .tracks(4, GAP);
     for (span, (id, label)) in tabs.into_iter().zip([
         ("dictation", "Dictation"),
         ("overlay", "Overlay"),
@@ -731,6 +767,18 @@ mod tests {
     }
     fn right(r: &device_scene::Rect) -> f64 {
         r.x + r.width / 2.0
+    }
+    /// Inner content edges of the top module: the band every top-row control fits in.
+    fn top_band(s: &Snapshot) -> (f64, f64) {
+        let panel = s.scene.devices[0]
+            .panels
+            .iter()
+            .find(|panel| panel.id == "ears.top")
+            .expect("top module");
+        (
+            panel.rect.x - panel.rect.width / 2.0 + PAD,
+            panel.rect.x + panel.rect.width / 2.0 - PAD,
+        )
     }
     fn equal(a: f64, b: f64, what: &str) {
         assert!((a - b).abs() < 1e-8, "{what}: {a} != {b}");
@@ -897,7 +945,7 @@ mod tests {
             rect(&s, "server").y,
             "grid lines",
         );
-        // Navigation keys line up with the columns; the top band spans both.
+        // Navigation keys end at the microphone; the display spans the whole band.
         let tab = rect(&s, "nav.dictation").width;
         for id in ["nav.overlay", "nav.dictionaries", "nav.profiles"] {
             equal(rect(&s, id).width, tab, id);
@@ -909,35 +957,67 @@ mod tests {
         );
         equal(
             right(&rect(&s, "nav.profiles")),
-            right(&rect(&s, "window.close")),
+            left(&rect(&s, "test")) - GAP,
             "tab grid",
         );
         equal(
-            left(&rect(&s, "display")),
-            left(&rect(&s, "nav.dictation")),
-            "top band",
+            right(&rect(&s, "display")),
+            right(&rect(&s, "test")),
+            "display spans the plate",
+        );
+        equal(right(&rect(&s, "test")), top_band(&s).1, "top band");
+        // The microphone shares the tab row; the display sits below it.
+        equal(rect(&s, "test").y, rect(&s, "nav.dictation").y, "tab row");
+        assert!(
+            rect(&s, "display").y + rect(&s, "display").height / 2.0
+                < rect(&s, "test").y - rect(&s, "test").height / 2.0,
+            "display below the tab row"
+        );
+    }
+    #[test]
+    fn macos_has_window_buttons_instead_of_a_close_key() {
+        let s = build_with(Chrome::WindowButtons);
+        assert!(s.control("window.close").is_none());
+        equal(
+            right(&rect(&s, "test")),
+            top_band(&s).1,
+            "microphone at the right edge",
+        );
+        let keyboard = build_with(Chrome::CloseKey);
+        equal(
+            right(&rect(&keyboard, "window.close")),
+            top_band(&keyboard).1,
+            "close key at the right edge",
         );
         equal(
-            right(&rect(&s, "window.close")),
-            right(&rect(&s, "nav.profiles")),
-            "top band",
-        );
-        // Close and Test share a key column flush with the display's top and bottom.
-        equal(
-            rect(&s, "test").y - rect(&s, "test").height / 2.0,
-            rect(&s, "display").y - rect(&s, "display").height / 2.0,
-            "bottom edge",
+            right(&rect(&keyboard, "test")),
+            left(&rect(&keyboard, "window.close")) - GAP,
+            "close key sits right of the microphone",
         );
         equal(
-            left(&rect(&s, "test")),
-            left(&rect(&s, "window.close")),
-            "key column",
+            right(&rect(&keyboard, "nav.profiles")),
+            left(&rect(&keyboard, "test")) - GAP,
+            "tabs end at the microphone",
         );
-        equal(
-            rect(&s, "display").y + rect(&s, "display").height / 2.0,
-            rect(&s, "window.close").y + rect(&s, "window.close").height / 2.0,
-            "top edge",
-        );
+    }
+    #[test]
+    fn lamp_keys_share_the_steppers_outer_edges() {
+        let s = generated();
+        for (lamp, stepper) in [("escape", "keymode"), ("context_profiles", "insert_as")] {
+            if s.control(stepper).is_none() {
+                continue;
+            }
+            equal(
+                left(&rect(&s, lamp)),
+                left(&rect(&s, &format!("{stepper}.prev"))),
+                lamp,
+            );
+            equal(
+                right(&rect(&s, lamp)),
+                right(&rect(&s, &format!("{stepper}.next"))),
+                lamp,
+            );
+        }
     }
     #[test]
     fn layout_file_round_trips_and_refits_displays_at_fixed_pitch() {
