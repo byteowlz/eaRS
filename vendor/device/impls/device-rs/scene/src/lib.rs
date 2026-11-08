@@ -1,5 +1,7 @@
 //! Portable device-scene v1 data, semantic validation and projection. No I/O.
+mod fader;
 mod model;
+pub use fader::fader_thumb;
 mod projection;
 mod validate;
 pub use model::*;

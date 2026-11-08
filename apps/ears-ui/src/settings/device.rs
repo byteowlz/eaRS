@@ -46,6 +46,8 @@ const MESSAGE_FOR: Duration = Duration::from_secs(5);
 
 #[path = "device_pages.rs"]
 mod pages;
+#[path = "device_ranges.rs"]
+pub(super) mod ranges;
 use super::device_layout::{DICT_ROWS, PROFILE_ROWS};
 
 fn page_id(tab: Tab) -> &'static str {
@@ -129,7 +131,10 @@ pub(super) struct NativeSettings {
     help: Option<String>,
     message: Option<Message>,
     test: TestCapture,
+    #[cfg(target_os = "macos")]
+    window_buttons: Option<crate::platform::SettingsButtons>,
     pending_live: Option<&'static str>,
+    range_preview: Option<(ranges::Numeric, f32)>,
     editor: Option<super::layout_editor::LayoutEditor>,
     page: Tab,
     text: std::collections::BTreeMap<&'static str, Entity<crate::ui::text_input::TextInput>>,
@@ -181,12 +186,16 @@ impl NativeSettings {
         })
         .detach();
         cx.observe(&model, |this, _, cx| this.sync(cx)).detach();
+        #[cfg(target_os = "macos")]
+        cx.observe(&device, |_, _, cx| cx.notify()).detach();
         cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
                 this.refresh_inputs(cx);
             } else {
                 this.drag.end();
+                this.range_preview = None;
                 this.stop_listening(cx);
+                this.sync(cx);
             }
         })
         .detach();
@@ -206,7 +215,10 @@ impl NativeSettings {
             help: None,
             message: None,
             test: TestCapture::default(),
+            #[cfg(target_os = "macos")]
+            window_buttons: crate::platform::SettingsButtons::new(window),
             pending_live: None,
+            range_preview: None,
             editor,
             page,
             text,
@@ -343,6 +355,10 @@ impl NativeSettings {
             .unwrap_or(mic_active)
             .min(mic_labels.len().saturating_sub(1));
         let server_choice = self.server_choice.clone().unwrap_or(model.server.clone());
+        let (range_core, range_ui) = self
+            .model
+            .read_with(cx, |m, _| (m.core.clone(), m.ui.clone()));
+        let range_preview = self.range_preview;
         self.device.update(cx, |view, cx| {
             view.set_keyboard_enabled(listening.is_none() && !editing);
             view.edit_snapshot(
@@ -365,6 +381,7 @@ impl NativeSettings {
                     scene::enable(s, "mic", mic_labels.len() > 1);
                     write_shortcuts(s, &model.hotkeys, listening);
                     write_settings(s, &model, &server_choice);
+                    ranges::write(s, &range_core, &range_ui, range_preview);
                 },
                 cx,
             );
@@ -460,6 +477,9 @@ impl NativeSettings {
 
     fn action(&mut self, action: &Action, window: &mut Window, cx: &mut Context<Self>) {
         if !scene::accepts(action, self.device.read(cx).snapshot()) {
+            return;
+        }
+        if self.range_action(action, cx) {
             return;
         }
         if action.phase == device_scene::Phase::Cancel {
@@ -613,33 +633,8 @@ impl NativeSettings {
                             (aliases[next] != saved).then(|| aliases[next].clone());
                         self.sync(cx);
                     }
-                } else if let Some((setting, delta)) = live_step(id) {
-                    self.step_live(setting, delta, cx);
                 }
             }
-        }
-    }
-    fn step_live(&mut self, setting: LiveSetting, direction: f32, cx: &mut Context<Self>) {
-        let core = &self.model.read(cx).core;
-        let current = setting.current(core);
-        let (step, min, max) = match setting {
-            LiveSetting::PauseAfterSilence => (0.5, 0.5, 60.0),
-            LiveSetting::SpeechThreshold => (0.05, 0.05, 0.95),
-            LiveSetting::WakeSensitivity => {
-                let floor = ears::dictation::wake::report_floor(&core.dictation.wake.command)
-                    .unwrap_or(0.05);
-                (0.05, floor.max(0.05), 0.95)
-            }
-        };
-        let next = ((current / step).round() * step + direction * step).clamp(min, max);
-        let next = (next * 100.0).round() / 100.0;
-        if (next - current).abs() > f32::EPSILON {
-            self.pending_live = Some(match setting {
-                LiveSetting::PauseAfterSilence => "Auto-pause",
-                LiveSetting::SpeechThreshold => "Speech threshold",
-                LiveSetting::WakeSensitivity => "Wake sensitivity",
-            });
-            cx.emit(Request::Live(setting, next));
         }
     }
     fn refresh_inputs(&mut self, cx: &mut Context<Self>) {
@@ -897,6 +892,7 @@ impl NativeSettings {
         self.say(message, cx);
     }
     fn set_page(&mut self, tab: Tab, cx: &mut Context<Self>) {
+        self.range_preview = None;
         self.page = tab;
         self.help = None;
         if tab == Tab::Dictionaries {
@@ -979,22 +975,6 @@ fn cycle<T: Copy>(
     let index = items.iter().position(is_current).unwrap_or(0) as isize;
     items[(index + delta).rem_euclid(items.len() as isize) as usize]
 }
-fn live_step(id: &str) -> Option<(LiveSetting, f32)> {
-    let (base, direction) = id.rsplit_once('.')?;
-    let direction = match direction {
-        "prev" => -1.0,
-        "next" => 1.0,
-        _ => return None,
-    };
-    let setting = match base {
-        "pause" => LiveSetting::PauseAfterSilence,
-        "threshold" => LiveSetting::SpeechThreshold,
-        "wake" => LiveSetting::WakeSensitivity,
-        _ => return None,
-    };
-    Some((setting, direction))
-}
-
 #[derive(Clone, Copy)]
 enum MicStep {
     By(isize),
@@ -1110,11 +1090,7 @@ fn write_settings(s: &mut Snapshot, model: &ModelView, server_choice: &str) {
         "wake",
         model.wake.map_or("Off".into(), |v| format!("{v:.2}")),
     );
-    for (id, on) in [
-        ("pause", pause_on),
-        ("wake", model.wake.is_some()),
-        ("server", model.servers > 0),
-    ] {
+    for (id, on) in [("server", model.servers > 0)] {
         scene::enable(s, &format!("{id}.prev"), on);
         scene::enable(s, &format!("{id}.next"), on);
     }
@@ -1187,6 +1163,20 @@ impl Render for NativeSettings {
             .on_key_up(cx.listener(|this, _, _, _| this.local_ready = true))
             .child(self.device.clone())
             .children(self.text_overlays(cx))
+            .map(|root| {
+                #[cfg(target_os = "macos")]
+                {
+                    let device = self.device.clone();
+                    let buttons = self.window_buttons.clone();
+                    return root.on_children_prepainted(move |_, window, cx| {
+                        if let Some(buttons) = &buttons {
+                            super::window_buttons::sync(device.read(cx), buttons, window);
+                        }
+                    });
+                }
+                #[cfg(not(target_os = "macos"))]
+                root
+            })
             .when_some(self.editor.as_ref(), |root, editor| {
                 let device = self.device.read(cx);
                 let overlay = editor.overlay(device.projection(), device.snapshot());

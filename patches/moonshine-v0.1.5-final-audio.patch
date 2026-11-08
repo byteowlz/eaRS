@@ -1,0 +1,353 @@
+diff --git a/CHANGELOGS.md b/CHANGELOGS.md
+index b75be50..53cc9e7 100644
+--- a/CHANGELOGS.md
++++ b/CHANGELOGS.md
+@@ -4,6 +4,12 @@ All notable user-facing changes to Moonshine Voice are documented in this file.
+ 
+ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Please keep the bullets high level, and no more than about 200 characters.
+ 
++## [Unreleased]
++
++### Fixed
++
++- Streaming finalization now retains the last partial audio block and flushes encoder lookahead even when no new audio arrives, without adding padding-only encoder frames.
++
+ ## [0.1.5]
+ 
+ ### Added
+diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
+index 30c4720..380f715 100644
+--- a/core/CMakeLists.txt
++++ b/core/CMakeLists.txt
+@@ -878,6 +878,19 @@ if (NOT WIN32 OR NOT MOONSHINE_BUILD_SHARED)
+         )
+     endif()
+ 
++    # Exact final-sample/feature accounting through real frontend graphs.
++    add_executable(streaming-finalization-test streaming-finalization-test.cpp)
++    target_include_directories(streaming-finalization-test PRIVATE
++        ${CMAKE_CURRENT_LIST_DIR}
++        ${CMAKE_CURRENT_LIST_DIR}/bin-tokenizer
++        ${CMAKE_CURRENT_LIST_DIR}/ort-utils
++        ${CMAKE_CURRENT_LIST_DIR}/moonshine-utils
++        ${CMAKE_CURRENT_LIST_DIR}/third-party/doctest
++        ${CMAKE_CURRENT_LIST_DIR}/third-party/onnxruntime/include
++    )
++    target_link_libraries(streaming-finalization-test PRIVATE moonshine
++        ${ONNXRUNTIME_LIB_PATH})
++
+     # One short decode per published tiny streaming language. Needs the
+     # test-assets/tiny-streaming-* trees from scripts/fetch-voice-assets.sh.
+     add_executable(streaming-language-smoke-test streaming-language-smoke-test.cpp)
+diff --git a/core/moonshine-streaming-model.cpp b/core/moonshine-streaming-model.cpp
+index 4257df6..eb6d7db 100644
+--- a/core/moonshine-streaming-model.cpp
++++ b/core/moonshine-streaming-model.cpp
+@@ -815,6 +815,58 @@ int MoonshineStreamingModel::process_audio_chunk(MoonshineStreamingState *state,
+   return 0;
+ }
+ 
++int MoonshineStreamingModel::encode_audio(MoonshineStreamingState *state,
++                                          const float *audio, size_t audio_len,
++                                          bool is_final, size_t *consumed) {
++  if (consumed == nullptr) return 1;
++  *consumed = 0;
++  if (state == nullptr || (audio == nullptr && audio_len > 0) ||
++      config.frame_len <= 0) {
++    return 1;
++  }
++
++  // Keep the graph's two stride-2 convolutions aligned, including older
++  // frontend exports whose sample-remainder branch was traced away.
++  constexpr size_t kChunkSamples = 1280;
++  while (audio_len - *consumed >= kChunkSamples) {
++    const int err =
++        process_audio_chunk(state, audio + *consumed, kChunkSamples, nullptr);
++    if (err != 0) return err;
++    *consumed += kChunkSamples;
++  }
++
++  const size_t remainder = audio_len - *consumed;
++  if (is_final && remainder > 0) {
++    std::vector<float> final_chunk(kChunkSamples, 0.0f);
++    std::copy_n(audio + *consumed, remainder, final_chunk.begin());
++    const int previous_features = state->accumulated_feature_count;
++    const int64_t previous_frames = state->frame_count;
++    const int err =
++        process_audio_chunk(state, final_chunk.data(), kChunkSamples, nullptr);
++    if (err != 0) return err;
++
++    // Padding is only a frontend ABI accommodation. Keep every feature that
++    // contains real audio, but do not expose padding-only frames to attention.
++    const size_t samples_per_feature =
++        static_cast<size_t>(config.frame_len) * 4;
++    const size_t valid_features =
++        (remainder + samples_per_feature - 1) / samples_per_feature;
++    const size_t feature_count = previous_features + valid_features;
++    if (feature_count > static_cast<size_t>(state->accumulated_feature_count)) {
++      return 1;
++    }
++    state->accumulated_features.resize(feature_count * config.encoder_dim);
++    state->accumulated_feature_count = static_cast<int>(feature_count);
++    state->frame_count =
++        previous_frames + (remainder + config.frame_len - 1) / config.frame_len;
++    *consumed += remainder;
++  }
++
++  // Finalization can arrive without new audio after an aligned nonfinal
++  // update. It must still emit the encoder's held-back right context.
++  return encode(state, is_final, nullptr);
++}
++
+ int MoonshineStreamingModel::encode(MoonshineStreamingState *state,
+                                     bool is_final, int *new_frames_out) {
+   if (state == nullptr) {
+diff --git a/core/moonshine-streaming-model.h b/core/moonshine-streaming-model.h
+index c31d40d..7ccf3d9 100644
+--- a/core/moonshine-streaming-model.h
++++ b/core/moonshine-streaming-model.h
+@@ -169,6 +169,12 @@ struct MoonshineStreamingModel {
+                           const float *audio_chunk, size_t chunk_len,
+                           int *features_out);
+ 
++  // Consume complete aligned blocks, or all real samples on finalization.
++  // The caller retains unconsumed nonfinal samples. Final padding never
++  // becomes encoder memory, and an empty final call flushes encoder lookahead.
++  int encode_audio(MoonshineStreamingState *state, const float *audio,
++                   size_t audio_len, bool is_final, size_t *consumed);
++
+   int encode(MoonshineStreamingState *state, bool is_final,
+              int *new_frames_out);
+ 
+diff --git a/core/streaming-finalization-test.cpp b/core/streaming-finalization-test.cpp
+new file mode 100644
+index 0000000..4e40ef3
+--- /dev/null
++++ b/core/streaming-finalization-test.cpp
+@@ -0,0 +1,149 @@
++// Real frontend/encoder regression: no lost tail, padding-only memory, or
++// held-back lookahead after an empty final call. No microphone or downloads.
++#include <algorithm>
++#include <cmath>
++#include <cstdlib>
++#include <string>
++#include <vector>
++
++#include "moonshine-c-api.h"
++#include "moonshine-streaming-model.h"
++
++#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
++#include <doctest.h>
++
++namespace {
++std::string model_directory() {
++  const char *path = std::getenv("MOONSHINE_FINALIZATION_MODEL");
++  return path == nullptr ? "tiny-streaming-en" : path;
++}
++
++std::vector<float> signal(size_t size) {
++  std::vector<float> audio(size);
++  for (size_t i = 0; i < size; ++i) {
++    audio.at(i) = 0.2f * std::sin(static_cast<float>(i) * 0.13f);
++  }
++  return audio;
++}
++
++void verify_packetization(MoonshineStreamingModel &model,
++                          const std::vector<float> &audio, size_t packet,
++                          const std::vector<float> &expected_features) {
++  CAPTURE(packet);
++  const int feature_count = static_cast<int>((audio.size() + 319) / 320);
++  MoonshineStreamingState state;
++  state.reset(model.config);
++  size_t processed = 0;
++  for (size_t available = std::min(packet, audio.size());;
++       available = std::min(available + packet, audio.size())) {
++    size_t consumed = 0;
++    REQUIRE(model.encode_audio(&state, audio.data() + processed,
++                               available - processed, false, &consumed) == 0);
++    CHECK(consumed % 1280 == 0);
++    processed += consumed;
++    CHECK(processed <= available);
++    if (available == audio.size()) break;
++  }
++
++  size_t consumed = 0;
++  REQUIRE(model.encode_audio(&state, audio.data() + processed,
++                             audio.size() - processed, true, &consumed) == 0);
++  processed += consumed;
++  CHECK(processed == audio.size());
++  CHECK(state.accumulated_feature_count == feature_count);
++  CHECK(state.encoder_frames_emitted == feature_count);
++  CHECK(state.memory_len == feature_count);
++  CHECK(state.frame_count == static_cast<int64_t>((audio.size() + 79) / 80));
++  CHECK(state.accumulated_features == expected_features);
++  CHECK(std::all_of(state.memory.begin(), state.memory.end(),
++                    [](float value) { return std::isfinite(value); }));
++
++  const auto memory = state.memory;
++  const auto features = state.accumulated_features;
++  REQUIRE(model.encode_audio(&state, nullptr, 0, true, &consumed) == 0);
++  CHECK(consumed == 0);
++  CHECK(state.memory == memory);
++  CHECK(state.accumulated_features == features);
++}
++struct ScopedTranscriber {
++  int32_t handle;
++  ~ScopedTranscriber() { moonshine_free_transcriber(handle); }
++};
++}  // namespace
++
++TEST_CASE("streaming finalization preserves real audio and encoder lookahead") {
++  MoonshineStreamingModel model;
++  const std::string directory = model_directory();
++  REQUIRE(model.load(directory.c_str(), (directory + "/tokenizer.bin").c_str(),
++                     MOONSHINE_MODEL_ARCH_TINY_STREAMING) == 0);
++  REQUIRE(model.config.frame_len == 80);
++
++  for (const size_t tail :
++       {0u, 1u, 79u, 80u, 81u, 319u, 320u, 321u, 768u, 1279u}) {
++    CAPTURE(tail);
++    const auto audio = signal(1280 * 8 + tail);
++    const int valid_features = static_cast<int>((audio.size() + 319) / 320);
++
++    // Oracle uses only aligned frontend inputs, including the old English
++    // graph ABI. Trim padding before encoder attention, not after decoding.
++    MoonshineStreamingState oracle;
++    oracle.reset(model.config);
++    auto aligned = audio;
++    aligned.resize((audio.size() + 1279) / 1280 * 1280, 0.0f);
++    for (size_t offset = 0; offset < aligned.size(); offset += 1280) {
++      REQUIRE(model.process_audio_chunk(&oracle, aligned.data() + offset, 1280,
++                                        nullptr) == 0);
++    }
++    oracle.accumulated_features.resize(valid_features *
++                                       model.config.encoder_dim);
++
++    for (const size_t packet : {17u, 79u, 80u, 997u, 1280u, 2560u}) {
++      verify_packetization(model, audio, packet, oracle.accumulated_features);
++    }
++  }
++
++  SUBCASE("aligned input still flushes lookahead without additional samples") {
++    auto audio = signal(1280 * 8);
++    MoonshineStreamingState state;
++    state.reset(model.config);
++    size_t consumed = 0;
++    REQUIRE(model.encode_audio(&state, audio.data(), audio.size(), false,
++                               &consumed) == 0);
++    REQUIRE(consumed == audio.size());
++    CHECK(state.memory_len < state.accumulated_feature_count);
++    REQUIRE(model.encode_audio(&state, nullptr, 0, true, &consumed) == 0);
++    CHECK(consumed == 0);
++    CHECK(state.memory_len == state.accumulated_feature_count);
++  }
++
++  SUBCASE("empty input stays empty and null nonempty input fails") {
++    MoonshineStreamingState state;
++    state.reset(model.config);
++    size_t consumed = 99;
++    REQUIRE(model.encode_audio(&state, nullptr, 0, true, &consumed) == 0);
++    CHECK(consumed == 0);
++    CHECK(state.memory.empty());
++    CHECK(model.encode_audio(&state, nullptr, 1, true, &consumed) != 0);
++    CHECK(consumed == 0);
++  }
++}
++
++TEST_CASE("finalizing silence does not create transcript text") {
++  const std::string directory = model_directory();
++  ScopedTranscriber transcriber{moonshine_load_transcriber_from_files(
++      directory.c_str(), MOONSHINE_MODEL_ARCH_TINY_STREAMING, nullptr, 0,
++      MOONSHINE_HEADER_VERSION)};
++  REQUIRE(transcriber.handle >= 0);
++  for (const size_t length : {1u, 79u, 1280u, 32001u}) {
++    CAPTURE(length);
++    std::vector<float> silence(length, 0.0f);
++    transcript_t *transcript = nullptr;
++    REQUIRE(moonshine_transcribe_without_streaming(
++                transcriber.handle, silence.data(), silence.size(), 16000, 0,
++                &transcript) == 0);
++    REQUIRE(transcript != nullptr);
++    for (uint64_t i = 0; i < transcript->line_count; ++i) {
++      CHECK(std::string(transcript->lines[i].text).empty());
++    }
++  }
++}
+diff --git a/core/transcriber.cpp b/core/transcriber.cpp
+index 35c7c09..2718cd9 100644
+--- a/core/transcriber.cpp
++++ b/core/transcriber.cpp
+@@ -1362,47 +1362,19 @@ std::string *Transcriber::transcribe_segment_with_streaming_model(
+     this->last_streaming_tokens.clear();
+   }
+ 
+-  size_t new_samples_start = this->streaming_samples_processed;
+-
+-  if (new_samples_start < audio_length) {
+-    const float *new_audio_data = audio_data + new_samples_start;
+-    size_t new_audio_length = audio_length - new_samples_start;
+-
+-    // 80ms at 16kHz. Feeding whole chunks and carrying the remainder over to
+-    // the next call is a hard requirement of the exported frontend graph, not a
+-    // tidiness preference: a chunk length that is not a multiple of 80 samples
+-    // leaves leftover samples that every streaming .ort published before
+-    // 2026-08-23 drops on the floor while still reporting them as buffered, so
+-    // the following chunk reads silence in place of audio. The graphs were
+-    // exported from a traced PyTorch module and the branch that saved the
+-    // remainder was traced away against an aligned example input; models
+-    // exported after that date handle it, but English ships pre-fix graphs
+-    // until it is re-exported. Any new binding or test that feeds arbitrary
+-    // chunk sizes needs to do its own aligning here rather than assume the
+-    // graph will.
+-    const int chunk_size = 1280;
+-    const size_t chunk_count = new_audio_length / chunk_size;
+-
+-    for (size_t chunk_index = 0; chunk_index < chunk_count; chunk_index++) {
+-      size_t offset = chunk_index * chunk_size;
+-      int err = this->streaming_model->process_audio_chunk(
+-          &this->streaming_state, new_audio_data + offset, chunk_size, nullptr);
+-      if (err != 0) {
+-        LOGF("Failed to process audio chunk: %d", err);
+-        throw std::runtime_error("Failed to process audio chunk: " +
+-                                 std::to_string(err));
+-      }
+-    }
+-
+-    int new_frames = 0;
+-    int err = this->streaming_model->encode(&this->streaming_state, is_final,
+-                                            &new_frames);
+-    if (err != 0) {
+-      LOGF("Failed to encode: %d", err);
+-      throw std::runtime_error("Failed to encode: " + std::to_string(err));
+-    }
+-
+-    this->streaming_samples_processed += chunk_count * chunk_size;
++  const size_t new_samples_start = this->streaming_samples_processed;
++  if (new_samples_start > audio_length) {
++    throw std::runtime_error("Streaming segment audio shrank");
++  }
++  size_t consumed = 0;
++  const int encode_err = this->streaming_model->encode_audio(
++      &this->streaming_state, audio_data + new_samples_start,
++      audio_length - new_samples_start, is_final, &consumed);
++  this->streaming_samples_processed += consumed;
++  if (encode_err != 0) {
++    LOGF("Failed to encode audio: %d", encode_err);
++    throw std::runtime_error("Failed to encode audio: " +
++                             std::to_string(encode_err));
+   }
+ 
+   if (this->streaming_state.memory_len == 0) {
+diff --git a/scripts/test-core.sh b/scripts/test-core.sh
+index da663a1..97a1abd 100755
+--- a/scripts/test-core.sh
++++ b/scripts/test-core.sh
+@@ -54,6 +54,7 @@ ${REPO_ROOT_DIR}/core/build/voice-activity-detector-test
+ ${REPO_ROOT_DIR}/core/build/speech-clip-test
+ ${REPO_ROOT_DIR}/core/build/transcriber-test
+ ${REPO_ROOT_DIR}/core/build/streaming-language-smoke-test
++${REPO_ROOT_DIR}/core/build/streaming-finalization-test
+ ${REPO_ROOT_DIR}/core/build/transcriber-memory-files-test
+ ${REPO_ROOT_DIR}/core/build/moonshine-c-api-test
+ ${REPO_ROOT_DIR}/core/build/moonshine-cpp-test

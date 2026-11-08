@@ -18,3 +18,7 @@ test_audio/generated/
 /test_audio/*
 # Pinned known-good spqx sample used by scripts/probe_trailing_word.py
 !test_audio/spqx_alpha_bravo.wav
+
+# Deliberately vendored runtime/source archives, not generated audio or models.
+!/vendor/moonshine-sys/core-source.tar.gz
+!/packages/browser/scripts/vendor/moonshine/runtime.tar.gz

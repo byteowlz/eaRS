@@ -10,14 +10,16 @@ mod microphone;
 pub(crate) use microphone::persist_input_device;
 mod device;
 mod device_layout;
-mod layout_editor;
 mod device_scene;
+mod layout_editor;
 mod navigation;
 mod shortcut_cli;
 mod shortcuts;
 pub(crate) use shortcut_cli::handle as shortcuts_cli;
 mod transcription;
 mod window;
+#[cfg(target_os = "macos")]
+mod window_buttons;
 
 use crate::app::AppModel;
 use crate::config::ContentMotion;

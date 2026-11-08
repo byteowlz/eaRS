@@ -18,6 +18,20 @@ build-release:
 check:
     cargo check --all-features
 
+# Ordinary builds select the pinned repaired runtime through Cargo's local patch.
+check-moonshine-vendor:
+    CARGO_BUILD_JOBS=2 cargo check --locked --features moonshine
+
+test-moonshine-vendor:
+    CARGO_BUILD_JOBS=2 cargo test --locked --features moonshine --test moonshine_vendor_contract --test moonshine_build_support
+    CARGO_BUILD_JOBS=2 cargo test --locked --features moonshine --lib server::moonshine
+    uv run --no-project python -m unittest discover -s scripts -p test_moonshine_runtime_install.py
+    cd packages/browser && bun test tests/runtime.test.js
+
+# Offline, explicit-model segmentation A/B; never changes live settings.
+compare-moonshine-segmentation model wav profile="current":
+    cargo run --locked --features moonshine --example moonshine-segmentation-compare -- --model "$1" --wav "$2" --profile "$3"
+
 # eaRS companion UI unit tests
 ui-test:
     cargo test -p ears-ui --locked

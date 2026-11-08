@@ -1,0 +1,63 @@
+{
+  "aarch64-apple-darwin": {
+    "mode": "static",
+    "files": [
+      {
+        "name": "libonnxruntime.a",
+        "sha256": "eac8b1c9a25c3eb048ddcbba6b01559ec7e5d8115b7e9a03a847be9db3fcc366",
+        "bytes": 84172368,
+        "url": "https://media.githubusercontent.com/media/moonshine-ai/moonshine/234f60faa0eb388b01cdf7e60aca232af37aefda/core/third-party/onnxruntime/lib/macos/arm64/libonnxruntime.a"
+      }
+    ]
+  },
+  "x86_64-apple-darwin": {
+    "mode": "shared",
+    "files": [
+      {
+        "name": "libonnxruntime.1.23.2.dylib",
+        "sha256": "8c9c78de65ea3786f987c0d980e9c1b13a3a5fbc6b3e2965ba05b450e6e4c054",
+        "bytes": 39742608,
+        "url": "https://media.githubusercontent.com/media/moonshine-ai/moonshine/234f60faa0eb388b01cdf7e60aca232af37aefda/core/third-party/onnxruntime/lib/macos/x86_64/libonnxruntime.1.23.2.dylib"
+      }
+    ]
+  },
+  "x86_64-unknown-linux-gnu": {
+    "mode": "shared",
+    "files": [
+      {
+        "name": "libonnxruntime.so.1",
+        "sha256": "13ab8084954fa4a47c777880180b90810d6020f021441395712b48a75b74c68b",
+        "bytes": 22326072,
+        "url": "https://raw.githubusercontent.com/moonshine-ai/moonshine/234f60faa0eb388b01cdf7e60aca232af37aefda/core/third-party/onnxruntime/lib/linux/x86_64/libonnxruntime.so.1"
+      }
+    ]
+  },
+  "aarch64-unknown-linux-gnu": {
+    "mode": "shared",
+    "files": [
+      {
+        "name": "libonnxruntime.so.1",
+        "sha256": "ab8c4363e06ac80b3d1279ea55ebea44e906c5b131ba783ff684a067540c0e94",
+        "bytes": 18693384,
+        "url": "https://raw.githubusercontent.com/moonshine-ai/moonshine/234f60faa0eb388b01cdf7e60aca232af37aefda/core/third-party/onnxruntime/lib/linux/aarch64/libonnxruntime.so.1"
+      }
+    ]
+  },
+  "x86_64-pc-windows-msvc": {
+    "mode": "shared",
+    "files": [
+      {
+        "name": "onnxruntime.lib",
+        "sha256": "977263ca76e6a9d0f230a198d3b05b2a2bddfed66bc5c4d4fd25293b03cc78b5",
+        "bytes": 2124,
+        "url": "https://raw.githubusercontent.com/moonshine-ai/moonshine/234f60faa0eb388b01cdf7e60aca232af37aefda/core/third-party/onnxruntime/lib/windows/x86_64/onnxruntime.lib"
+      },
+      {
+        "name": "onnxruntime.dll",
+        "sha256": "dec964ab1ee36cc9b0ae247d13b376627992fc57dec0454354017ab8fd84f1ea",
+        "bytes": 14186016,
+        "url": "https://raw.githubusercontent.com/moonshine-ai/moonshine/234f60faa0eb388b01cdf7e60aca232af37aefda/core/third-party/onnxruntime/lib/windows/x86_64/onnxruntime.dll"
+      }
+    ]
+  }
+}

@@ -3,7 +3,7 @@ path = "CHANGELOG.md"
 template = "remote"
 remote = "github.com"
 repository = "eaRS"
-owner = "tommyfalkowski"
+owner = "byteowlz"
 
 [bump_profiles.default]
 pre_bump_hooks = []

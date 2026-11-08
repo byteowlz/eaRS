@@ -28,7 +28,7 @@ impl SliderSpec {
     };
 
     /// Snap to the step grid inside the range, free of float noise.
-    fn snap(&self, value: f32) -> f32 {
+    pub(crate) fn snap(&self, value: f32) -> f32 {
         let steps = ((value - self.min) / self.step).round();
         let snapped = (self.min + steps * self.step).clamp(self.min, self.max);
         (snapped * 10_000.0).round() / 10_000.0

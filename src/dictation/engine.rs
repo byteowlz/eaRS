@@ -229,6 +229,8 @@ struct Engine {
     history: Option<AudioHistory>,
     /// Last scalar level emission, for the ~50 Hz display throttle.
     last_level_at: Option<Instant>,
+    /// Bounded, scalar-only microphone diagnostics under EARS_UI_VERBOSE.
+    last_level_log_at: Option<Instant>,
     /// The running microphone stream; dropped (stopped) with the engine.
     input: Arc<input::InputSlot>,
 }
@@ -394,6 +396,7 @@ pub(crate) async fn run(
         auto_pause,
         history,
         last_level_at: None,
+        last_level_log_at: None,
         input,
         router: {
             let mut router = Router::new(config.voice_commands.mode);
@@ -1730,6 +1733,7 @@ mod tests {
             ping_sent: Arc::new(Mutex::new(None)),
             history: None,
             last_level_at: None,
+            last_level_log_at: None,
             input: Arc::new(input::InputSlot::detached()),
             config,
             options: DictationOptions::default(),
@@ -1811,6 +1815,7 @@ mod tests {
             ping_sent: Arc::new(Mutex::new(None)),
             history: None,
             last_level_at: None,
+            last_level_log_at: None,
             input: Arc::new(input::InputSlot::detached()),
             config,
             options: DictationOptions::default(),
@@ -1984,6 +1989,7 @@ mod tests {
             ping_sent: Arc::new(Mutex::new(None)),
             history,
             last_level_at: None,
+            last_level_log_at: None,
             input: Arc::new(input::InputSlot::detached()),
             config,
             options: DictationOptions::default(),

@@ -64,6 +64,15 @@ Errors identify a path and invariant. IDs/references, dimensions, pages, value
 types/ranges/options, active focus and grapheme-safe UTF-16 selections are checked.
 Range step is an edit increment, not state quantization.
 
+Faders infer their axis from the scene rectangle (wide = horizontal, tall =
+vertical), using the same cap/travel geometry for rendering and pointer mapping.
+Pointer drag emits Preview updates and one Commit on release, including release
+outside the view; Escape, deactivation, resize or geometry/enable changes cancel.
+Arrow/Page keys step a focused fader; Home/End reach its exact bounds. Compact horizontal caps retain the full control rectangle as their hit/drag
+area. Unchanged pointer replays do not emit another Preview or render request.
+Hosts still own all persistence/effects: a Preview or Cancel is not permission
+to save.
+
 `Projection::new(&snapshot)` supplies identical view-projection/inverse matrices
 to the GPU and hit testing. Z is the front surface; depth extends backwards.
 Near/far derive from scene bounds. Behind-camera/intersecting bounds and

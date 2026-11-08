@@ -139,4 +139,4 @@ ears-server
 ears-dictation
 ```
 
-For more information, see the main [README.md](README.md).
+For more information, see the main [README.md](../README.md).

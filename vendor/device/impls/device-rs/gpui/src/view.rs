@@ -1,4 +1,10 @@
 //! Reusable native device view. Emits typed actions; the host owns every app effect.
+#[path = "fader.rs"]
+mod fader;
+#[path = "fader_view.rs"]
+mod fader_view;
+#[path = "pointer.rs"]
+mod pointer;
 #[path = "readout_tooltip.rs"]
 mod readout_tooltip;
 use crate::{ImageSlot, RenderWorker};
@@ -15,6 +21,8 @@ pub struct DeviceView {
     slot: ImageSlot,
     focus: FocusHandle,
     pressed: Option<String>,
+    range_drag: Option<fader::Drag>,
+    range_keyboard: Option<String>,
     interaction: u64,
     printed_font: SharedString,
     ui_font: SharedString,
@@ -60,6 +68,7 @@ impl DeviceView {
             .detach();
         cx.observe_window_activation(window, |this, window, cx| {
             if !window.is_window_active() {
+                this.cancel_fader(cx);
                 this.pressed = None;
                 this.clear_pressed();
                 this.request(cx);
@@ -74,6 +83,8 @@ impl DeviceView {
             slot: ImageSlot::default(),
             focus,
             pressed: None,
+            range_drag: None,
+            range_keyboard: None,
             interaction: 0,
             printed_font,
             ui_font,
@@ -86,6 +97,7 @@ impl DeviceView {
         this
     }
     fn resize(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.cancel_fader(cx);
         let size = window.viewport_size();
         self.snapshot.viewport.width_dip = f32::from(size.width) as f64;
         self.snapshot.viewport.height_dip = f32::from(size.height) as f64;
@@ -197,7 +209,15 @@ impl DeviceView {
             self.snapshot.scene.revision += 1;
             self.snapshot.state.revision += 1;
             self.pressed = None;
-            self.request(cx);
+            if self
+                .range_drag
+                .as_ref()
+                .is_some_and(|drag| !drag.valid(&self.snapshot))
+            {
+                self.cancel_fader(cx);
+            } else {
+                self.request(cx);
+            }
         }
     }
     fn activate(&mut self, id: &str, source: Source, cx: &mut Context<Self>) {
@@ -247,6 +267,10 @@ impl DeviceView {
         if !self.keyboard_enabled {
             return;
         }
+        if self.key_fader(&event.keystroke.key, cx) {
+            cx.stop_propagation();
+            return;
+        }
         match event.keystroke.key.as_str() {
             "tab" => {
                 let order = self.snapshot.focus_order();
@@ -282,6 +306,7 @@ impl DeviceView {
                 cx.stop_propagation();
             }
             "escape" => {
+                self.cancel_fader(cx);
                 self.pressed = None;
                 self.clear_pressed();
                 self.request(cx);
@@ -480,9 +505,7 @@ impl Render for DeviceView {
             })
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event, _, cx| this.key(event, cx)))
-            .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, _, cx| {
-                this.hover(event.position.x.into(), event.position.y.into(), cx)
-            }))
+            .on_mouse_move(cx.listener(|this, event, _, cx| this.pointer_move(event, cx)))
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                 if !hovered && this.hovered.take().is_some() {
                     cx.emit(Hover(None));
@@ -490,54 +513,15 @@ impl Render for DeviceView {
             }))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
-                    window.focus(&this.focus);
-                    if let Some(id) = this.hit(event.position.x.into(), event.position.y.into()) {
-                        // Pointer use shows no focus ring; the ring is for keyboard navigation.
-                        this.clear_focus();
-                        this.pressed = Some(id.clone());
-                        this.snapshot
-                            .state
-                            .controls
-                            .get_mut(&id)
-                            .expect("state")
-                            .pressed = true;
-                        // Every state edit gets a new revision, or the frame is rejected.
-                        this.snapshot.state.revision += 1;
-                        this.request(cx);
-                    }
-                }),
+                cx.listener(|this, event, window, cx| this.pointer_down(event, window, cx)),
             )
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, event: &gpui::MouseUpEvent, _, cx| {
-                    let pressed = this.pressed.take();
-                    // Current frame may still be in flight for key travel; use the displayed frame's same geometry.
-                    let hit = this
-                        .slot
-                        .current()
-                        .and_then(|p| {
-                            p.frame.hit_test(
-                                f32::from(event.position.x) as f64,
-                                f32::from(event.position.y) as f64,
-                            )
-                        })
-                        .map(str::to_owned);
-                    this.clear_pressed();
-                    if let Some(id) = pressed.filter(|id| Some(id) == hit.as_ref()) {
-                        this.activate(&id, Source::Pointer, cx);
-                    } else {
-                        this.request(cx);
-                    }
-                }),
+                cx.listener(|this, event, _, cx| this.pointer_up(event, false, cx)),
             )
             .on_mouse_up_out(
                 MouseButton::Left,
-                cx.listener(|this, _, _, cx| {
-                    this.pressed = None;
-                    this.clear_pressed();
-                    this.request(cx);
-                }),
+                cx.listener(|this, event, _, cx| this.pointer_up(event, true, cx)),
             );
         if let Some(p) = self.slot.current() {
             let viewport = &p.frame.viewport;

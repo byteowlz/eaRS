@@ -13,7 +13,7 @@ const unsubscribe = recognizer.subscribe(event => {
 });
 await recognizer.prepare({
   provider: "moonshine", language: "de", sampleRate: 48000,
-  runtimeBaseUrl: "/speech/moonshine-0.1.5/",
+  runtimeBaseUrl: "/speech/moonshine-0.1.5-ears.1/",
 });
 recognizer.feed(monoFloat32Pcm);
 await recognizer.finish(); // drains inference, then releases the worker
@@ -32,20 +32,19 @@ Synthesis and conversational turn authority are outside this package.
 
 ## Local runtime deployment
 
-The runtime is pinned to Moonshine's GitHub **v0.1.5 WASM release**, including its
-archive and WASM SHA-256 digests. npm's same-version package embeds an older core
-which rejects these split-frontends and lacks German catalog support. Do not
-substitute it. Stage the verified ESM/WASM/worker tree on the application origin:
+The package vendors **Moonshine 0.1.5-ears.1**, including the final-audio and
+encoder-lookahead repair. Its archive, source provenance and WASM digest are
+pinned; no upstream PR, SDK download or sibling checkout is needed. Do not
+substitute stock v0.1.5 or its older npm core. Stage the verified worker tree:
 
 ```js
 import { stageMoonshineRuntime } from "@byteowlz/ears-browser/stage-runtime";
-await stageMoonshineRuntime("public/speech/moonshine-0.1.5");
+await stageMoonshineRuntime("public/speech/moonshine-0.1.5-ears.1");
 ```
 
-Asset staging downloads approximately 6.6 MB once from GitHub and verifies its
-SHA-256 before extraction. The verified archive is cached under
-`$XDG_CACHE_HOME/ears-browser` (or `~/.cache/ears-browser`) for offline rebuilds.
-A changed release artifact fails verification rather than silently changing code.
+Staging verifies and extracts the approximately 6.5 MB archive included with this
+package, entirely offline. Missing or corrupted bytes fail without a network or
+stock-runtime fallback. Existing deployed assets are not overwritten automatically.
 
 The published runtime is threaded CPU/WASM (not WebGPU). HTTPS/localhost, Worker,
 WebAssembly SIMD and **cross-origin isolation** are required. Send these headers

@@ -4,7 +4,7 @@ version = "0.6.1"
 edition = "2024"
 description = "Easy automatic speech recognition library using Kyutai's STT models"
 license = "MIT"
-repository = "https://github.com/tommyfalkowski/eaRS"
+repository = "https://github.com/byteowlz/eaRS"
 authors = ["Tommy Falkowski"]
 homepage = "https://byteowlz.com"
 
@@ -13,7 +13,7 @@ members = ["apps/ears-ui"]
 # simple_gui (Tauri) has its own lockfile/toolchain and is deprecated in favor
 # of apps/ears-ui; keep it out of the workspace so `cargo` in that directory
 # does not try to join this one.
-exclude = ["apps/simple_gui/src-tauri", "vendor/device/impls/device-rs"]
+exclude = ["apps/simple_gui/src-tauri", "vendor/device/impls/device-rs", "vendor/moonshine-sys", "vendor/moonshine-rs"]
 
 [build-dependencies]
 pkg-config = "0.3"
@@ -33,6 +33,11 @@ path = "src/bin/ears-server.rs"
 [[bin]]
 name = "ears-dictation"
 path = "src/bin/ears-dictation.rs"
+
+[[example]]
+name = "moonshine-segmentation-compare"
+path = "examples/moonshine_segmentation_compare.rs"
+required-features = ["moonshine"]
 
 [dependencies]
 aho-corasick = "1"
@@ -91,7 +96,7 @@ arboard = { version = "3.6", default-features = false }
 # parakeet-rs (Nemotron streaming); its feature activates the exact ort pin.
 parakeet-rs = { package = "parakeet-rs", git = "https://github.com/altunenes/parakeet-rs.git", rev = "086e3bb734dd9a3f01e4e99ef6895da0db85b47a", optional = true, default-features = false }
 # Native Moonshine C API wrapper, with its audio decoder disabled (we use kaudio).
-moonshine-rs = { version = "=0.2.6", optional = true, default-features = false }
+moonshine-rs = { path = "vendor/moonshine-rs", version = "=0.2.6", optional = true, default-features = false }
 
 # transcribe.cpp GGUF streaming engine. Pinned to the 0.2.3 release (upgraded
 # from 0.1.3: brings ggml 0.20.2, a parakeet buffered-stream tail-loss fix, and
@@ -185,4 +190,6 @@ inherits = "release"
 lto = "thin"
 
 [patch.crates-io]
+# Keep the repaired native runtime in ordinary builds, not a sibling checkout.
+moonshine-sys = { path = "vendor/moonshine-sys" }
 sentencepiece-sys = { path = "vendor/sentencepiece-sys" }

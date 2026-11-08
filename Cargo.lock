@@ -2540,6 +2540,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "auto-launch",
+ "block2",
  "crossbeam-channel",
  "device-gpui",
  "device-scene",
@@ -5596,8 +5597,6 @@ dependencies = [
 [[package]]
 name = "moonshine-rs"
 version = "0.2.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5757aa28f590918f9418661c9c9d7c72099fe332d0df3da9dd6ae16a9307e0a"
 dependencies = [
  "dirs 5.0.1",
  "moonshine-sys",
@@ -5609,13 +5608,14 @@ dependencies = [
 [[package]]
 name = "moonshine-sys"
 version = "0.2.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0e3b8e68fc6c1aab63048cffd016886d9db3ff050fb79f5e537fef69d49a22b"
 dependencies = [
+ "anyhow",
  "bindgen 0.69.5",
- "cc",
  "cmake",
  "flate2",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
  "tar",
  "ureq 2.12.1",
 ]

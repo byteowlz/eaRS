@@ -85,3 +85,13 @@ Synthetic native fixtures (`--preview-settings`, `--preview-settings-mic-empty`,
 `--preview-settings-mic-missing`) use fake device lists. Their selection/Refresh
 never enumerates devices, writes preferences or starts an engine. They do not
 prove physical microphone/TCC/hotplug or live handoff behavior.
+
+## Input diagnostics
+
+With `EARS_UI_VERBOSE=1`, a capturing engine emits `audio-input:` at most once
+per second when microphone chunks arrive, connected or offline: capture
+generation, sample count, and peak/RMS levels on a 0–255 scale. This separates a live hotkey with no input
+callbacks from callbacks carrying silence or measurable audio. It does not
+prove delivery to ASR, and silence alone does not identify a permission fault.
+The added fields contain no audio or text, but other verbose log lines may
+contain recognised speech; keep the complete logs private.

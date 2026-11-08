@@ -1,3 +1,7 @@
 .trx/issues.jsonl text eol=lf merge=union
 .trx/events.jsonl text eol=lf merge=union
 .trx/verifications.jsonl text eol=lf merge=union
+# Unified diffs require a context prefix on otherwise blank lines.
+patches/*.patch -whitespace
+vendor/moonshine-sys/core-source.tar.gz binary
+packages/browser/scripts/vendor/moonshine/runtime.tar.gz binary

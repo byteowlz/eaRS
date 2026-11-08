@@ -44,6 +44,7 @@ fn settings_test_capture_reaches_ui_only_and_restores_output() {
         ping_sent: Arc::new(Mutex::new(None)),
         history: None,
         last_level_at: None,
+        last_level_log_at: None,
         input: Arc::new(input::InputSlot::detached()),
         config,
         options: DictationOptions::default(),
@@ -55,6 +56,24 @@ fn settings_test_capture_reaches_ui_only_and_restores_output() {
         .unwrap();
     assert!(shared.is_capturing() && engine.inserter.is_preview());
     engine.on_capture_edge(true).unwrap();
+    // The connected capture path must report the same input levels as offline
+    // capture, while still forwarding PCM to ASR and keeping typing a sink.
+    let (audio_tx, audio_rx) = unbounded();
+    let (writer_tx, mut writer_rx) = mpsc::unbounded_channel();
+    engine.writer = Some(writer_tx);
+    audio_tx.send(vec![0.25; 480]).unwrap();
+    engine.capture_batch(&audio_rx, &mut None).unwrap();
+    assert!(
+        matches!(writer_rx.try_recv(), Ok(WriterCommand::Audio(bytes)) if bytes.len() == 480 * 4)
+    );
+    assert!(
+        events_rx.try_iter().any(|event| matches!(event,
+            DictationEvent::AudioLevel { capture_generation, peak: 64, rms: 64 }
+            if capture_generation == shared.capture_generation()
+        )),
+        "connected microphone chunks must reach the level/diagnostic observer"
+    );
+    engine.writer = None;
     // A profile switching the target mid-test must not restore a real output.
     engine
         .apply_insertion_mode(InsertionMode::SendAsPrompt)

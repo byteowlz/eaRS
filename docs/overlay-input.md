@@ -54,4 +54,4 @@ The Settings slider reuses existing section/row/theme components; it is not a
 Settings redesign. The Studio currently has no separate selected Settings target.
 Native routing evidence is functional, not a screenshot-based visual acceptance.
 
-Studio: http://100.64.0.12:4782/apps/ears-ui/?view=desktop
+Visual-decision records and native evidence are maintained privately.

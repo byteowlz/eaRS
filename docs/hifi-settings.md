@@ -1,8 +1,8 @@
 # Native receiver Settings
 
 Settings has **one navigation level**: Dictation, Overlay, Dictionaries, Profiles.
-Dictation is a single receiver page; there are no sub-pages. Overlay, Dictionaries
-and Profiles still use the earlier native panes until they are converted.
+Each tab is a single receiver page; there are no sub-pages. All four tabs share
+the same physical controls and dot-matrix readouts.
 
 ## Layout
 
@@ -15,9 +15,9 @@ and Profiles still use the earlier native panes until they are converted.
   The engine command is `SetTestCapture`; output targets stay a sink until the
   capture ends, even if a context profile changes the insertion mode meanwhile.
 - **Tabs** line up with the two columns; the selected tab's lamp is lit.
-- **Microphone**: one latching key per input, lamp on the active one. Selecting
-  switches immediately (opened muted, swapped on success, saved after the engine
-  confirms). Listing inputs on open is metadata only. More than four inputs page.
+- **Microphone**: click the display or use its arrows to choose an input. Switching
+  settles after stepping, opens muted, swaps on success and saves after the engine
+  confirms. Listing inputs on open is metadata only.
 - **Shortcuts**: Start / stop, Hold to talk, Next profile, Key mode, Esc cancels,
   Restore defaults. Click a display, press the keys; it saves and applies at once.
   Esc cancels recording. × removes an optional shortcut. Physical left/right
@@ -38,13 +38,50 @@ edits, as before.
 together. Row labels align to the column edge, keys to the control column, and
 every display to the inner value column. Spacing uses 0.4 / 0.8 / 1.2 units;
 every display uses the same 0.16-unit dot pitch. Geometry never depends on values;
-legend size follows the legend's role, not its length. Tests check edges, the
-shared grid, pitch and non-overlap.
+legend size follows the legend's role, not its length. Bounded numeric rows pair
+a horizontal fader with a fixed-width matrix readout; enum choices keep arrows.
+Tests check edges, the shared grid, pitch and non-overlap.
+
+## Bounded values
+
+Speech threshold, auto-pause, wake sensitivity, pill width/text size, corner
+radius, opacity, screen margin and linger use actual 3D rail/cap geometry from the
+shared renderer. Compact caps retain the full control rectangle as the drag area.
+Dragging previews the value without saving; release commits once and applies it
+through the existing live-setting/UI-config paths. Escape cancels. Arrow/Page
+keys step a selected slider, and Home/End reach its bounds. Disabled sliders stay
+in place and cannot commit. Existing out-of-range preferences remain unchanged
+until an explicit edit; only the thumb position is clamped.
 
 ## Window
 
-No OS title bar, frame or opaque stage. Drag unused chassis metal to move it.
-× (top right) or Command-W closes; Esc cancels a recording or a test.
+No visible OS title bar, frame or opaque stage. Drag unused chassis metal to
+move it. On macOS, etched close/minimise/zoom icons sit **inside the receiver's
+top-left outer frame**, above the inset top plate. They have no coloured circles
+or raised button plates. Other platforms keep a
+close key at the right of the tab row. The microphone Test key is in that same
+row; the display beneath it spans the full plate width. Command-W closes;
+Esc cancels a recording or a test.
+
+The etched glyphs are resolution-independent native vector images with a dark
+upper lip and faint lower highlight, matching the printed legends. Borderless
+AppKit buttons retain normal hit targets, tooltips, accessibility roles and window
+actions; their container follows the chassis, not the native titlebar. This is an
+etched appearance, not glyph-shaped grooves cut into the chassis mesh. `window.buttons` is a non-interactive scene anchor;
+its presented camera projection positions the native container in logical points
+on resize, centred between the border edges at their actual depths. Compact etched
+drawing keeps a regular 16-point click target. The brand and tab grid stay in the inset plate; only the window controls
+occupy the outer frame.
+Close uses GPUI's native window teardown; minimise and zoom call AppKit directly.
+
+Regression proof includes numeric layout/range/action tests, projection checks at 640x420, 1240x860
+and 1600x1000 at 1x/2x, and native VM checks for AX roles/actions, close,
+minimise/restore, zoom/restore, resize and move. The read-only default of
+`swift scripts/probe_settings_buttons.swift PID report` reports native window
+and button rectangles without text or screenshots. Mutation modes are for an
+owned `--preview-settings-device` process only, with existing Accessibility
+permission; the probe never requests permission. Physical input acceptance is
+separate from these native accessibility-action checks.
 
 ## Headless use
 
@@ -88,8 +125,7 @@ keyboard interaction: hover help, Test streaming, F6 recording, microphone
 selection, threshold steps, Overlay and back. The shared renderer additionally has
 actual Metal readback/hit tests at 1x/2x. This is not physical global-hotkey,
 high-refresh, accessibility-tree, Linux/Windows or IME acceptance. Shared material
-fidelity and perspective-warped printed labels remain incomplete; other settings panes are not
-yet rendered as hardware. Wake phrase controls and the ctx invocation seam remain
+fidelity and perspective-warped printed labels remain incomplete. Wake phrase controls and the ctx invocation seam remain
 separate work; no external action execution was enabled.
 
 The full parallel core harness reproduces two wake subprocess failures on the

@@ -170,6 +170,17 @@ impl Engine {
         }
         self.last_level_at = Some(Instant::now());
         let (peak, rms) = audio_level(pcm);
+        if super::super::verbose()
+            && self
+                .last_level_log_at
+                .is_none_or(|at| at.elapsed() >= Duration::from_secs(1))
+        {
+            self.last_level_log_at = Some(Instant::now());
+            super::super::vlog!(
+                "audio-input: generation={generation} samples={} peak={peak} rms={rms}",
+                pcm.len()
+            );
+        }
         self.shared.emit(DictationEvent::AudioLevel {
             capture_generation: generation,
             peak,
@@ -183,6 +194,7 @@ impl Engine {
         context: &CommitContext,
         generation: u64,
     ) -> Option<Flow> {
+        self.emit_audio_level(generation, chunk);
         let retention_error = self
             .history
             .as_mut()

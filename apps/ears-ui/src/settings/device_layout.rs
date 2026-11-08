@@ -213,6 +213,7 @@ impl Builder {
     ) {
         let (material, presentation) = match kind {
             "button" | "toggle" => ("key", "printed"),
+            "fader" => ("key", "none"),
             "legend" => ("face", "printed"),
             "heading" => ("caption", "printed"),
             _ => ("glass", "matrix"),
@@ -236,7 +237,7 @@ impl Builder {
                 "padding_x":(span.width() - (cols * 6 - 1) as f64 * PITCH) / 2.0,
                 "padding_y":(height - ((rows - 1) * 8 + 7) as f64 * PITCH) / 2.0});
         }
-        let interactive = matches!(kind, "button" | "toggle" | "shortcut" | "select");
+        let interactive = matches!(kind, "button" | "toggle" | "shortcut" | "select" | "fader");
         if interactive {
             control["tab_index"] = json!(self.controls.len());
         } else {
@@ -331,8 +332,12 @@ impl<'a> Column<'a> {
             json!(""),
         );
     }
-    /// Label, then [◀] display [▶].
+    /// Bounded numbers use a fader/readout; choices retain [◀] display [▶].
     fn stepper(&mut self, id: &str, text: &str, help: &str, keys: (&str, &str)) {
+        if let Some(setting) = super::device::ranges::Numeric::find(id) {
+            self.slider(setting, text, help);
+            return;
+        }
         let y = self.next_row();
         self.legend(id, text, help, y);
         self.b.add(
@@ -357,6 +362,41 @@ impl<'a> Column<'a> {
             y,
             ROW,
             Json::Null,
+        );
+    }
+    fn slider(&mut self, setting: super::device::ranges::Numeric, text: &str, help: &str) {
+        let id = setting.id();
+        let spec = setting.spec(&ears::config::AppConfig::default());
+        let y = self.next_row();
+        self.legend(id, text, help, y);
+        let display = self.control.last(7.6);
+        let track = Span {
+            left: self.control.left,
+            right: display.left - GAP,
+        };
+        self.b.add(
+            &format!("{id}.slider"),
+            self.module,
+            "fader",
+            text,
+            help,
+            track,
+            y,
+            ROW,
+            json!(spec.min),
+        );
+        self.b.controls.last_mut().expect("range control")["range"] =
+            json!({"min":spec.min,"max":spec.max,"step":spec.step});
+        self.b.add(
+            id,
+            self.module,
+            "readout",
+            text,
+            help,
+            display,
+            y,
+            ROW,
+            json!(""),
         );
     }
     /// Label, then a latching key with a lamp, sharing the steppers' outer edges.
@@ -493,7 +533,7 @@ fn build() -> Snapshot {
 /// Whether the window supplies its own close affordance.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Chrome {
-    /// The platform draws window buttons (macOS traffic lights): no close key.
+    /// Native etched window icons live in the chassis frame: no close key.
     WindowButtons,
     /// The device itself carries a close key at the right edge.
     CloseKey,
@@ -560,7 +600,7 @@ fn build_with(chrome: Chrome) -> Snapshot {
     // One row: the tabs, then the microphone and the close key at the right
     // edge. The display below takes the plate's full width.
     let (mic, close) = match chrome {
-        // Window buttons live outside the device, so the microphone takes the edge.
+        // Native window buttons use the header strip, so the microphone takes the edge.
         Chrome::WindowButtons => (band.last(SIDE_KEY), band.last(SIDE_KEY)),
         // Otherwise the close key holds the right edge and the microphone sits inside.
         Chrome::CloseKey => {
@@ -731,6 +771,28 @@ fn build_with(chrome: Chrome) -> Snapshot {
     pages::dictionaries(&mut b, left_full, right_full, column_top);
     pages::profiles(&mut b, left_full, right_full, column_top);
     b.page = "*";
+    if chrome == Chrome::WindowButtons {
+        // Anchor the native controls in the outer chassis border, above the
+        // inset top plate. The narrow anchor leaves the brand/tab geometry alone.
+        b.add(
+            "window.buttons",
+            "ears.front",
+            "legend",
+            "",
+            "",
+            Span {
+                left: -EDGE,
+                right: -EDGE + 8.0,
+            },
+            inner + 0.8,
+            0.8,
+            json!(""),
+        );
+        // Other controls sit above a raised plate at z=0.8. This anchor must
+        // share the outer faceplate's z=0; using the raised plane pulls the
+        // native buttons upward in perspective, off the border's centreline.
+        b.controls.last_mut().expect("window anchor")["rect"]["z"] = json!(0.0);
+    }
     b.add(
         "brand",
         "ears.top",
@@ -873,7 +935,7 @@ mod tests {
                     "shortcut.toggle.clear",
                     "keymode.next",
                     "shortcut.defaults",
-                    "wake.next",
+                    "wake",
                     "mic.next",
                 ],
             ),
@@ -898,11 +960,9 @@ mod tests {
         ] {
             equal(rect(&s, label).y, rect(&s, control).y, label);
         }
-        // Every value display shares the value column's edges.
+        // Choice readouts retain the inner value column; numeric ranges have
+        // their own aligned slider/readout group (tested below).
         for id in [
-            "pause",
-            "threshold",
-            "wake",
             "insert",
             "server",
             "keymode",
@@ -913,12 +973,7 @@ mod tests {
                 left(&rect(&s, id)),
                 left(&rect(
                     &s,
-                    if id == "insert"
-                        || id == "pause"
-                        || id == "threshold"
-                        || id == "server"
-                        || id == "connection"
-                    {
+                    if id == "insert" || id == "server" || id == "connection" {
                         "language"
                     } else {
                         "keymode"
@@ -978,12 +1033,39 @@ mod tests {
     fn macos_has_window_buttons_instead_of_a_close_key() {
         let s = build_with(Chrome::WindowButtons);
         assert!(s.control("window.close").is_none());
+        let anchor = rect(&s, "window.buttons");
+        equal(
+            left(&anchor),
+            -EDGE,
+            "lights align with the outer plate edge, not its inset content",
+        );
+        let plate = s.scene.devices[0]
+            .panels
+            .iter()
+            .find(|p| p.id == "ears.top")
+            .unwrap();
+        assert!(anchor.y - anchor.height / 2.0 > plate.rect.y + plate.rect.height / 2.0);
+        assert!(anchor.y + anchor.height / 2.0 < HEIGHT / 2.0);
+        let front = &s.scene.devices[0].panels[0];
+        equal(
+            anchor.z,
+            front.rect.z,
+            "lights anchor lies on the actual frame surface",
+        );
+        equal(
+            left(&rect(&s, "brand")),
+            top_band(&s).0,
+            "brand remains on its original grid",
+        );
+        assert!(anchor.y - anchor.height / 2.0 > rect(&s, "test").y);
+        assert_eq!(s.control("window.buttons").unwrap().1.action, "none");
         equal(
             right(&rect(&s, "test")),
             top_band(&s).1,
             "microphone at the right edge",
         );
         let keyboard = build_with(Chrome::CloseKey);
+        assert!(keyboard.control("window.buttons").is_none());
         equal(
             right(&rect(&keyboard, "window.close")),
             top_band(&keyboard).1,
@@ -1001,12 +1083,33 @@ mod tests {
         );
     }
     #[test]
+    fn bounded_values_have_horizontal_sliders_and_separate_matrix_readouts() {
+        let s = generated();
+        for setting in super::super::device::ranges::ALL {
+            let id = setting.id();
+            assert!(s.control(&format!("{id}.prev")).is_none());
+            assert!(s.control(&format!("{id}.next")).is_none());
+            let (_, slider, _) = s.control(&format!("{id}.slider")).unwrap();
+            let (_, value, _) = s.control(id).unwrap();
+            assert_eq!(slider.kind, Kind::Fader);
+            assert_eq!(slider.presentation, Presentation::None);
+            assert!(slider.rect.width > slider.rect.height);
+            assert!(slider.range.is_some());
+            assert_eq!(value.presentation, Presentation::Matrix);
+            equal(right(&slider.rect) + GAP, left(&value.rect), id);
+            equal(value.rect.width, 7.6, id);
+            equal(slider.rect.y, value.rect.y, id);
+            equal(
+                left(&slider.rect),
+                right(&rect(&s, &format!("label.{id}"))) + GAP,
+                id,
+            );
+        }
+    }
+    #[test]
     fn lamp_keys_share_the_steppers_outer_edges() {
         let s = generated();
-        for (lamp, stepper) in [("escape", "keymode"), ("context_profiles", "insert_as")] {
-            if s.control(stepper).is_none() {
-                continue;
-            }
+        for (lamp, stepper) in [("escape", "keymode"), ("profiles", "insert")] {
             equal(
                 left(&rect(&s, lamp)),
                 left(&rect(&s, &format!("{stepper}.prev"))),

@@ -61,8 +61,6 @@ const SCHEMES: [(&str, &str); 3] = [
     ("oqto-dark", "Dark"),
     ("oqto-light", "Light"),
 ];
-const WORD_WIDTHS: [f32; 5] = [220.0, 260.0, 300.0, 360.0, 420.0];
-const WORD_SIZES: [f32; 5] = [12.0, 14.0, 18.0, 22.0, 24.0];
 const PROFILE_INSERT: [(Option<InsertionMode>, &str); 4] = [
     (None, "Inherit"),
     (Some(InsertionMode::InsertAtCursor), "At cursor"),
@@ -79,22 +77,6 @@ fn name<T: PartialEq>(items: &[(T, &'static str)], current: &T) -> &'static str 
         .iter()
         .find(|(v, _)| v == current)
         .map_or("", |(_, n)| n)
-}
-fn step_list(items: &[f32], current: f32, delta: isize) -> f32 {
-    let i = items
-        .iter()
-        .position(|v| (*v - current).abs() < 0.5)
-        .map_or_else(
-            || {
-                items
-                    .iter()
-                    .position(|v| *v > current)
-                    .unwrap_or(items.len()) as isize
-                    - (delta > 0) as isize
-            },
-            |i| i as isize,
-        );
-    items[(i + delta).clamp(0, items.len() as isize - 1) as usize]
 }
 fn split_csv(text: &str) -> Vec<String> {
     text.split(',')
@@ -303,40 +285,6 @@ impl NativeSettings {
                     refresh_theme = true;
                     Some(Box::new(move |ui: &mut crate::config::UiConfig| {
                         ui.theme.scheme = v
-                    }))
-                } else if let Some(d) = d("radius") {
-                    let v = (theme.radius + d as f32).clamp(0.0, 32.0);
-                    refresh_theme = true;
-                    Some(Box::new(move |ui: &mut crate::config::UiConfig| {
-                        ui.theme.radius = v
-                    }))
-                } else if let Some(d) = d("opacity") {
-                    let v = ((o.opacity + d as f32 * 0.05) * 100.0)
-                        .round()
-                        .clamp(20.0, 100.0)
-                        / 100.0;
-                    Some(Box::new(move |ui: &mut crate::config::UiConfig| {
-                        ui.overlay.opacity = v
-                    }))
-                } else if let Some(d) = d("margin") {
-                    let v = (o.margin + d as f32 * 4.0).clamp(0.0, 200.0);
-                    Some(Box::new(move |ui: &mut crate::config::UiConfig| {
-                        ui.overlay.margin = v
-                    }))
-                } else if let Some(d) = d("linger") {
-                    let v = (o.linger_ms as i64 + d as i64 * 250).clamp(0, 5000) as u64;
-                    Some(Box::new(move |ui: &mut crate::config::UiConfig| {
-                        ui.overlay.linger_ms = v
-                    }))
-                } else if let Some(d) = d("wordwidth") {
-                    let v = step_list(&WORD_WIDTHS, o.word_width, d);
-                    Some(Box::new(move |ui: &mut crate::config::UiConfig| {
-                        ui.overlay.word_width = v
-                    }))
-                } else if let Some(d) = d("wordsize") {
-                    let v = step_list(&WORD_SIZES, o.word_size, d);
-                    Some(Box::new(move |ui: &mut crate::config::UiConfig| {
-                        ui.overlay.word_size = v
                     }))
                 } else {
                     None
@@ -594,10 +542,6 @@ impl PagesView {
         scene::switch(s, "ov.wordfade", o.word_fade);
         scene::label(s, "ov.wordfade", if o.word_fade { "On" } else { "Off" });
         scene::enable(s, "ov.wordfade", word);
-        for id in ["ov.wordwidth", "ov.wordsize"] {
-            scene::enable(s, &format!("{id}.prev"), word);
-            scene::enable(s, &format!("{id}.next"), word);
-        }
         scene::text(s, "ov.anchor", o.anchor.label());
         scene::text(s, "ov.indicator", name(&INDICATORS, &o.indicator));
         scene::text(s, "ov.shape", name(&SHAPES, &o.shape_motion));

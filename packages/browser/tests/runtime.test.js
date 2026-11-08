@@ -1,20 +1,31 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
-	MOONSHINE_RUNTIME,
-	verifyRuntimeArchive,
+  MOONSHINE_RUNTIME,
+  stageMoonshineRuntime,
+  verifyRuntimeArchive,
 } from "../scripts/stage-runtime.mjs";
 
-test("runtime is digest-pinned to the German/split-frontend-compatible GitHub artifact, not npm", () => {
-	expect(MOONSHINE_RUNTIME.url).toContain(
-		"releases/download/v0.1.5/moonshine-voice-wasm.tar.gz",
-	);
-	expect(MOONSHINE_RUNTIME.sha256).toBe(
-		"c515bf7691e12048f70a92cc82b3b0894c16c3773ffcacb7d48944fb150e4837",
-	);
-	expect(MOONSHINE_RUNTIME.wasmSha256).not.toBe(
-		"d0e783f661f8be68f7af48d859d3bbc7a6381a980b35b4128fc36344218a6682",
-	);
-	expect(() => verifyRuntimeArchive(Buffer.from("unverified runtime"))).toThrow(
-		"checksum mismatch",
-	);
+test("default runtime is the vendored final-audio fix, not stock v0.1.5", () => {
+  expect(MOONSHINE_RUNTIME.version).toBe("0.1.5-ears.1");
+  expect(MOONSHINE_RUNTIME.coreRevision).toBe("5a1358d3253b81ef24ae2a23cb25fe47bb16b783");
+  expect(MOONSHINE_RUNTIME.url).toBeUndefined();
+  expect(() => verifyRuntimeArchive(Buffer.from("unverified runtime"))).toThrow("checksum mismatch");
+});
+
+test("ordinary staging works offline and records the patched runtime provenance", async () => {
+  const temporary = mkdtempSync(path.join(os.tmpdir(), "ears-vendored-runtime-test-"));
+  const fetch = globalThis.fetch;
+  globalThis.fetch = () => { throw new Error("Vendored runtime attempted a download"); };
+  try {
+    await stageMoonshineRuntime(temporary);
+    const manifest = JSON.parse(readFileSync(path.join(temporary, "runtime-manifest.json")));
+    expect(manifest.version).toBe("0.1.5-ears.1");
+    expect(manifest.wasmSha256).toBe(MOONSHINE_RUNTIME.wasmSha256);
+  } finally {
+    globalThis.fetch = fetch;
+    rmSync(temporary, { recursive: true, force: true });
+  }
 });

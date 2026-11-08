@@ -362,6 +362,43 @@ impl Mesh {
             control_id: Some(c.id.clone()),
         });
     }
+    fn fader(&mut self, d: &Device, c: &Control, s: &Snapshot) -> Result<Rect, RenderError> {
+        let mut r = c.rect.clone();
+        let state = &s.state.controls[&c.id];
+        let mat = &s.scene.materials[&c.material];
+        let control = Some(c.id.as_str());
+        let horizontal = r.width >= r.height;
+        let slot = Rect {
+            width: if horizontal { r.width } else { r.width * 0.12 },
+            height: if horizontal {
+                r.height * 0.12
+            } else {
+                r.height
+            },
+            depth: 0.12,
+            ..r.clone()
+        };
+        self.cuboid(&slot, d.origin, &dark(), control)?;
+        r = fader_thumb(&r, fraction(c, state));
+        self.bevel(&r, d.origin, &trim(), control)?;
+        let grip = Rect {
+            height: if horizontal { r.height * 0.7 } else { 0.035 },
+            width: if horizontal { 0.035 } else { r.width * 0.7 },
+            z: r.z + 0.005,
+            depth: 0.01,
+            ..r.clone()
+        };
+        self.cuboid(
+            &grip,
+            d.origin,
+            &Material {
+                base: mat.ink.clone(),
+                ..dark()
+            },
+            control,
+        )?;
+        Ok(r)
+    }
     fn control(&mut self, d: &Device, c: &Control, s: &Snapshot) -> Result<(), RenderError> {
         if is_legend(c) {
             self.legend(d, c, s);
@@ -414,34 +451,7 @@ impl Mesh {
                     control,
                 )?;
             }
-            Kind::Fader => {
-                let slot = Rect {
-                    width: r.width * 0.12,
-                    depth: 0.12,
-                    ..r.clone()
-                };
-                self.cuboid(&slot, d.origin, &dark(), control)?;
-                let h = (r.height * 0.18).min(1.1);
-                r.y += (fraction(c, state) - 0.5) * (r.height - h);
-                r.height = h;
-                self.bevel(&r, d.origin, &trim(), control)?;
-                let grip = Rect {
-                    height: 0.035,
-                    width: r.width * 0.7,
-                    z: r.z + 0.005,
-                    depth: 0.01,
-                    ..r.clone()
-                };
-                self.cuboid(
-                    &grip,
-                    d.origin,
-                    &Material {
-                        base: mat.ink.clone(),
-                        ..dark()
-                    },
-                    control,
-                )?;
-            }
+            Kind::Fader => r = self.fader(d, c, s)?,
             Kind::Button | Kind::Toggle => {
                 if state.pressed {
                     r.z -= r.depth.min(0.12) * 0.65;

@@ -1,0 +1,17 @@
+{
+  "version": "0.1.5-ears.1",
+  "upstreamRevision": "234f60faa0eb388b01cdf7e60aca232af37aefda",
+  "coreRevision": "5a1358d3253b81ef24ae2a23cb25fe47bb16b783",
+  "sourceSha256": "7ec18f1472d02d76e5d2b4af2f20a0338b863a89714ef083a1388e507bf3772a",
+  "criticalSources": {
+    "core/transcriber.cpp": "e71ea6249a6f819a760fa0ccc6d111dd12e0157fbabe55a06ff3f70fc1d7f62e",
+    "core/moonshine-streaming-model.cpp": "bd1e18eb145e4f65f3cf0e4e309459f434f8ad3f7a6575a9bdf811e2cf2f8b5e",
+    "core/moonshine-streaming-model.h": "b6adeed91d3b61b45191dce2c50fa6398766ef00576b186163721967b9cf4b69",
+    "core/third-party/onnxruntime/find-ort-library-path.cmake": "dd3795aa3216ef2ff648d2551f748d9a4ce2995442cebcbc02cf17afe5a81862",
+    "core/moonshine-tts/cmake/moonshine-tts-onnxruntime.cmake": "ffecebfe2dab62bf83be8d076800e1cc8c317f3b826ea52eb94a89fd5d3480e9"
+  },
+  "sha256": "e2c7060a3e2cb0ee0b058c6b677581660445e42bcdd7c51cf69f766c2340a18f",
+  "wasmSha256": "d2687f79832b2bc2bf370b6c791e4de71e2f6c388ca805b14830cfe937668dd4",
+  "toolchain": "Emscripten 4.0.8",
+  "pathRemapping": "$HOME=/build"
+}

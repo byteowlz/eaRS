@@ -170,7 +170,9 @@ pub(super) fn accepts(action: &device_scene::Action, snapshot: &Snapshot) -> boo
                 .is_some_and(|(_, control, _)| {
                     matches!(
                         control.kind,
-                        device_scene::Kind::Shortcut | device_scene::Kind::Select
+                        device_scene::Kind::Shortcut
+                            | device_scene::Kind::Select
+                            | device_scene::Kind::Fader
                     )
                 })
         }
@@ -180,6 +182,36 @@ pub(super) fn accepts(action: &device_scene::Action, snapshot: &Snapshot) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn range_previews_are_valid_ui_edits_but_disabled_and_out_of_bounds_actions_are_rejected() {
+        let mut snapshot = initial();
+        let mut action = device_scene::Action {
+            schema_version: 1,
+            scene_id: snapshot.scene.id.clone(),
+            scene_revision: snapshot.scene.revision,
+            state_revision: snapshot.state.revision,
+            control_id: "threshold.slider".into(),
+            interaction_id: "test.range".into(),
+            sequence: 0,
+            phase: device_scene::Phase::Preview,
+            value: Value(json!(0.55)),
+            source: device_scene::Source::Api,
+        };
+        assert!(accepts(&action, &snapshot));
+        action.value = Value(json!(1.0));
+        assert!(!accepts(&action, &snapshot));
+        action.value = Value(json!(0.55));
+        snapshot
+            .state
+            .controls
+            .get_mut("threshold.slider")
+            .unwrap()
+            .enabled = false;
+        assert!(!accepts(&action, &snapshot));
+        action.phase = device_scene::Phase::Cancel;
+        action.value = Value(serde_json::Value::Null);
+        assert!(accepts(&action, &snapshot));
+    }
     #[test]
     fn shortcuts_read_like_keycaps() {
         assert_eq!(shortcut_text(Some("ctrl+shift+v")), "⌃⇧V");
