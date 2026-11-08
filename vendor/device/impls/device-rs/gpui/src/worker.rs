@@ -19,12 +19,16 @@ struct State {
     last_requested: Option<Arc<ValidatedSnapshot>>,
     stopped: bool,
     rendered: u64,
+    /// Newest generation offered to the UI. Frames only move forward.
+    published: u64,
 }
 struct Shared {
     state: Mutex<State>,
     changed: Condvar,
 }
 /// One worker, one active request, one replaceable pending request and one completed slot.
+/// A finished frame is published when it is newer than the last one published, even if
+/// newer input already queued: continuous drags must still show intermediate frames.
 /// The notification channel holds no frames. No timer, idle rendering or UI-thread device polling.
 pub struct RenderWorker {
     shared: Arc<Shared>,
@@ -73,7 +77,8 @@ impl RenderWorker {
                     if state.stopped {
                         break;
                     }
-                    if state.latest == request.generation {
+                    if request.generation > state.published {
+                        state.published = request.generation;
                         state.completed = Some(Completed {
                             generation: request.generation,
                             snapshot: request.snapshot,
@@ -124,7 +129,6 @@ impl RenderWorker {
             generation,
             snapshot,
         });
-        state.completed = None;
         self.shared.changed.notify_one();
         Ok(generation)
     }
@@ -187,14 +191,62 @@ mod tests {
             latest = worker.submit(ValidatedSnapshot::new(s).unwrap()).unwrap();
         }
         release.wait();
-        notify.recv_blocking().unwrap();
-        let completed = worker.take_completed().unwrap();
+        let completed = loop {
+            notify.recv_blocking().unwrap();
+            if let Some(c) = worker.take_completed()
+                && c.generation == latest
+            {
+                break c;
+            }
+        };
         assert_eq!(completed.generation, latest);
         assert_eq!(completed.snapshot.snapshot().viewport.width_dip, 999.0);
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         std::thread::sleep(Duration::from_millis(30));
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         assert!(worker.take_completed().is_none());
+    }
+    #[test]
+    fn continuous_input_still_presents_the_newest_finished_frame() {
+        // A drag submits faster than a frame renders. Discarding every frame that is
+        // no longer the latest request starves the screen until the pointer stops.
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let (a, b) = (entered.clone(), release.clone());
+        let (worker, _notify) = RenderWorker::start_with(move |_, generation| {
+            a.wait();
+            b.wait();
+            Err(format!("synthetic result {generation}"))
+        });
+        let mut s = fixture().into_inner();
+        let submit = |s: &mut Snapshot| {
+            s.state.revision += 1;
+            worker
+                .submit(ValidatedSnapshot::new(s.clone()).unwrap())
+                .unwrap()
+        };
+        let first = submit(&mut s);
+        let mut shown = Vec::new();
+        for _ in 0..3 {
+            entered.wait();
+            // A newer request arrives while every frame renders, then that frame finishes.
+            submit(&mut s);
+            release.wait();
+            let deadline = std::time::Instant::now() + Duration::from_secs(1);
+            let completed = loop {
+                if let Some(c) = worker.take_completed() {
+                    break Some(c);
+                }
+                if std::time::Instant::now() > deadline {
+                    break None;
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            };
+            shown.push(completed.map(|c| c.generation));
+        }
+        assert_eq!(shown, vec![Some(first), Some(first + 1), Some(first + 2)]);
+        entered.wait();
+        release.wait();
     }
     #[test]
     fn unchanged_revisions_cannot_change_data_but_can_resize() {

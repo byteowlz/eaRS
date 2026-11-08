@@ -127,6 +127,9 @@ const INNER: f64 = 0.4;
 const GAP: f64 = 0.8;
 const PAD: f64 = 1.2;
 const ROW: f64 = 1.6;
+/// Top face of the inset module plates, where faders are mounted.
+const FADER_MOUNT: f64 = 0.66;
+const FADER_HEIGHT: f64 = 0.45;
 const SLOT: f64 = 2.4;
 const HEADING: f64 = 1.2;
 const LABEL_WIDTH: f64 = 10.4;
@@ -385,8 +388,12 @@ impl<'a> Column<'a> {
             ROW,
             json!(spec.min),
         );
-        self.b.controls.last_mut().expect("range control")["range"] =
-            json!({"min":spec.min,"max":spec.max,"step":spec.step});
+        let fader = self.b.controls.last_mut().expect("range control");
+        fader["range"] = json!({"min":spec.min,"max":spec.max,"step":spec.step});
+        // Mounted on the plate (z 0.66) and standing 0.45 proud of it, so the
+        // cap is a real 3D part that casts a shadow, as in the hi-fi reference.
+        fader["rect"]["z"] = json!(FADER_MOUNT + FADER_HEIGHT);
+        fader["rect"]["depth"] = json!(FADER_HEIGHT);
         self.b.add(
             id,
             self.module,

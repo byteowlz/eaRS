@@ -30,6 +30,8 @@ pub struct DeviceView {
     font_overrides: std::collections::HashMap<String, SharedString>,
     icons: std::collections::HashMap<String, Icon>,
     hovered: Option<String>,
+    /// One render submission per effect flush, however many edits an input caused.
+    request_queued: bool,
 }
 /// The control under the pointer changed (host-owned help; no app effect).
 #[derive(Clone, Debug, PartialEq)]
@@ -92,6 +94,7 @@ impl DeviceView {
             font_overrides: Default::default(),
             icons: Default::default(),
             hovered: None,
+            request_queued: false,
         };
         this.resize(window, cx);
         this
@@ -116,7 +119,20 @@ impl DeviceView {
             self.snapshot.state.revision += 1;
         }
     }
+    /// A fader preview and the host edit it triggers arrive in one effect flush;
+    /// submitting each would queue a second full render behind the first.
     fn request(&mut self, cx: &mut Context<Self>) {
+        cx.notify();
+        if std::mem::replace(&mut self.request_queued, true) {
+            return;
+        }
+        let view = cx.weak_entity();
+        cx.defer(move |cx| {
+            let _ = view.update(cx, |this, cx| this.submit(cx));
+        });
+    }
+    fn submit(&mut self, cx: &mut Context<Self>) {
+        self.request_queued = false;
         match ValidatedSnapshot::new(self.snapshot.clone())
             .map_err(|e| e.to_string())
             .and_then(|s| self.worker.submit(s))

@@ -105,12 +105,13 @@ impl Drag {
         if ray.direction.z.abs() < 1e-9 {
             return None;
         }
-        let t = (c.rect.z + d.origin[2] - ray.origin.z) / ray.direction.z;
+        // Map the pointer on the plane of the cap face the user grabs.
+        let thumb = fader_thumb(&c.rect, 0.5);
+        let t = (thumb.z + d.origin[2] - ray.origin.z) / ray.direction.z;
         if t < 0.0 {
             return None;
         }
         let point = ray.origin + ray.direction * t - DVec3::from_array(d.origin);
-        let thumb = fader_thumb(&c.rect, 0.5);
         let f = if c.rect.width >= c.rect.height {
             (point.x - c.rect.x) / (c.rect.width - thumb.width) + 0.5
         } else {

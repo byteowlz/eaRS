@@ -29,7 +29,13 @@ impl ImageSlot {
     }
     /// False means stale/failed result. Keep old pixels AND old projection on error.
     pub fn install(&mut self, completed: Completed, window: &mut Window) -> bool {
-        if completed.generation != self.expected_generation {
+        // Present any finished frame newer than the shown one, up to the newest request.
+        // Each frame carries its own snapshot and projection, so it stays coherent.
+        let shown = self
+            .current
+            .as_ref()
+            .map_or(0, |p| p.frame.request_generation);
+        if completed.generation > self.expected_generation || completed.generation <= shown {
             return false;
         }
         let frame = match completed.frame {

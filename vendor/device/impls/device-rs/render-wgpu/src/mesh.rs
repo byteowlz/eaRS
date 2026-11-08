@@ -362,42 +362,114 @@ impl Mesh {
             control_id: Some(c.id.clone()),
         });
     }
+    /// Retro hi-fi r10 fader: a dark channel sunk inside a satin lip, an honest
+    /// value fill, printed scale ticks, and a tall bevelled cap with a lit index
+    /// line and two grooves that stands proud of the plate and casts a shadow.
     fn fader(&mut self, d: &Device, c: &Control, s: &Snapshot) -> Result<Rect, RenderError> {
-        let mut r = c.rect.clone();
         let state = &s.state.controls[&c.id];
         let mat = &s.scene.materials[&c.material];
         let control = Some(c.id.as_str());
+        let r = &c.rect;
         let horizontal = r.width >= r.height;
-        let slot = Rect {
-            width: if horizontal { r.width } else { r.width * 0.12 },
-            height: if horizontal {
-                r.height * 0.12
+        let plate = r.z - r.depth;
+        let cap = fader_thumb(r, fraction(c, state));
+        let (along, across) = if horizontal {
+            (r.width, r.height)
+        } else {
+            (r.height, r.width)
+        };
+        let travel = if horizontal { cap.width } else { cap.height };
+        // Axis helper: a rectangle at (along offset, across offset) from the control centre.
+        let at = |a: f64, x: f64, length: f64, thick: f64, z: f64, depth: f64| {
+            let (dx, dy, w, h) = if horizontal {
+                (a, x, length, thick)
             } else {
-                r.height
-            },
-            depth: 0.12,
-            ..r.clone()
+                (x, a, thick, length)
+            };
+            Rect {
+                x: r.x + dx,
+                y: r.y + dy,
+                z,
+                width: w,
+                height: h,
+                depth,
+            }
         };
-        self.cuboid(&slot, d.origin, &dark(), control)?;
-        r = fader_thumb(&r, fraction(c, state));
-        self.bevel(&r, d.origin, &trim(), control)?;
-        let grip = Rect {
-            height: if horizontal { r.height * 0.7 } else { 0.035 },
-            width: if horizontal { 0.035 } else { r.width * 0.7 },
-            z: r.z + 0.005,
-            depth: 0.01,
-            ..r.clone()
+        let slot = across * 0.2;
+        let run = along - travel * 0.5;
+        let channel = at(0.0, 0.0, run, slot, plate + 0.018, 0.018);
+        let lip = at(0.0, 0.0, run + 0.14, slot + 0.14, plate + 0.065, 0.065);
+        let satin = Material {
+            base: "#16181b".into(),
+            metalness: 0.55,
+            roughness: 0.42,
+            ..dark()
         };
-        self.cuboid(
-            &grip,
-            d.origin,
-            &Material {
-                base: mat.ink.clone(),
+        for bar in subtract(&lip, &channel) {
+            self.rounded_slab(&bar, d.origin, &satin, control, 0.03, 0.02)?;
+        }
+        self.cuboid(&channel, d.origin, &dark(), control)?;
+        // Value fill from the low end of the travel to the cap centre (not a meter).
+        let low = -(along - travel) / 2.0;
+        let reach = if horizontal { cap.x - r.x } else { cap.y - r.y } - low;
+        if reach > 1e-3 && state.enabled {
+            let fill = Material {
+                base: "#ff8a3d".into(),
+                emissive: "#4a2410".into(),
+                finish: Finish::Glass,
                 ..dark()
-            },
-            control,
-        )?;
-        Ok(r)
+            };
+            let bar = at(
+                low + reach / 2.0,
+                0.0,
+                reach,
+                slot * 0.45,
+                plate + 0.022,
+                0.004,
+            );
+            self.cuboid(&bar, d.origin, &fill, control)?;
+        }
+        // Printed scale beside the slot, outside the cap's footprint.
+        let tick_ink = Material {
+            base: "#6b7077".into(),
+            ..dark()
+        };
+        let cross = if horizontal { cap.height } else { cap.width };
+        let edge = -cross / 2.0 - 0.03;
+        for i in 0..=10 {
+            let major = i % 5 == 0;
+            let length = if major { 0.16 } else { 0.1 };
+            let a = low + (along - travel) * f64::from(i) / 10.0;
+            // Ticks run across the slot: thin along the travel, long across it.
+            let tick = at(
+                a,
+                edge - length / 2.0,
+                if major { 0.045 } else { 0.03 },
+                length,
+                plate + 0.012,
+                0.004,
+            );
+            self.cuboid(&tick, d.origin, &tick_ink, control)?;
+        }
+        // The cap: the keys' own material, rounded and bevelled like a key.
+        self.rounded_slab(&cap, d.origin, mat, control, 0.12, 0.06)?;
+        let face = cap.z + 0.004;
+        let (cx, cy) = (cap.x - r.x, cap.y - r.y);
+        let along_c = if horizontal { cx } else { cy };
+        let cross_c = if horizontal { cy } else { cx };
+        let index = Material {
+            base: mat.ink.clone(),
+            emissive: "#202020".into(),
+            ..dark()
+        };
+        // Lines across the cap face: thin along the travel, long across it.
+        let line = |a: f64, len: f64, w: f64| at(along_c + a, cross_c, w, len, face, 0.004);
+        self.cuboid(&line(0.0, cross * 0.82, 0.05), d.origin, &index, control)?;
+        for side in [-1.0, 1.0] {
+            let groove = line(side * travel * 0.3, cross * 0.6, 0.028);
+            self.cuboid(&groove, d.origin, &dark(), control)?;
+        }
+        Ok(cap)
     }
     fn control(&mut self, d: &Device, c: &Control, s: &Snapshot) -> Result<(), RenderError> {
         if is_legend(c) {

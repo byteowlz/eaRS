@@ -23,6 +23,8 @@ fn both_fader_axes_move_the_physical_cap_at_each_scale() {
                 .unwrap();
             c.kind = Kind::Fader;
             c.presentation = Presentation::None;
+            // A fader is mounted on the faceplate and stands proud of it.
+            (c.rect.z, c.rect.depth) = (0.65 + 0.45, 0.45);
             (c.rect.width, c.rect.height) = if horizontal { (4.0, 1.2) } else { (1.2, 4.0) };
             let id = c.id.clone();
             let range = c.range.clone().unwrap();
