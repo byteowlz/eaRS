@@ -271,6 +271,143 @@ pub fn bound_heads(actions: &std::collections::HashMap<String, WakeAction>) -> V
     heads
 }
 
+/// Releases published before the waqy repo carried `catalog.json`. Used only when the
+/// default catalog itself is missing (404); every file is still verified by sha256.
+const PUBLISHED_RELEASES: &[&str] = &["spqx-pub1"];
+
+/// The catalog at `source`, or for the default catalog, one built from the published
+/// release manifests when the repo has no `catalog.json` yet.
+pub fn load_catalog(source: &str) -> Result<Catalog> {
+    let fallback = if source == DEFAULT_CATALOG {
+        PUBLISHED_RELEASES
+    } else {
+        &[]
+    };
+    load_catalog_from(source, fallback)
+}
+
+fn load_catalog_from(source: &str, fallback: &[&str]) -> Result<Catalog> {
+    if let Some(bytes) = fetch_optional(source)? {
+        return Catalog::parse(&bytes);
+    }
+    if fallback.is_empty() {
+        bail!("no wake catalog at {source}");
+    }
+    let mut releases = Vec::new();
+    for name in fallback {
+        let manifest_source = sibling(source, &format!("{name}/manifest.json"));
+        let bytes = fetch_optional(&manifest_source)?.ok_or_else(|| {
+            anyhow!("no wake catalog at {source} and no release {manifest_source}")
+        })?;
+        releases
+            .push(release_from_manifest(name, &bytes).with_context(|| manifest_source.clone())?);
+    }
+    Ok(Catalog {
+        schema: CATALOG_SCHEMA.into(),
+        repo: None,
+        releases,
+    })
+}
+
+/// A catalog release from a waqy release manifest, as waqy's publisher derives it.
+fn release_from_manifest(folder: &str, bytes: &[u8]) -> Result<CatalogRelease> {
+    let m: serde_json::Value =
+        serde_json::from_slice(bytes).context("parsing a release manifest")?;
+    let name = m["release"].as_str().unwrap_or_default();
+    if name != folder {
+        bail!("manifest names release {name:?}, expected {folder:?}");
+    }
+    let file = |key: &str| -> Result<FileRef> {
+        let f = &m["files"][key];
+        Ok(FileRef {
+            file: f["file"]
+                .as_str()
+                .ok_or_else(|| anyhow!("{key}: no file"))?
+                .into(),
+            sha256: f["sha256"]
+                .as_str()
+                .ok_or_else(|| anyhow!("{key}: no sha256"))?
+                .into(),
+            bytes: 0,
+        })
+    };
+    let mut heads = Vec::new();
+    for head in m["classifiers"].as_array().into_iter().flatten() {
+        let head = head
+            .as_str()
+            .ok_or_else(|| anyhow!("classifier is not a name"))?;
+        let f = file(head)?;
+        let meta = &m["heads"][head];
+        let word = head
+            .strip_prefix("hey_")
+            .or_else(|| head.strip_prefix("he_"))
+            .unwrap_or(head);
+        let title = word
+            .split('-')
+            .map(|w| {
+                let mut c = w.chars();
+                c.next()
+                    .map_or(String::new(), |f| f.to_uppercase().chain(c).collect())
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let phrase = meta["phrase"]
+            .as_str()
+            .map(String::from)
+            .unwrap_or_else(|| {
+                if head.starts_with("hey_") {
+                    format!("Hey {title}")
+                } else {
+                    title
+                }
+            });
+        heads.push(CatalogHead {
+            name: head.into(),
+            file: f.file,
+            sha256: f.sha256,
+            bytes: 0,
+            phrase,
+            languages: serde_json::from_value(meta["languages"].clone()).unwrap_or_default(),
+            kind: meta["kind"].as_str().unwrap_or("wake").into(),
+            measured: serde_json::Value::Null,
+        });
+    }
+    Ok(CatalogRelease {
+        name: name.into(),
+        threshold: m["threshold"]
+            .as_f64()
+            .ok_or_else(|| anyhow!("manifest has no threshold"))? as f32,
+        frontend: Frontend {
+            mel: file("mel")?,
+            embedding: file("embedding")?,
+        },
+        heads,
+    })
+}
+
+/// Like [`fetch`], but a missing source (HTTP 404 or no such file) is `None`.
+fn fetch_optional(source: &str) -> Result<Option<Vec<u8>>> {
+    if !(source.starts_with("http://") || source.starts_with("https://")) {
+        let path = source.strip_prefix("file://").unwrap_or(source);
+        if !Path::new(path).exists() {
+            return Ok(None);
+        }
+    }
+    match fetch(source) {
+        Ok(bytes) => Ok(Some(bytes)),
+        #[cfg(feature = "wake-models")]
+        Err(e)
+            if matches!(
+                e.downcast_ref::<ureq::Error>(),
+                Some(ureq::Error::Status(404, _))
+            ) =>
+        {
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// Download or read a catalog/blob source: https URL, `file://` URL or a local path.
 pub fn fetch(source: &str) -> Result<Vec<u8>> {
     if source.starts_with("http://") || source.starts_with("https://") {
@@ -356,7 +493,7 @@ impl Store {
         heads: &[String],
         release: Option<&str>,
     ) -> Result<Vec<String>> {
-        let catalog = Catalog::parse(&fetch(catalog_source)?)?;
+        let catalog = load_catalog(catalog_source)?;
         let mut installed = self.installed()?;
         let mut done = Vec::new();
         for name in heads {
@@ -480,6 +617,72 @@ mod tests {
         )
         .unwrap();
         (repo.join("catalog.json").display().to_string(), b)
+    }
+
+    /// The published spqx-pub1 manifest shape, with the narrative fields shortened.
+    fn published_manifest(mel: &str, emb: &str, hey: &str, bare: &str) -> serde_json::Value {
+        serde_json::json!({"release": "spqx-pub1", "threshold": 0.5, "classifiers": ["hey_oqto", "oqto"],
+            "files": {"mel": {"file": MEL_FILE, "sha256": mel}, "embedding": {"file": EMBEDDING_FILE, "sha256": emb},
+                "hey_oqto": {"file": "hey_oqto.onnx", "sha256": hey, "trained_as": "hey_oqto-pub1"},
+                "oqto": {"file": "oqto.onnx", "sha256": bare, "trained_as": "oqto-gpu5"}},
+            "authority": "evidence only"})
+    }
+
+    #[test]
+    fn a_missing_catalog_falls_back_to_published_release_manifests() {
+        // The public repo had releases before it carried catalog.json; listing and
+        // installing must still work, with every file verified by sha256.
+        let root = temp("fallback");
+        let repo = root.join("repo");
+        let dir = repo.join("spqx-pub1");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut sums = Vec::new();
+        for (file, body) in [
+            (MEL_FILE, b"mel".as_slice()),
+            (EMBEDDING_FILE, b"emb"),
+            ("hey_oqto.onnx", b"hey"),
+            ("oqto.onnx", b"bare"),
+        ] {
+            std::fs::write(dir.join(file), body).unwrap();
+            sums.push(sha256_hex(body));
+        }
+        let manifest = published_manifest(&sums[0], &sums[1], &sums[2], &sums[3]);
+        std::fs::write(
+            dir.join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        let source = repo.join("catalog.json").display().to_string();
+        assert!(
+            load_catalog_from(&source, &[]).is_err(),
+            "no silent fallback for other catalogs"
+        );
+        let catalog = load_catalog_from(&source, &["spqx-pub1"]).unwrap();
+        assert_eq!(catalog.schema, CATALOG_SCHEMA);
+        let (release, head) = catalog.find("hey_oqto", None).unwrap();
+        assert_eq!(
+            (release.name.as_str(), release.threshold),
+            ("spqx-pub1", 0.5)
+        );
+        assert_eq!(release.frontend.mel.sha256, sums[0]);
+        assert_eq!(
+            (
+                head.file.as_str(),
+                head.sha256.as_str(),
+                head.phrase.as_str()
+            ),
+            ("hey_oqto.onnx", sums[2].as_str(), "Hey Oqto")
+        );
+        assert_eq!(catalog.find("oqto", None).unwrap().1.phrase, "Oqto");
+        // A manifest that names another release than its folder is refused.
+        let mut wrong = manifest.clone();
+        wrong["release"] = serde_json::json!("other");
+        std::fs::write(
+            dir.join("manifest.json"),
+            serde_json::to_vec(&wrong).unwrap(),
+        )
+        .unwrap();
+        assert!(load_catalog_from(&source, &["spqx-pub1"]).is_err());
     }
 
     fn temp(name: &str) -> PathBuf {

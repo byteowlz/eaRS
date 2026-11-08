@@ -143,7 +143,7 @@ pub fn handle(command: WakeCommand) -> Result<()> {
     match command {
         WakeCommand::Catalog { json, catalog } => {
             let source = catalog_source(catalog, &config);
-            let catalog = Catalog::parse(&wake_models::fetch(&source)?)?;
+            let catalog = wake_models::load_catalog(&source)?;
             let installed = store.installed()?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&catalog)?);
@@ -167,12 +167,18 @@ pub fn handle(command: WakeCommand) -> Result<()> {
                             serde_json::to_value(action)?.as_str().unwrap_or("")
                         ));
                     }
+                    // Release manifests carry hashes, not sizes; show none rather than 0 KB.
+                    let size = if head.bytes > 0 {
+                        format!("{} KB", head.bytes / 1024)
+                    } else {
+                        "-".into()
+                    };
                     println!(
-                        "  {:<14} {:<16} {:<6} {:>4} KB{state}",
+                        "  {:<14} {:<16} {:<6} {:>7}{state}",
                         head.name,
                         head.phrase,
                         head.languages.join(","),
-                        head.bytes / 1024
+                        size
                     );
                 }
             }

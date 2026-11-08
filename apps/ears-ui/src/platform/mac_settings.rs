@@ -78,6 +78,9 @@ impl SettingsButtons {
         let container = NSView::new(mtm);
         container.setHidden(true);
         for (button, glyph) in controls.iter().zip(Glyph::ALL) {
+            // Pointer and accessibility controls only: a button that becomes first
+            // responder takes keyDown from GPUI, and no Settings field takes text.
+            button.setRefusesFirstResponder(true);
             button.setBordered(false);
             button.setButtonType(NSButtonType::MomentaryChange);
             button.setTitle(&NSString::from_str(""));
@@ -90,6 +93,8 @@ impl SettingsButtons {
             container.addSubview(button);
         }
         host.addSubview(&container);
+        // Adding views can move first responder; keyboard input belongs to GPUI.
+        ns.makeFirstResponder(Some(view));
         for (button, action) in
             controls
                 .iter()

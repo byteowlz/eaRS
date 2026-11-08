@@ -142,15 +142,15 @@ pub(super) fn write(
             state.enabled = enabled;
         }
         let off = !enabled && matches!(setting, Numeric::Live(_));
-        super::scene::text(
-            snapshot,
-            id,
-            if off {
-                "Off".into()
-            } else {
-                (spec.format)(value)
-            },
-        );
+        let text = if off {
+            "Off".into()
+        } else {
+            (spec.format)(value)
+        };
+        super::scene::text(snapshot, id, text);
+        if let Some(state) = snapshot.state.controls.get_mut(id) {
+            state.enabled = enabled;
+        }
     }
 }
 
@@ -181,7 +181,16 @@ impl NativeSettings {
         }
         true
     }
-    fn commit_range(&mut self, setting: Numeric, value: f32, cx: &mut gpui::Context<Self>) {
+    pub(super) fn range_enabled(&self, setting: Numeric, cx: &gpui::App) -> bool {
+        let model = self.model.read(cx);
+        setting.enabled(&model.core, &model.ui)
+    }
+    pub(super) fn commit_range(
+        &mut self,
+        setting: Numeric,
+        value: f32,
+        cx: &mut gpui::Context<Self>,
+    ) {
         let model = self.model.read(cx);
         if !setting.enabled(&model.core, &model.ui) || !value.is_finite() {
             return;

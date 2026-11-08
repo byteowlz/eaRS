@@ -48,6 +48,8 @@ const MESSAGE_FOR: Duration = Duration::from_secs(5);
 mod pages;
 #[path = "device_ranges.rs"]
 pub(super) mod ranges;
+#[path = "device_value_entry.rs"]
+mod value_entry;
 use super::device_layout::{DICT_ROWS, PROFILE_ROWS};
 
 fn page_id(tab: Tab) -> &'static str {
@@ -135,6 +137,7 @@ pub(super) struct NativeSettings {
     window_buttons: Option<crate::platform::SettingsButtons>,
     pending_live: Option<&'static str>,
     range_preview: Option<(ranges::Numeric, f32)>,
+    value_entry: Option<value_entry::ValueEntry>,
     editor: Option<super::layout_editor::LayoutEditor>,
     page: Tab,
     text: std::collections::BTreeMap<&'static str, Entity<crate::ui::text_input::TextInput>>,
@@ -148,6 +151,8 @@ impl EventEmitter<Request> for NativeSettings {}
 
 impl NativeSettings {
     fn new(model: Entity<AppModel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // Display text fields need their key bindings on every Settings path.
+        crate::ui::text_input::init(cx);
         // Host typography, never font paths supplied by a scene.
         if let Err(error) = cx.text_system().add_fonts(vec![
             Cow::Borrowed(include_bytes!("../../assets/fonts/Michroma-Regular.ttf")),
@@ -219,6 +224,7 @@ impl NativeSettings {
             window_buttons: crate::platform::SettingsButtons::new(window),
             pending_live: None,
             range_preview: None,
+            value_entry: None,
             editor,
             page,
             text,
@@ -477,6 +483,19 @@ impl NativeSettings {
 
     fn action(&mut self, action: &Action, window: &mut Window, cx: &mut Context<Self>) {
         if !scene::accepts(action, self.device.read(cx).snapshot()) {
+            return;
+        }
+        // Any other control ends a typed value entry; its own display starts one.
+        let entering = self
+            .value_entry
+            .as_ref()
+            .is_some_and(|e| e.setting.id() == action.control_id);
+        if !entering {
+            self.cancel_value_entry(cx);
+        }
+        if action.phase == device_scene::Phase::Commit
+            && self.value_entry_action(&action.control_id, window, cx)
+        {
             return;
         }
         if self.range_action(action, cx) {
@@ -944,7 +963,10 @@ impl NativeSettings {
             return;
         }
         if event.keystroke.key == "escape" {
-            if self.listening.is_some() {
+            if self.cancel_value_entry(cx) {
+                self.focus(window, cx);
+                cx.stop_propagation();
+            } else if self.listening.is_some() {
                 self.stop_listening(cx);
                 self.say("Shortcut unchanged.", cx);
                 cx.stop_propagation();
@@ -1163,6 +1185,7 @@ impl Render for NativeSettings {
             .on_key_up(cx.listener(|this, _, _, _| this.local_ready = true))
             .child(self.device.clone())
             .children(self.text_overlays(cx))
+            .children(self.value_entry_overlay(cx))
             .map(|root| {
                 #[cfg(target_os = "macos")]
                 {

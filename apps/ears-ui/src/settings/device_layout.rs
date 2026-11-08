@@ -405,6 +405,11 @@ impl<'a> Column<'a> {
             ROW,
             json!(""),
         );
+        // The display takes a typed value: click it, or Tab to it and press Enter.
+        let index = self.b.controls.len() - 1;
+        let readout = self.b.controls.last_mut().expect("value display");
+        readout["action"] = json!(id);
+        readout["tab_index"] = json!(index);
     }
     /// Label, then a latching key with a lamp, sharing the steppers' outer edges.
     fn switch(&mut self, id: &str, text: &str, help: &str) {
@@ -1102,6 +1107,12 @@ mod tests {
             assert_eq!(slider.presentation, Presentation::None);
             assert!(slider.rect.width > slider.rect.height);
             assert!(slider.range.is_some());
+            let (_, display, _) = s.control(id).unwrap();
+            assert_eq!(
+                display.action, id,
+                "{id}: the display accepts a typed value"
+            );
+            assert!(display.tab_index >= 0, "{id}: keyboard reachable");
             assert_eq!(value.presentation, Presentation::Matrix);
             equal(right(&slider.rect) + GAP, left(&value.rect), id);
             equal(value.rect.width, 7.6, id);

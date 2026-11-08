@@ -699,6 +699,8 @@ impl NativeSettings {
                     .text_size(gpui::px((height * 0.56).clamp(9.0, 22.0)))
                     .line_height(gpui::px(height))
                     .text_color(gpui::rgb(0xff9e52))
+                    // The receiver below would take focus back on the same click.
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .child(field.clone())
                     .into_any_element(),
             );

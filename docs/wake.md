@@ -21,6 +21,9 @@ ears wake remove hey_jupp
   head as a content-addressed blob under `$XDG_DATA_HOME/ears/wake/`; a hash mismatch is
   refused and nothing is recorded. `--release` pins a release; `--catalog` (or
   `[dictation.wake].catalog`) points at another catalog URL or a local path.
+- If the default Hugging Face repo has no `catalog.json` yet (HTTP 404), eaRS builds the
+  list from the published release manifests (currently `spqx-pub1`); sizes show as `-`
+  and every file is still verified by sha256. Other catalogs never fall back.
 - Only heads bound to `start_dictation` or `stop_dictation` run. Binding rebuilds
   `$XDG_DATA_HOME/ears/wake/active/`, a normal waqy release folder with exactly those heads,
   and points `[dictation.wake].command` at it when the command is empty or already managed
