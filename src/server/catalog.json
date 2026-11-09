@@ -7,7 +7,7 @@
       "languages": "English",
       "streaming": true,
       "default_quant": "Q8_0",
-      "default_size_mb": 734,
+      "default_size_mb": 873,
       "description": "Fast, accurate English streaming (recommended)",
       "recommended": true
     },
@@ -20,6 +20,16 @@
       "default_size_mb": 751,
       "description": "Multilingual streaming across 28 languages",
       "recommended": true
+    },
+    {
+      "slug": "diar_streaming_sortformer_4spk-v2.1",
+      "name": "Diar_Streaming_Sortformer_4Spk V2.1",
+      "languages": "English",
+      "streaming": true,
+      "default_quant": "Q8_0",
+      "default_size_mb": 139,
+      "description": "transcribe.cpp streaming model (English)",
+      "recommended": false
     },
     {
       "slug": "nemotron-speech-streaming-en-0.6b",
@@ -39,6 +49,16 @@
       "default_quant": "Q8_0",
       "default_size_mb": 731,
       "description": "NVIDIA unified English streaming model",
+      "recommended": false
+    },
+    {
+      "slug": "silero-vad-v6.2",
+      "name": "Silero Vad V6.2",
+      "languages": "Unknown",
+      "streaming": true,
+      "default_quant": "F32",
+      "default_size_mb": 1,
+      "description": "transcribe.cpp streaming model (Unknown)",
       "recommended": false
     },
     {
